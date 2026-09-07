@@ -1,0 +1,611 @@
+# Phases.md — Gomrok implementation plan
+
+## Status & execution tracking
+
+Filled in as phases run (see *How each phase runs* → step 6). Blank fields are `—`.
+
+**Column meanings**
+
+- **Status** — ☐ not started · ◐ in progress · ☑ done
+- **Start / End Datetime** — ISO 8601 local, `YYYY-MM-DD HH:MM`. Start = when the phase's work
+  begins (step 1); End = when the completion summary is delivered (step 4).
+- **Est. Duration** — estimated hands-on time (Claude working + user review), *not* wall-clock
+  across calendar days. Set now as a rough range; refined during the phase's 5 questions.
+- **Actual Duration** — real hands-on time, summed across working sessions if the phase spans
+  more than one.
+- **Tokens Used** — model tokens consumed across the phase, read from session usage at
+  completion.
+
+| # | Phase | Status | Start Datetime | End Datetime | Est. Duration | Actual Duration | Tokens Used |
+| --- | --- | :---: | --- | --- | --- | --- | --- |
+| 1 | Groundwork: architecture baseline | ☑ | 2026-09-06 17:42 | 2026-09-06 17:54 | 2–4h | 12m | N/A |
+| 2 | Project scaffold & toolchain | ☑ | 2026-09-06 18:20 | 2026-09-06 18:50 | 3–5h | 30m | N/A |
+| 3 | Shared kernel | ☐ | — | — | 3–5h | — | — |
+| 4 | Database foundations: base & reference tables only | ☐ | — | — | 2–4h | — | — |
+| 5 | Migration workflow & cross-cutting tables | ☐ | — | — | 2–4h | — | — |
+| 6 | Clients module: domain & persistence | ☐ | — | — | 3–5h | — | — |
+| 7 | Client API authentication & scoping | ☐ | — | — | 3–5h | — | — |
+| 8 | Providers module: types & capability model | ☐ | — | — | 4–6h | — | — |
+| 9 | Provider accounts (per client) | ☐ | — | — | 4–6h | — | — |
+| 10 | Country provider configuration & routing resolution | ☐ | — | — | 5–8h | — | — |
+| 11 | Packages module: catalog & availability | ☐ | — | — | 4–6h | — | — |
+| 12 | Package purchase capabilities & provider definitions | ☐ | — | — | 4–6h | — | — |
+| 13 | Pricing module: default prices & pricing groups | ☐ | — | — | 4–6h | — | — |
+| 14 | Pricing overrides & resolution engine | ☐ | — | — | 6–9h | — | — |
+| 15 | Price lists (A/B) | ☐ | — | — | 3–5h | — | — |
+| 16 | Vouchers module: definitions & eligibility | ☐ | — | — | 4–6h | — | — |
+| 17 | Voucher validation, discount calc & redemption lifecycle | ☐ | — | — | 5–8h | — | — |
+| 18 | Decision snapshots | ☐ | — | — | 2–4h | — | — |
+| 19 | Resolution API endpoints | ☐ | — | — | 3–5h | — | — |
+| 20 | Payments module: aggregate & lifecycle | ☐ | — | — | 4–6h | — | — |
+| 21 | Provider adapter port & Stripe adapter | ☐ | — | — | 6–9h | — | — |
+| 22 | Mollie & PayPal adapters | ☐ | — | — | 6–9h | — | — |
+| 23 | Ziraat adapter | ☐ | — | — | 4–7h | — | — |
+| 24 | Payment creation flow | ☐ | — | — | 5–8h | — | — |
+| 25 | Webhooks module | ☐ | — | — | 5–8h | — | — |
+| 26 | Subscriptions module | ☐ | — | — | 6–9h | — | — |
+| 27 | **Admin Module Views and Panels** | ☐ | — | — | 12–20h | — | — |
+| 28 | Client callbacks / outbound notifications | ☐ | — | — | 4–6h | — | — |
+| 29 | Background jobs, reconciliation & observability | ☐ | — | — | 6–9h | — | — |
+| 30 | Hardening, docs & first-client go-live | ☐ | — | — | 6–10h | — | — |
+| | **Total** | | | | **~130–210h** | **—** | **—** |
+
+---
+
+This is the **30-phase plan** referenced by `CLAUDE.md`. It was derived from `CLAUDE.md`
+(the project spec); where the two disagree, `CLAUDE.md` wins and this file is corrected to match.
+
+The phase count and the meaning of **Phase 27 — Admin Module Views and Panels** are fixed by
+`CLAUDE.md`'s *Visual and Output Verification Rule*. Adding a brand-new phase, or materially
+changing an existing phase's scope, requires explicit confirmation from the user first.
+
+## How each phase runs
+
+Every phase, without exception:
+
+1. **Before any code:** explain the phase, then ask the phase's decision questions **one at a
+   time** — Q1, wait for the answer, record it in `.claude/PhaseDecisions.md`, then Q2, … (*Interactive
+   Phase Rule* / `.claude/Rule.md` §4.2). Show phase #, `QN of M`, options + explanations + a
+   recommendation; never auto-select it. Don't start a decision-dependent part until its
+   questions are answered. Never re-ask an already-answered question.
+2. **Before any schema change:** present the database design for that phase's tables and get
+   explicit confirmation (*Database Design Confirmation Rule*). No migrations before confirmation.
+3. **During:** add the relevant tests as code is written, not afterwards. Keep domain logic free
+   of Slim / MySQL / provider SDKs.
+4. **After:** produce the phase-completion summary — what was implemented, files
+   created/updated/removed, DB changes, tests added + how to run them, **real captured evidence**
+   (screenshots for any view, real output for any API/CLI/test/migration run — from Phase 27 on
+   this is enforceable for the panel), known limitations, next phase.
+5. **Docs:** update `.claude/Changelog.md` every meaningful change; keep `database-design.md`,
+   `database-diagram.md` (+ `.html`) and `db_explain.md` in lock-step with the schema.
+6. **Tracking:** in the *Status & execution tracking* table (top of file) — at step 1 set **Status** to ◐ and record **Start
+   Datetime** (and confirm/refine **Estimated Duration** during the 5 questions); at step 4 set
+   **Status** to ☑ and record **End Datetime**, **Actual Duration**, and **Tokens Used**. If a
+   phase spans several working sessions, keep the first Start, update End each session, and let
+   Actual Duration be the sum of the sessions' hands-on time (not the wall-clock span).
+7. **Result file:** write exactly one `PhaseResults/PhaseNNResult.md` (zero-padded) from
+   `PhaseResults/Template.md`, recording what *actually* happened — specific paths and names, not
+   this plan text; never planned work as completed work. **The phase is not fully complete until
+   this file is complete.** Never overwrite or delete an earlier phase's result file; if a later
+   phase changes earlier code, document that in the later phase's file. See
+   `PhaseResults/Readme.md`.
+8. **Decision check:** before marking the phase complete, verify all decision questions were
+   asked, all are answered, `.claude/PhaseDecisions.md` matches the user's selections, and the
+   implementation follows them. If implementation diverges from a recorded decision, stop and
+   ask. (`.claude/Rule.md` §4.2)
+
+## Database strategy — incremental, never upfront
+
+The schema is **not** designed in one big pass. There is no whole-system schema-design phase.
+
+- **Phase 4** creates only the **base / reference tables** — the stable, low-churn foundations
+  that don't depend on business decisions still being made: `countries`, `currencies`,
+  `provider_types`, the capability catalogue, and similar lookup data.
+- **Every other table is designed and created inside the phase that first needs it.** When a
+  phase needs tables, it proposes just that slice (tables, fields, indexes, FKs, constraints,
+  nullable/JSON fields, security-sensitive fields, alternatives), gets explicit confirmation,
+  then writes the migration — and updates `database-design.md` / `database-diagram.md` (+ `.html`)
+  / `db_explain.md` in the same change.
+- A later phase may add columns or tables to an earlier module's schema as the "who connects to
+  what" picture firms up. That's expected — same propose → confirm → migrate → update-docs loop,
+  as an additive migration.
+- `CLAUDE.md`'s "Required Database Concepts" list is the **catalogue of what will eventually
+  exist**, not a blueprint to build on day one.
+
+---
+
+## Phase 1 — Groundwork: architecture baseline
+
+**Goal:** decide the target shape and write it down. Greenfield — there is no predecessor system
+to analyze. No application code.
+
+**Scope:**
+- Produce, from first principles: Gomrok architecture overview, module map, folder layout,
+  provider-adapter interface sketch, capability model sketch, pricing/voucher/routing resolution
+  model sketch.
+- Seed the docs: `.claude/Changelog.md`, `.claude/knowledge/Knowledge.md` (payments domain notes), keep this `.claude/docs/Phases.md`
+  status table current.
+
+**DB:** none.
+
+**Exit:** the architecture documents exist and the user has confirmed the direction.
+
+## Phase 2 — Project scaffold & toolchain
+
+**Goal:** a bootable, testable, empty Slim 4 app.
+
+**Scope:**
+- `composer.json` with PSR-4 autoload, latest stable PHP, strict types baseline.
+- Slim 4 skeleton, PHP-DI container (`src/Config/container.php`), env-based config (`.env`,
+  no secrets committed), routing skeleton.
+- MySQL connection wiring; local dev setup (documented, or `docker-compose`); a migration runner.
+- PHPUnit harness split into `unit` / `integration`; PHPStan/Psalm; php-cs-fixer.
+- `GET /health` endpoint. Record all commands in `.claude/Changelog.md` / a `Commands.md` note.
+
+**DB:** connection only; no business tables.
+
+**Exit:** `composer test` passes a trivial test; the app boots; `/health` returns 200.
+
+## Phase 3 — Shared kernel
+
+**Goal:** the primitives every module depends on.
+
+**Scope:**
+- `Shared/Domain`: `Money`, `Currency`, `CountryCode`, typed IDs, `Result` / `DomainError`,
+  `Clock`, UUID generation.
+- `Shared/Infrastructure`: structured JSON logger carrying `correlation_id`; request-id
+  middleware; PDO helpers; a transaction helper.
+- `Shared/Http`: base action, JSON response helper, error handler mapping `DomainError` → HTTP
+  status.
+
+**DB:** none.
+
+**Exit:** value objects and logger covered by unit tests; error handler mapping tested.
+
+## Phase 4 — Database foundations: base & reference tables only
+
+**Goal:** the migration runner plus only the stable, business-decision-free lookup tables.
+**No whole-system schema design.** Every module's own tables are designed later, in that module's
+phase (see *Database strategy* above).
+
+**Scope:**
+- Migration runner + workflow (`up` / `down`, repeatable, runs in CI).
+- Base / reference tables only — the low-churn foundations other tables will point at:
+  `countries`, `currencies`, `provider_types` (`requires_registration`, `api_capable`), the
+  capability catalogue, and any similar pure lookup data. Seed them.
+- Start the DB docs as living skeletons that grow per phase: `.claude/docs/database-design.md`
+  (canonical spec), `.claude/docs/database-diagram.md` + `.claude/docs/database-diagram.html`
+  (Mermaid ER per module + module map), `.claude/docs/db_explain.md` (per-table guide), root
+  `mkdocs.yml` (Material theme, Mermaid via `pymdownx.superfences`). At this phase they describe
+  only the reference tables.
+
+**DB:** reference / lookup tables only. Propose this small slice (fields, keys, seed data), get
+confirmation, then migrate.
+
+**Exit:** migrations run up and down cleanly; reference tables seeded; the four DB docs exist and
+match what was created.
+
+## Phase 5 — Migration workflow & cross-cutting tables
+
+**Goal:** the tables that nearly every later phase writes to, so they exist before the modules do.
+
+**Scope:**
+- `idempotency_keys` table + middleware persistence.
+- `audit_logs` and `error_logs` tables + writers (`error_logs` backs the admin Error Logs screen
+  in Phase 27).
+- Harden the migration workflow: seed vs schema separation, rollback tests, CI wiring.
+
+**DB:** `idempotency_keys`, `audit_logs`, `error_logs`. Propose the slice, confirm, migrate,
+update the DB docs.
+
+**Exit:** migrations run up and down cleanly; idempotency store and error-log writer tested.
+
+## Phase 6 — Clients module: domain & persistence
+
+**Goal:** the tenant model.
+
+**Scope:**
+- Tables: `clients`, `client_api_keys` (stored hashed), client settings.
+- `Client` aggregate, repository, `CreateClient` / `UpdateClient` / `DisableClient` use cases.
+- No admin UI yet — clients are seeded via fixtures / a CLI command.
+
+**DB:** `clients`, `client_api_keys`, client settings — designed here, not earlier. Propose the
+slice → confirm → migrate → update the DB docs. **Every module phase from here on follows this
+same loop for its own tables**, and may add columns to earlier modules' tables via additive
+migrations as the design firms up.
+
+**Exit:** client lifecycle, API-key hashing, and uniqueness constraints tested.
+
+## Phase 7 — Client API authentication & scoping
+
+**Goal:** every API request is authenticated and locked to one client.
+
+**Scope:**
+- API-key auth middleware; per-request client scoping; hard rejection of any cross-client access.
+- `Idempotency-Key` handling on write endpoints (replay returns the original result).
+- Basic replay / abuse protection.
+
+**DB:** none beyond Phase 5/6.
+
+**Exit:** auth pass/fail, scoping enforcement, and idempotent-replay behaviour tested.
+
+## Phase 8 — Providers module: types & capability model
+
+**Goal:** model what each provider *can* do before wiring any SDK.
+
+**Scope:**
+- `provider_types`, the capability structure per type, and payment-method-level capability nuance
+  (e.g. a provider may do recurring card but not recurring PayPal).
+- Capability resolution service: type capabilities → account overrides → client/country
+  enable-disable.
+
+**DB:** `provider_types` (seeded Phase 5) + capability tables.
+
+**Exit:** capability-resolution matrix tested (Stripe vs Ziraat; Mollie card vs PayPal).
+
+## Phase 9 — Provider accounts (per client)
+
+**Goal:** a client can connect one or more accounts per provider type.
+
+**Scope:**
+- `provider_accounts`: client-scoped slug id, `providerType`, `name`, `mode` (Live/Test),
+  `countries`, `methods`, `capabilities`, public key, secret key (via secure secret storage),
+  per-account webhook config, per-account callback keys.
+- CRUD use cases (still no admin UI — fixtures / CLI). Secrets are never returned in plaintext.
+
+**DB:** `provider_accounts`, provider webhook config, callback config.
+
+**Exit:** multiple accounts of one type per client; secret round-trip and masking tested.
+
+## Phase 10 — Country provider configuration & routing resolution
+
+**Goal:** deterministic "which provider for this purchase" with no silent downgrades.
+
+**Scope:**
+- `country_provider_configs`, `country_provider_priorities`, `country_payment_methods`,
+  `country_purchase_capabilities`; plus the design's **Provider Groups** (named country groups,
+  optional device-type filter, ordered provider-account priority list), falling back to the
+  client default order when a group has no override.
+- Provider resolution engine: client default → country/group override → filter by package /
+  currency / method / purchase type / declared capability → pick the configured default or the
+  next allowed account in priority order.
+- Reject unsupported combinations explicitly (a Turkey subscription request must fail, not become
+  a one-time Ziraat payment).
+
+**DB:** country provider config + priority + method + purchase-capability tables; provider groups.
+
+**Exit:** Turkey/Ziraat one-time-only, Germany Mollie card+PayPal, NL PayPal-only, and
+subscription-in-Turkey rejection all tested.
+
+## Phase 11 — Packages module: catalog & availability
+
+**Goal:** the client-owned package catalogue.
+
+**Scope:**
+- `packages` (client-scoped, `UNIQUE (client_id, code)`, `status` = active/disabled),
+  availability by country / currency / payment method / provider.
+- `Package` aggregate + repository + `CreatePackage` / `UpdatePackage` / `DisablePackage`.
+- Resolved-list query for a given client + market context.
+
+**DB:** `packages`, package availability tables.
+
+**Exit:** per-client code uniqueness, availability filtering, and resolved-list output tested.
+
+## Phase 12 — Package purchase capabilities & provider definitions
+
+**Goal:** what a package can be sold *as*, and where it exists on the provider side.
+
+**Scope:**
+- `package_purchase_capabilities` (one_time / recurring / auto_charge / subscription); country
+  restrictions on a package's purchase types; trial config (`hasTrial`, `trialDays`),
+  `durationMonths`, `badge`, `highlighted`, `clientPackageId`.
+- Package-provider definitions per package per provider account: provider-side name, remote ID,
+  sync state (`synced` / `not_created` / `drift` / `not_needed`); create via provider API where
+  supported, or accept a manually-entered remote ID.
+
+**DB:** purchase-capability tables, package-provider-definition table.
+
+**Exit:** purchase-type gating and provider-definition state transitions tested.
+
+## Phase 13 — Pricing module: default prices & pricing groups
+
+**Goal:** baseline prices and country grouping.
+
+**Scope:**
+- `pricing_groups` (member countries, one currency, enabled providers, exactly one `isDefault`
+  fallback pinned last and never reorderable); `default_package_prices`.
+- Group-package rows: `status` = override / default / disabled, name / badge / highlight
+  overrides, customer-facing display order (array order).
+
+**DB:** `pricing_groups`, `default_package_prices`, group-package rows.
+
+**Exit:** group matching (a `Global iOS` group ordered before `DACH` wins for a German iOS
+buyer), fallback group, and default-currency conversion display tested.
+
+## Phase 14 — Pricing overrides & resolution engine
+
+**Goal:** one deterministic price out of many layered rules.
+
+**Scope:**
+- Overrides by currency / provider / payment method / purchase type / subscription interval /
+  country; "more specific valid rule wins".
+- Price resolution pipeline: client + package → default price → country override → dimension
+  overrides → (voucher, tax/fee applied later) → final resolved price. Order documented.
+
+**DB:** override tables per dimension.
+
+**Exit:** precedence matrix tested; a disabled combination resolves to "unavailable", never a
+wrong price.
+
+## Phase 15 — Price lists (A/B)
+
+**Goal:** run price experiments inside a pricing group without breaking consistency for a user.
+
+**Scope:**
+- `price_lists` (`id`, `name`, `enabled`, `factor`) per pricing group; every group implicitly
+  owns `List A · control` at `factor: 1`; at least one list always enabled.
+- Deterministic visitor → list assignment via a stable hash of the user ID; enabled lists split
+  new visitors evenly; disabling a list stops new assignments and moves existing users to the
+  group's primary list on their next visit.
+- Package prices per group per list.
+
+**DB:** `price_lists`, package-price-per-list table.
+
+**Exit:** stable assignment, even split, and disable-fallback tested.
+
+## Phase 16 — Vouchers module: definitions & eligibility
+
+**Goal:** model vouchers and the rules that gate them.
+
+**Scope:**
+- `vouchers`, `voucher_eligibility_rules`, `voucher_usage_limits` (global / per-user /
+  per-client), validity windows, minimum purchase, maximum discount, first-purchase-only,
+  discount type (fixed / percentage / full-when-allowed), scoping (client / country / currency /
+  provider / payment method / purchase type / package).
+
+**DB:** voucher, eligibility, usage-limit tables.
+
+**Exit:** eligibility evaluation across every dimension tested.
+
+## Phase 17 — Voucher validation, discount calc & redemption lifecycle
+
+**Goal:** apply a voucher safely, exactly once.
+
+**Scope:**
+- Validation service (runs before the provider transaction), discount calculation, and a
+  concurrency-safe redemption lifecycle: reserve → finalise on successful payment → release on
+  failed / cancelled / expired. Idempotent under webhook retries and client retries.
+- The provider only ever receives the final resolved amount (or a provider-supported discount
+  representation).
+
+**DB:** `voucher_redemptions` (+ reservation state).
+
+**Exit:** concurrent-redemption safety, lifecycle transitions, and "duplicate request does not
+double-redeem" tested.
+
+## Phase 18 — Decision snapshots
+
+**Goal:** history never changes when rules change.
+
+**Scope:**
+- `pricing_decision_snapshots`, `voucher_decision_snapshots`,
+  `provider_routing_decision_snapshots`; a price snapshot written onto the payment / subscription
+  creation record preserving package id, base amount, country-override amount, currency, provider,
+  payment method, purchase type, subscription interval, voucher id / code, discount, tax, fee,
+  final payable amount, and pricing-rule version references.
+
+**DB:** snapshot tables.
+
+**Exit:** snapshots proven immutable against later rule edits.
+
+## Phase 19 — Resolution API endpoints
+
+**Goal:** clients ask Gomrok for packages and prices; they never send a price.
+
+**Scope:**
+- `GET /api/v1/packages` and `GET /api/v1/packages/{packageId}` with resolved context
+  (client, country, currency, payment method, purchase type, client user when needed).
+- `POST /api/v1/pricing/resolve`, `POST /api/v1/vouchers/validate`.
+- Package response can include resolved price, currency, available providers, payment methods,
+  purchase types, and voucher eligibility when safe to expose.
+
+**DB:** none new.
+
+**Exit:** HTTP-level resolution tested end to end; client scoping enforced; client-supplied
+prices ignored.
+
+## Phase 20 — Payments module: aggregate & lifecycle
+
+**Goal:** the payment record and its state machine.
+
+**Scope:**
+- `payments`, `payment_attempts`, `provider_transactions`, `provider_customers`,
+  `gateway_references` (indexed for reverse lookup from any provider id).
+- Internal status enum (`created`, `pending`, `requires_action`, `authorized`, `paid`, `failed`,
+  `canceled`, `expired`, `refunded`, `partially_refunded`, `disputed`, `chargeback`) + transition
+  rules; unknown provider statuses stored safely, never leaked into core logic.
+
+**DB:** payment tables, gateway references.
+
+**Exit:** the state machine and rejection of illegal transitions tested.
+
+## Phase 21 — Provider adapter port & Stripe adapter
+
+**Goal:** the one interface all providers implement, plus the first real provider.
+
+**Scope:**
+- `PaymentProviderPort`: `createPayment`, `createCheckoutSession`, `createSubscription`,
+  `createBillingPortalSession`, `authorizePayment`, `capturePayment`, `cancelPayment`,
+  `refundPayment`, `getPaymentStatus`, `getSubscriptionStatus`, `verifyWebhookSignature`,
+  `parseWebhook`, `mapProviderStatusToInternalStatus`,
+  `mapProviderSubscriptionStatusToInternalStatus`, `getCapabilities`. Adapters are the only place
+  a provider SDK is used. An adapter is not forced to implement an unsupported capability —
+  unsupported ops are rejected via capability validation.
+- Stripe adapter: hosted Checkout, Billing Portal, payment + subscription status, webhook
+  verify/parse, status mapping, declared capabilities.
+
+**DB:** none new.
+
+**Exit:** unit tests for status mapping; integration tests against Stripe test mode.
+
+## Phase 22 — Mollie & PayPal adapters
+
+**Goal:** two more providers on the same port.
+
+**Scope:**
+- Mollie adapter (Checkout; method-specific capabilities — card vs PayPal — resolved separately).
+- PayPal adapter (Checkout / orders + subscriptions).
+- Status mapping and webhook parse/verify for both.
+
+**DB:** none new.
+
+**Exit:** unit mapping tests + sandbox integration tests for both.
+
+## Phase 23 — Ziraat adapter
+
+**Goal:** the bank-hosted, payment-only provider.
+
+**Scope:**
+- Bank-hosted payment page / 3D Secure redirect, return-URL handling, manual status polling.
+- Explicitly **not** a subscription or auto-charge provider — those capabilities are absent and
+  requests for them are rejected.
+
+**DB:** none new.
+
+**Exit:** redirect flow, status polling, and subscription-capability rejection tested.
+
+## Phase 24 — Payment creation flow
+
+**Goal:** the end-to-end "create a payment" path.
+
+**Scope:**
+- `POST /api/v1/payments`: authenticate → resolve package / price / voucher → resolve provider /
+  method / purchase type → create the provider transaction → persist snapshots + gateway
+  references → return the redirect / checkout URL. Provider-hosted UI only; Gomrok never touches
+  raw card data.
+- `GET /api/v1/payments/{id}`, `/status`, `POST .../cancel`, `/refund`, `/capture` — each gated
+  by provider + client capability.
+
+**DB:** none new.
+
+**Exit:** happy path per provider (SDK mocked), capability rejections, and idempotency tested.
+
+## Phase 25 — Webhooks module
+
+**Goal:** ingest provider events safely and idempotently.
+
+**Scope:**
+- `POST /api/v1/webhooks/{provider}`: store the raw event first (`webhook_events`), verify the
+  signature, enqueue processing, protect against duplicates / replays by provider event id.
+  Respond fast; never block on processing.
+- Processor: map the event to the internal record via gateway references, update payment /
+  subscription status, emit domain events.
+
+**DB:** `webhook_events`.
+
+**Exit:** store-first, duplicate-webhook no-double-effect, signature-failure handling, and
+reverse lookup tested.
+
+## Phase 26 — Subscriptions module
+
+**Goal:** subscriptions with unambiguous ownership.
+
+**Scope:**
+- `subscriptions` (always exactly one client, one client-user reference, one package when
+  package-based, one provider, one internal record), `subscription_events`,
+  `subscription_payment_links`.
+- Creation guarded: package + country + provider + payment method + client configuration must all
+  allow subscription.
+- Status lifecycle (`active`, `trialing`, `past_due`, `cancelled`); renewal / failed-charge /
+  card-update events fed from webhooks.
+- `POST /api/v1/subscriptions`, `GET /api/v1/subscriptions/{id}`,
+  `POST /api/v1/subscriptions/{id}/cancel`.
+
+**DB:** subscription tables.
+
+**Exit:** ownership queries (gateway sub id ↔ internal record; client user → active
+subscriptions) and every guard rejection tested.
+
+## Phase 27 — Admin Module Views and Panels
+
+**Goal:** the admin panel, matching the design, with real rendered evidence.
+
+**Scope:**
+- Admin auth: password hashing, hashed session tokens, login-attempt logging, account status
+  (active / disabled / locked).
+- RBAC engine: roles `admin` and `support_agent` only; enforced at **both** UI and backend/API
+  level; checks consider role, permission key, client scope, action type, resource ownership.
+  Audit-log every sensitive action (provider-config changes, secret rotation, refunds, retries,
+  pricing / voucher / country-override / permission changes).
+- Server-rendered PHP + Alpine.js + CSS shell matching the design: sidebar (Home, Sales,
+  Customers, Packaging & Pricing, Providers, Vouchers | **SYSTEM**: Clients, Notifications,
+  Admin users, Audit logs, Settings), top bar, active-client switcher, Test-mode toggle.
+  Undesigned screens render a neutral titled placeholder.
+- Screens: Home (KPIs, sparkline, recent payments), Sales (filter pills, status stat-tabs,
+  expandable event timelines), Customers (ID map + subscriptions), Packaging & Pricing
+  (master–detail; Packages and By-groups tabs), Providers (accounts with Reveal/Hide secrets +
+  By-groups with the resolved-provider readout), Clients (stat tabs + New client modal), and the
+  **Error Logs** table (timestamp, client, module, provider, message/code, correlation id,
+  related payment/subscription id, full detail without leaking secrets; filterable).
+- **Visual verification tooling**: install a headless-browser screenshot capability. From this
+  phase on, every phase-completion summary includes real screenshots for any view and real
+  captured output for any API / CLI / test / migration run.
+
+**DB:** `admin_users`, `admin_roles`, `admin_permissions`, `admin_sessions`,
+`admin_login_attempts` (design confirmed before migration).
+
+**Exit:** RBAC matrix, backend permission enforcement, secret masking, and rendered-view smoke
+tests pass — with screenshots of every implemented screen attached.
+
+## Phase 28 — Client callbacks / outbound notifications
+
+**Goal:** tell the client what happened, reliably.
+
+**Scope:**
+- `client_notification_logs`; per-provider-account callback keys (`buy_address`,
+  `buy_onetime_address`, `buy_address_subscribe`, `cancel_address`, `payment_failed`,
+  `update_card`, and future keys).
+- Delivery on status changes; signed / authenticated outbound calls; retry with exponential
+  backoff; dead-letter for exhausted retries; the admin Notifications screen with a manual retry
+  action.
+
+**DB:** `client_notification_logs` (+ dead-letter / failed-jobs).
+
+**Exit:** delivery, retry/backoff, dead-letter, idempotent retries, and the admin retry action
+tested — with captured evidence.
+
+## Phase 29 — Background jobs, reconciliation & observability
+
+**Goal:** everything slow runs off the request path, and drift is caught.
+
+**Scope:**
+- Queue + worker. Jobs: webhook processing, callback delivery + retries, payment / refund /
+  subscription reconciliation, expired-payment cleanup, provider status polling, voucher
+  reservation expiry, package/pricing cache refresh (if caching is introduced).
+- Reconciliation reports in the admin panel; metrics, alerts, dashboards; trace logs for package
+  resolution, pricing decisions, voucher validation/redemption, provider routing, payments,
+  subscriptions.
+
+**DB:** job / dead-letter tables as needed.
+
+**Exit:** job retry/backoff, DLQ behaviour, and reconciliation drift-detection tested — with
+captured evidence.
+
+## Phase 30 — Hardening, docs & first-client go-live
+
+**Goal:** production-ready, documented, with Televika (the first client) onboarded.
+
+**Scope:**
+- Security pass: webhook signatures, replay protection, price / package manipulation attempts,
+  multi-client isolation, secret storage, idempotency under concurrency. Load / soak the payment
+  and webhook paths.
+- Final docs: `database-design.md` / `database-diagram.md` (+ `.html`) / `db_explain.md` in
+  sync; `mkdocs` build clean; API reference; an operations runbook.
+- First-client onboarding: Televika client + provider accounts + packages + pricing configured,
+  integration tested end to end in test mode, then a staged go-live checklist with rollback
+  steps (disable the client, revoke keys) if anything misbehaves.
+
+**DB:** none new (final reconciliation of docs vs schema).
+
+**Exit:** full test suite green; screenshots of every admin screen; Televika transacting
+successfully in production behind a documented go-live checklist.

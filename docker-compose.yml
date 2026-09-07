@@ -1,0 +1,42 @@
+services:
+  app:
+    build:
+      context: .
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: gomrok
+      DB_USER: gomrok
+      DB_PASSWORD: gomrok
+      DB_CHARSET: utf8mb4
+    command: php -S 0.0.0.0:8080 -t src/Public
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.4
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_DATABASE: gomrok
+      MYSQL_USER: gomrok
+      MYSQL_PASSWORD: gomrok
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pgomrok", "-ugomrok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mysql-data:

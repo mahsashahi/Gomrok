@@ -1,0 +1,11 @@
+/vendor/
+/.env
+/.claude/settings.local.json
+/.php-cs-fixer.cache
+/.phpunit.result.cache
+/.phpunit.cache/
+/.phpstan.cache/
+/coverage/
+.DS_Store
+
+/.idea/
