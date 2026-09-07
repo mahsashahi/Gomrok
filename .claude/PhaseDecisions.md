@@ -7,7 +7,7 @@ answers a question, not at end of phase. See `.claude/Rule.md` §4.2.
 - `.claude/Rule.md` → how decisions are asked and recorded.
 - `.claude/docs/Phases.md` → roadmap, phase status, timing.
 - `.claude/PhaseDecisions.md` (this file) → all questions, options, recommendations, selections.
-- `PhaseResults/PhaseNNResult.md` → what was actually implemented per phase.
+- `.claude/PhaseResults/PhaseNNResult.md` → what was actually implemented per phase.
 
 ---
 

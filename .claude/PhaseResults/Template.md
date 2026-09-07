@@ -1,5 +1,5 @@
 <!--
-Copy this file to PhaseResults/PhaseNNResult.md (zero-padded, e.g. Phase01Result.md) ONLY
+Copy this file to .claude/PhaseResults/PhaseNNResult.md (zero-padded, e.g. Phase01Result.md) ONLY
 after the phase is fully complete — a phase is NOT done until its result file is done.
 Fill every section with what ACTUALLY happened; never document planned work as completed
 work. Be specific: exact file paths, class / method / interface / endpoint / table names.

@@ -95,29 +95,48 @@ loose in the project root. Layout:
 
 ```
 .claude/
+├── CLAUDE.md            pointer stub → the project-root CLAUDE.md is authoritative
 ├── Rule.md              this file — the standing-rules catalogue
-├── Changelog.md         chronological change log
-├── PhaseDecisions.md    every phase decision Q/options/selection  (the "orders" record)
-├── FileIndex.md         map of the key files in the whole repo
-├── agents/              custom subagent definitions      (empty skeleton for now)
-├── commands/            custom slash-command definitions (empty skeleton for now)
-├── skills/              reusable implementation guides    (empty skeleton for now)
-├── knowledge/
-│   └── Knowledge.md     durable domain knowledge / gotchas
-└── docs/
-    ├── Architecture.md  the Phase-1 architecture baseline
-    ├── Phases.md        the 30-phase plan + Status & execution tracking table
-    ├── Commands.md      everyday command reference
-    ├── LastAiAnswer.md  single-slot buffer: the most recent substantive answer
-    └── ClaudeOld.md     superseded spec archive (do not follow)
+├── Changelog.md         chronological change log            (= struct.md CHANGELOG.md)
+├── PhaseDecisions.md    every phase decision Q/options/selection
+├── Orders.md            requirements & decisions register   (= struct.md ORDERS.md)
+├── FileIndex.md         map of the key files in the repo    (= struct.md FILE_INDEX.md)
+├── struct.md            the target-structure spec this tree was built from (user-owned)
+├── agents/              subagent definitions — <Role>Agent.md  (templates; refine before use)
+│   └── Readme.md
+├── commands/            slash-command definitions — /<Command>
+│   ├── <Command>.md          /Implement /Plan /Refactor /Review /Spec   (templates)
+│   ├── phases/               thin pointers to docs/Phases.md
+│   └── workflow/             multi-agent variants of the top-level commands
+├── skills/              reusable how-to guides — <Topic>Skill.md
+│   └── Readme.md
+├── knowledge/           stable policies (rarely change)
+│   ├── Knowledge.md          durable domain knowledge / gotchas
+│   ├── SecurityRules.md  TenantIsolation.md  RolePermissionModel.md
+│   └── DeploymentRunbook.md  DnsRecords.md  LocalAssets.md  MediaStorage.md  (placeholders)
+├── docs/               reference docs Claude reads before implementing
+│   ├── Architecture.md  Phases.md  Commands.md  LastAiAnswer.md  ClaudeOld.md
+│   ├── ProjectDescription.md  Domain.md  Permissions.md  Ui.md  Recommendations.md
+│   └── Deployment.md  Server.md   (placeholders — no infra chosen yet)
+└── PhaseResults/       per-phase records — Readme.md, Template.md, PhaseNNResult.md (append-only)
 ```
 
+Naming inside `.claude/`:
+
+- **Files are PascalCase** (`Rule.md`, `docs/Architecture.md`, `agents/BackendAgent.md`,
+  `commands/Implement.md`, `skills/BackendSkill.md`).
+- The **directories** `agents/ commands/ skills/` are lowercase (Claude Code requires it);
+  `docs/ knowledge/` match them; `PhaseResults/` is PascalCase (our own dir, not a tool folder).
+- A PascalCase command file makes a PascalCase command — `commands/Implement.md` → `/Implement`,
+  `commands/workflow/Review.md` → `/workflow:Review`, `commands/phases/Phase00Foundation.md` →
+  `/phases:Phase00Foundation`. Agent files set `name:` in frontmatter.
 - **Any future documentation file goes under `.claude/`** — a policy under `knowledge/`, a
   reference doc under `docs/`, an agent/command/skill in its folder — unless an explicit
   technical reason requires elsewhere.
-- The §3.1 filename convention applies to every file inside `.claude/` (PascalCase files;
-  `agents/` `commands/` `skills/` `docs/` `knowledge/` dirs stay lowercase — Claude Code needs
-  the first three lowercase).
+- `struct.md` uses `SCREAMING_CASE` / `kebab-case` as its own notation; the real tree maps those
+  to PascalCase (`CHANGELOG.md`→`Changelog.md`, `backend-agent.md`→`BackendAgent.md`,
+  `phase-00-foundation.md`→`Phase00Foundation.md`). `struct.md` itself is the user's spec — do
+  not edit it.
 - When a doc is created / renamed / moved / removed: update **every reference in the same
   change** (Markdown links, path references, `CLAUDE.md`, these rules, phase files, scripts,
   code) and the **## Project Documents** table (§3.5). No stale references, no duplicate copy.
@@ -126,11 +145,14 @@ loose in the project root. Layout:
 
 - `CLAUDE.md` — sits at the **project root**; the harness auto-loads `./CLAUDE.md`, and it is not
   confirmed to auto-load `.claude/CLAUDE.md`. It is the entry point and points into `.claude/`.
-- `PhaseResults/` (project root) — per-phase completion records; a special-purpose append-only
-  store, not general documentation. `Design/` (project root) — design assets, not documentation.
-- The Phase-4 database docs (`DatabaseDesign.md`, the ER diagram, the per-table guide,
-  `mkdocs.yml`) will live under `.claude/docs/` too; their exact names are a Phase 4 decision
-  (the inherited spec writes them kebab-case).
+- `Design/` (project root) — design assets (HTML mockups), not documentation.
+
+`.claude/PhaseResults/` lives *inside* `.claude/` (moved there 2026-09-07) but is a
+special-purpose append-only record store, not general reference documentation.
+
+The Phase-4 database docs (`DatabaseDesign.md`, the ER diagram, the per-table guide,
+`mkdocs.yml`) will live under `.claude/docs/` too; their exact names are a Phase 4 decision
+(the inherited spec writes them kebab-case).
 
 ### 3.4 Where things live
 
@@ -138,8 +160,8 @@ loose in the project root. Layout:
 - The 30-phase plan: `.claude/docs/Phases.md`.
 - Every phase decision question, its options, the recommendation, and the user's final selection:
   `.claude/PhaseDecisions.md` — see §4.2.
-- Per-phase completion records: `PhaseResults/` (project root) — one `PhaseNNResult.md` per
-  completed phase (see `PhaseResults/Readme.md`).
+- Per-phase completion records: `.claude/PhaseResults/` — one `PhaseNNResult.md` per completed
+  phase (see `.claude/PhaseResults/Readme.md`).
 - The map of key files across the whole repo: `.claude/FileIndex.md`.
 - Cross-cutting conventions: this file, `.claude/Rule.md`.
 - The admin-panel design is mirrored under `Design/` (project root; see `Design/Readme.md`).
@@ -171,14 +193,26 @@ The complete list of the project's documentation files. Keep this table in sync 
 | Commands.md | `.claude/docs/Commands.md` | Everyday commands: setup, Docker, running the app, tests (incl. a single test), static analysis, code style, Phinx migrations, full local CI. |
 | LastAiAnswer.md | `.claude/docs/LastAiAnswer.md` | Single-slot buffer holding only the most recent substantive assistant response (overwritten each time; see §1). |
 | ClaudeOld.md | `.claude/docs/ClaudeOld.md` | Superseded archive of an early spec draft. Kept for history only — carries a SUPERSEDED banner; do not follow it. |
-| PhaseResults/Readme.md | `PhaseResults/Readme.md` | Explains the phase-result convention: naming, structure, and the rules for `PhaseNNResult.md` files. |
-| PhaseResults/Template.md | `PhaseResults/Template.md` | The section layout to copy when creating a phase result file. |
-| PhaseNNResult.md | `PhaseResults/PhaseNNResult.md` | One per completed phase (zero-padded, e.g. `Phase01Result.md`): the detailed record of what was *actually* done that phase. Append-only. |
-| agents/commands/skills Readme.md | `.claude/{agents,commands,skills}/Readme.md` | Placeholder notes explaining what each empty skeleton folder is for and candidate contents. |
+| PhaseResults/Readme.md | `.claude/PhaseResults/Readme.md` | Explains the phase-result convention: naming, structure, and the rules for `PhaseNNResult.md` files. |
+| PhaseResults/Template.md | `.claude/PhaseResults/Template.md` | The section layout to copy when creating a phase result file. |
+| PhaseNNResult.md | `.claude/PhaseResults/PhaseNNResult.md` | One per completed phase (zero-padded, e.g. `Phase01Result.md`): the detailed record of what was *actually* done that phase. Append-only. |
+| CLAUDE.md (pointer) | `.claude/CLAUDE.md` | Pointer stub — says the project-root `CLAUDE.md` + `.claude/Rule.md` are authoritative. Not the real instruction file. |
+| Orders.md | `.claude/Orders.md` | Requirements & decisions register — one row per requirement/decision with date/source/status/phase, pointing at `PhaseDecisions.md` / `CLAUDE.md` / `Rule.md`. Higher-level index over `PhaseDecisions.md`. |
+| struct.md | `.claude/struct.md` | The user's target-structure spec that this `.claude/` tree was built from. User-owned — do not edit. |
+| agents/\*.md | `.claude/agents/<Role>Agent.md` | Subagent definitions (`BackendAgent`, `DatabaseAgent`, `DiscoveryAgent`, `DocsAgent`, `FrontendAgent`, `QaAgent`, `ReviewAgent`, `SecurityAgent`, `TestingAgent`, `DeploymentAgent`). **Templates** — frontmatter set, bodies are placeholders; refine before relying on any. |
+| commands/\*.md | `.claude/commands/<Command>.md` (+ `phases/`, `workflow/`) | Slash-command definitions: `/Implement /Plan /Refactor /Review /Spec`, their `/workflow:*` multi-agent variants, and `/phases:*` thin pointers to `docs/Phases.md`. **Templates.** |
+| skills/\*.md | `.claude/skills/<Topic>Skill.md` | How-to guides (`BackendSkill`, `DatabaseSkill`, `FrontendSkill`, `GitSkill`, `SecuritySkill`, `TestingSkill`, `DeploymentSkill`) + `SkillTemplate.md`. **Templates.** Flat files, not invocable Claude Code skills (those need `skills/<name>/SKILL.md`). |
+| docs — reference | `.claude/docs/{ProjectDescription,Domain,Permissions,Ui}.md` | Thin reference docs that **point at** `CLAUDE.md` / `Architecture.md` / `Design/` rather than duplicating them. |
+| docs — placeholders | `.claude/docs/{Deployment,Server}.md`, `.claude/docs/Recommendations.md` | `Deployment`/`Server`: empty until infra is chosen (Phase 30). `Recommendations`: cross-phase rollup of open follow-ups from each `PhaseNNResult.md` → Deferred Work. |
+| knowledge — policies | `.claude/knowledge/{SecurityRules,TenantIsolation,RolePermissionModel}.md` | Stable policy statements that pin the corresponding `CLAUDE.md` sections. |
+| knowledge — placeholders | `.claude/knowledge/{DeploymentRunbook,DnsRecords,LocalAssets,MediaStorage}.md` | Empty until real infrastructure exists — no hosts/records/credentials invented. |
+| templates | `.claude/docs/FeatureTemplate.md`, `.claude/knowledge/PolicyTemplate.md`, `.claude/skills/SkillTemplate.md`, `.claude/commands/phases/PhaseTemplate.md` | Copy-me templates for the `[feature].md` / `[policy].md` / `[tech]-skill.md` / `phase-NN-[name].md` placeholders in `struct.md`. |
+| skeleton Readmes | `.claude/{agents,commands,skills,commands/phases}/Readme.md` | Notes on what each folder is for. |
 | Design/Readme.md | `Design/Readme.md` | Describes the mirrored Claude Design admin-panel export files under `Design/` and how to open them. |
 
-`PhaseResults/` and `Design/` sit at the project root, not under `.claude/` (§3.3–§3.4), but
-their documentation files are still registered here.
+`Design/` sits at the project root (not documentation), but its `Readme.md` is registered here
+too. `.claude/PhaseResults/` is under `.claude/` but is a record store rather than reference
+documentation.
 
 ## 4. Phase workflow
 
@@ -203,10 +237,10 @@ their documentation files are still registered here.
   sessions), and Tokens Used.
 ### 4.1 Phase result files
 
-`.claude/docs/Phases.md` is the roadmap and high-level tracker; `PhaseResults/` is the detailed historical
+`.claude/docs/Phases.md` is the roadmap and high-level tracker; `.claude/PhaseResults/` is the detailed historical
 record of actual work. After a phase is complete, write exactly one
-`PhaseResults/PhaseNNResult.md` (zero-padded, from `PhaseResults/Template.md`). Full detail in
-`PhaseResults/Readme.md`; the binding points:
+`.claude/PhaseResults/PhaseNNResult.md` (zero-padded, from `.claude/PhaseResults/Template.md`). Full detail in
+`.claude/PhaseResults/Readme.md`; the binding points:
 
 - **A phase is not fully completed until its result file is completed.**
 - One result file per phase. Applies automatically to **all** phases.
@@ -327,7 +361,7 @@ Applies automatically to all current and future phases.
 | `.claude/docs/Phases.md` | The *Status & execution tracking* row for each phase (Status, Start/End Datetime, Est./Actual Duration, Tokens Used) as it runs; contents when scope is confirmed to change. |
 | `.claude/PhaseDecisions.md` | Immediately after the user answers each phase decision question — options, recommendation, selection, status, and any later change (§4.2). |
 | `.claude/docs/database-design.md`, `database-diagram.md` (+ `.html`), `db_explain.md` | Every schema change, same change (§5). |
-| `PhaseResults/PhaseNNResult.md` | Created once, right after phase NN completes; never edited afterwards except to fix an error. |
+| `.claude/PhaseResults/PhaseNNResult.md` | Created once, right after phase NN completes; never edited afterwards except to fix an error. |
 | `.claude/Rule.md` | Whenever a new standing rule or convention is agreed; and its **## Project Documents** table whenever any documentation file is created / renamed / moved / removed (§3.5). |
 | `.claude/docs/Architecture.md` | When an architecture-level decision (module boundaries, IDs, money, adapter shape, events…) is made or revised. |
 | `.claude/knowledge/Knowledge.md` | When a durable domain fact or gotcha (provider quirk, edge case) is learned. |

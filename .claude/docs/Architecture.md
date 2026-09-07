@@ -5,7 +5,7 @@ system. This is a baseline sketch — module internals, the database schema, and
 are designed in their own later phases. Where this file and `CLAUDE.md` differ on intent,
 `CLAUDE.md` wins and this file is corrected.
 
-Phase 1 decisions (see `PhaseResults/Phase01Result.md` for the Q&A):
+Phase 1 decisions (see `.claude/PhaseResults/Phase01Result.md` for the Q&A):
 
 | # | Decision |
 | --- | --- |
@@ -135,7 +135,7 @@ src/
 
 - **`src/Bootstrap/`** and **`src/Http/`** are app-level (non-module) code: the composition root
   and endpoints that belong to no business module. Added in Phase 2 — see
-  `PhaseResults/Phase02Result.md` / `PhaseDecisions.md` Phase 2 Q6.
+  `.claude/PhaseResults/Phase02Result.md` / `PhaseDecisions.md` Phase 2 Q6.
 - PHP namespace root: `Gomrok\` → `src/` (PSR-4). Class name == file name (PascalCase, satisfies
   `.claude/Rule.md`); non-class config files (`container.php`, `routes.php`) keep the
   conventional lowercase name (`Rule.md` §3.1).

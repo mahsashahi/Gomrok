@@ -802,11 +802,12 @@ Every file authored for this project is named in **PascalCase** (`Phases.md`, `L
 
 All project documentation lives under **`.claude/`** — `.claude/Rule.md`, `.claude/Changelog.md`,
 `.claude/PhaseDecisions.md`, `.claude/FileIndex.md`, `.claude/docs/*` (Architecture, Phases,
-Commands, LastAiAnswer, …), `.claude/knowledge/*`, plus the `agents/` `commands/` `skills/`
-skeletons — never loose in the project root. `CLAUDE.md` is the one exception (the harness
-auto-loads `./CLAUDE.md`); `PhaseResults/` and `Design/` also stay at the root (§3.3). Files in
-`.claude/` are PascalCase; the `agents/ commands/ skills/ docs/ knowledge/` sub-dirs are
-lowercase. Full rule: `.claude/Rule.md` §3.3. Every documentation file is also registered in
+Commands, LastAiAnswer, …), `.claude/knowledge/*`, `.claude/PhaseResults/*`, plus the `agents/`
+`commands/` `skills/` skeletons — never loose in the project root. `CLAUDE.md` is the one
+exception (the harness auto-loads `./CLAUDE.md`); `Design/` also stays at the root (§3.3). Files
+in `.claude/` are PascalCase (incl. the `PhaseResults/` sub-dir); the tool-recognised
+`agents/ commands/ skills/` sub-dirs plus `docs/ knowledge/` are lowercase. Full rule:
+`.claude/Rule.md` §3.3. Every documentation file is also registered in
 `.claude/Rule.md` → **## Project Documents** (name, path, purpose), kept in sync whenever a doc
 is created / renamed / moved / removed (§3.5).
 
@@ -1536,11 +1537,11 @@ Also update `.claude/Changelog.md` after each meaningful phase, and fill in that
 `.claude/docs/Phases.md` *Status & execution tracking* table — Status, Start/End Datetime, Estimated Duration,
 Actual Duration, and Tokens Used.
 
-**After a phase is complete**, create exactly one result file `PhaseResults/PhaseNNResult.md`
-(zero-padded, PascalCase) using the layout in `PhaseResults/Template.md`. A phase is **not fully
+**After a phase is complete**, create exactly one result file `.claude/PhaseResults/PhaseNNResult.md`
+(zero-padded, PascalCase) using the layout in `.claude/PhaseResults/Template.md`. A phase is **not fully
 completed until its result file is completed.** It records what *actually* happened — specific
 file paths, class / method / interface / endpoint / table names — and never documents planned
-work as completed work. `.claude/docs/Phases.md` stays the roadmap; `PhaseResults/` is the detailed history.
+work as completed work. `.claude/docs/Phases.md` stays the roadmap; `.claude/PhaseResults/` is the detailed history.
 
 - Never invent timestamps, token usage, test results, or implementation details. Unavailable
   token counts are `N/A`. Never claim tests passed unless actually run successfully.
@@ -1551,7 +1552,7 @@ work as completed work. `.claude/docs/Phases.md` stays the roadmap; `PhaseResult
 - Do **not** silently rewrite an earlier phase's result file when a later phase changes that
   code — document the later change in the later phase's result file. Never overwrite or delete a
   prior result file.
-- This applies automatically to all phases. See `PhaseResults/Readme.md`.
+- This applies automatically to all phases. See `.claude/PhaseResults/Readme.md`.
 
 **End-of-phase decision check.** Before marking a phase complete, verify: (1) all required
 decision questions were asked; (2) every one has a recorded answer; (3) `.claude/PhaseDecisions.md`

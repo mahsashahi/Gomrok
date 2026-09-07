@@ -83,12 +83,12 @@ Every phase, without exception:
    **Status** to ☑ and record **End Datetime**, **Actual Duration**, and **Tokens Used**. If a
    phase spans several working sessions, keep the first Start, update End each session, and let
    Actual Duration be the sum of the sessions' hands-on time (not the wall-clock span).
-7. **Result file:** write exactly one `PhaseResults/PhaseNNResult.md` (zero-padded) from
-   `PhaseResults/Template.md`, recording what *actually* happened — specific paths and names, not
+7. **Result file:** write exactly one `.claude/PhaseResults/PhaseNNResult.md` (zero-padded) from
+   `.claude/PhaseResults/Template.md`, recording what *actually* happened — specific paths and names, not
    this plan text; never planned work as completed work. **The phase is not fully complete until
    this file is complete.** Never overwrite or delete an earlier phase's result file; if a later
    phase changes earlier code, document that in the later phase's file. See
-   `PhaseResults/Readme.md`.
+   `.claude/PhaseResults/Readme.md`.
 8. **Decision check:** before marking the phase complete, verify all decision questions were
    asked, all are answered, `.claude/PhaseDecisions.md` matches the user's selections, and the
    implementation follows them. If implementation diverges from a recorded decision, stop and

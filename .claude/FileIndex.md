@@ -17,11 +17,22 @@ A map of the files worth knowing about. Keep in sync when files are added / move
 | `.claude/docs/Commands.md` | Everyday commands. |
 | `.claude/docs/LastAiAnswer.md` | Single-slot buffer: most recent substantive answer. |
 | `.claude/docs/ClaudeOld.md` | Superseded spec archive — do not follow. |
+| `.claude/CLAUDE.md` | Pointer stub → project-root `CLAUDE.md` is authoritative. |
+| `.claude/Orders.md` | Requirements & decisions register (index over `PhaseDecisions.md`). |
+| `.claude/struct.md` | The user's target `.claude/` structure spec (do not edit). |
+| `.claude/PhaseResults/PhaseNNResult.md` `+ {Readme,Template}.md` | Per-phase records + convention/template. |
 | `.claude/knowledge/Knowledge.md` | Durable domain knowledge / gotchas. |
-| `.claude/agents/`, `.claude/commands/`, `.claude/skills/` | Empty skeletons (see each `Readme.md`). |
-| `PhaseResults/PhaseNNResult.md` | Per-phase record of what actually happened. |
-| `PhaseResults/{Readme,Template}.md` | Phase-result convention + template. |
-| `Design/` | Mirrored Claude Design admin-panel exports (`Design/Readme.md`). |
+| `.claude/knowledge/{SecurityRules,TenantIsolation,RolePermissionModel}.md` | Policy statements pinning the matching `CLAUDE.md` sections. |
+| `.claude/knowledge/{DeploymentRunbook,DnsRecords,LocalAssets,MediaStorage}.md` | Placeholders — filled when real infra exists. |
+| `.claude/docs/{ProjectDescription,Domain,Permissions,Ui}.md` | Thin reference docs pointing at `CLAUDE.md` / `Architecture.md` / `Design/`. |
+| `.claude/docs/{Deployment,Server}.md` | Placeholders — no infra chosen yet (Phase 30). |
+| `.claude/docs/Recommendations.md` | Cross-phase rollup of open follow-ups. |
+| `.claude/agents/<Role>Agent.md` | 10 subagent definition templates (`BackendAgent`, `ReviewAgent`, …). |
+| `.claude/commands/<Command>.md` (+ `phases/`, `workflow/`) | Slash-command templates: `/Implement /Plan /Refactor /Review /Spec`, `/workflow:*`, `/phases:*`. |
+| `.claude/skills/<Topic>Skill.md` | How-to guide templates (`BackendSkill`, `TestingSkill`, …). |
+| `.claude/**/{FeatureTemplate,PolicyTemplate,SkillTemplate,PhaseTemplate}.md` | Copy-me templates for `struct.md`'s `[…]` placeholders. |
+| `.claude/{agents,commands,skills,commands/phases}/Readme.md` | What each folder is for. |
+| `Design/` (project root) | Mirrored Claude Design admin-panel exports (`Design/Readme.md`). |
 
 ## Source (`src/`, PSR-4 `Gomrok\`)
 

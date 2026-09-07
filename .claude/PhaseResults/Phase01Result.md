@@ -53,7 +53,7 @@
   Phase 1 entry. (Created as `CHANGELOG.md`, renamed to PascalCase.)
 - `/Users/mahsa/PhpstormProjects/Gomrok/.claude/knowledge/Knowledge.md` — durable domain knowledge / gotchas.
   (Created as `KNOWLEDGE.md`, renamed to PascalCase.)
-- `/Users/mahsa/PhpstormProjects/Gomrok/PhaseResults/Phase01Result.md` — this file.
+- `/Users/mahsa/PhpstormProjects/Gomrok/.claude/PhaseResults/Phase01Result.md` — this file.
 
 ## Files Modified
 
@@ -140,7 +140,7 @@ and built from Phase 19 / Phase 24 onward.)
 ## Resolutions
 
 - Naming conflict: confirmed with the user (they chose PascalCase); applied everything to the
-  existing `.claude/Rule.md` / `PhaseResults/` / `.claude/docs/Phases.md` and did not create lowercase duplicates.
+  existing `.claude/Rule.md` / `.claude/PhaseResults/` / `.claude/docs/Phases.md` and did not create lowercase duplicates.
 - Estimate variance: recorded honestly (Est. 2–4h vs Actual 12m). The estimate assumed the
   architecture doc would need more iteration; because the 5 questions were pre-framed and all
   answers took the recommended option, the write-up was quick. Later phases' estimates left

@@ -7,6 +7,56 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-07 — `.claude/` structure completed from `struct.md`
+
+**Summary.** Built out the full `.claude/` tree described in `.claude/struct.md`, keeping every
+existing file and its content untouched. `struct.md`'s `SCREAMING_CASE`/`kebab-case` names mapped
+to PascalCase per `.claude/Rule.md` §3.1.
+
+**Files created (51)**
+- `.claude/CLAUDE.md` (pointer stub), `.claude/Orders.md` (requirements/decisions register).
+- `.claude/agents/` — 10 `<Role>Agent.md` templates (Backend, Database, Deployment, Discovery,
+  Docs, Frontend, Qa, Review, Security, Testing).
+- `.claude/commands/` — `Implement.md Plan.md Refactor.md Review.md Spec.md`; `workflow/` (same 5,
+  multi-agent variants); `phases/` (`Phase00Foundation`, `Phase01ProjectDiscovery`,
+  `Phase02RepositoryBootstrap`, `PhaseTemplate`, `Readme`).
+- `.claude/docs/` — `ProjectDescription Domain Permissions Ui Recommendations Deployment Server
+  FeatureTemplate`.
+- `.claude/knowledge/` — `SecurityRules TenantIsolation RolePermissionModel DeploymentRunbook
+  DnsRecords LocalAssets MediaStorage PolicyTemplate`.
+- `.claude/skills/` — `BackendSkill DatabaseSkill DeploymentSkill FrontendSkill GitSkill
+  SecuritySkill TestingSkill SkillTemplate`.
+
+**Files modified (additive only)**
+- `.claude/Rule.md` — §3.3 tree + naming notes; ## Project Documents rows for the new families.
+- `.claude/FileIndex.md` — new entries.
+
+**Files preserved (unchanged):** every pre-existing `.claude/` file — `Rule.md` content,
+`Changelog.md`, `PhaseDecisions.md`, `FileIndex.md`, `docs/*`, `knowledge/Knowledge.md`,
+`{agents,commands,skills}/Readme.md`, `PhaseResults/*`, and the project-root `CLAUDE.md`.
+
+**Notes.** The agent files carry valid frontmatter and the command files carry `description`
+frontmatter, so Claude Code will now surface ~10 subagents and ~15 slash commands — **all marked
+TEMPLATE**. Deployment/Server/DNS/media/runbook files are deliberate empty placeholders (no
+infrastructure decided). Nothing outside `.claude/` was touched (no source, tests, DB, Docker,
+Composer).
+
+**Migration notes.** None. **Breaking changes.** None.
+
+## 2026-09-07 — `PhaseResults/` moved into `.claude/`
+
+**Summary.** `PhaseResults/` (project root) → `.claude/PhaseResults/`. Name stays PascalCase
+(our own dir, not a Claude Code tool folder). Contents unchanged.
+
+**Files modified** (references repointed `PhaseResults/` → `.claude/PhaseResults/`)
+- `CLAUDE.md` (Phase Completion Rule, Documentation-directory note).
+- `.claude/Rule.md` (§3.3 layout + text, §3.4, §7, ## Project Documents, §4.1).
+- `.claude/FileIndex.md`, `.claude/PhaseDecisions.md`, `.claude/docs/{Architecture,Phases}.md`,
+  `.claude/PhaseResults/{Readme,Template,Phase01Result}.md`.
+
+**Migration notes.** `PhaseResults/PhaseNNResult.md` → `.claude/PhaseResults/PhaseNNResult.md`.
+**Breaking changes.** None.
+
 ## 2026-09-07 — Documentation reorganised into `.claude/`
 
 **Summary.** Adopted the standard Claude Code project layout. `Documents/` retired; all docs now

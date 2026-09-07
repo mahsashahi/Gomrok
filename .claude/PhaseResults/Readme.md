@@ -1,4 +1,4 @@
-# PhaseResults/
+# .claude/PhaseResults/
 
 The detailed **historical record of actual work**. `.claude/docs/Phases.md` stays the roadmap and high-level
 progress tracker; this folder holds one file per completed phase describing what really happened.
@@ -6,7 +6,7 @@ progress tracker; this folder holds one file per completed phase describing what
 ## Naming
 
 ```
-PhaseResults/
+.claude/PhaseResults/
 ├── Template.md          ← copy this; not a result file
 ├── Phase01Result.md
 ├── Phase02Result.md
@@ -35,7 +35,7 @@ explicitly when there are none — never leave them blank.
 ## Rules
 
 1. `.claude/docs/Phases.md` = roadmap + status/timing. `.claude/PhaseDecisions.md` = every decision question, its
-   options, and the user's selection. `PhaseResults/` = the detailed historical record of what
+   options, and the user's selection. `.claude/PhaseResults/` = the detailed historical record of what
    was actually implemented.
 2. Create the result file only **after** the phase is complete — and **a phase is not fully
    completed until its result file is completed**.
