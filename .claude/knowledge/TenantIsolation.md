@@ -12,6 +12,10 @@
   `client_packages` junction.
 - Every API request is authenticated and scoped to exactly one client; cross-client access is
   rejected, not filtered-and-hoped.
+- **IDs are sequential integers and therefore guessable** (decision of 2026-09-08 — see
+  `Architecture.md` §6). Isolation must not depend on IDs being unguessable: every read/write
+  is `WHERE client_id = :authenticatedClient`, and a request for an ID the client doesn't own
+  returns 404/403 — never the row.
 - Payments, subscriptions, webhooks, provider accounts, pricing, vouchers, logs, audit entries —
   all linked to the owning client.
 - No single client's behaviour is hardcoded in the core; client-specific behaviour is

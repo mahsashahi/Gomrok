@@ -21,6 +21,9 @@
      (wired by PHP-DI) **plus** an in-process synchronous domain-event dispatcher for reactions.
   3. **Identifier strategy** → `BIGINT UNSIGNED AUTO_INCREMENT` primary/foreign keys + a public
      `ulid CHAR(26)` column on every externally-visible row; APIs/callbacks/admin use the ULID.
+     **⚠ CHANGED 2026-09-08 during Phase 3** — the user replaced this with plain
+     `INT AUTO_INCREMENT` IDs (from 1), no ULID/UUID/typed-ID classes, `int` in DB and PHP. See
+     `PhaseDecisions.md` Phase 1 Q3, `Architecture.md` §6, and `Phase03Result.md`.
   4. **Money representation** → `brick/money` wrapped in a `Shared\Domain\Money` value object;
      stored as `amount_minor BIGINT` + `currency CHAR(3)`.
   5. **Provider-adapter interface** → Required core `PaymentProviderPort` + optional capability
@@ -81,6 +84,7 @@ phases will implement, as fixed in `.claude/docs/Architecture.md`:
   `WebhookReceived` / `WebhookProcessed`, `ClientNotificationFailed`.
 - **Identifiers:** `Shared\Domain\Ulid` VO + `Shared\Infrastructure\UlidGenerator` (uses the
   injected `Clock`); numeric `id` never leaves the DB boundary.
+  **[Superseded 2026-09-08 — see the ⚠ note above; IDs are now plain `int`, no `Ulid`.]**
 - **Money:** `Shared\Domain\Money` wrapping `Brick\Money\Money`; operations `fromMinor`, `plus`,
   `minus`, `multipliedBy`, `allocate`, `toMinor`, `currency`.
 - **Provider port:** `PaymentProviderPort` methods `createPayment`, `getPaymentStatus`,

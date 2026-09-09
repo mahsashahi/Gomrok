@@ -9,11 +9,15 @@
         "ext-intl": "*",
         "ext-pdo": "*",
         "ext-pdo_mysql": "*",
-        "slim/slim": "^4.14",
-        "slim/psr7": "^1.7",
+        "brick/math": "~0.12.0",
+        "brick/money": "^0.10",
+        "monolog/monolog": "^3",
         "php-di/php-di": "^7.0",
-        "vlucas/phpdotenv": "^5.6",
-        "robmorgan/phinx": "^0.16.6"
+        "psr/clock": "^1",
+        "robmorgan/phinx": "^0.16.6",
+        "slim/psr7": "^1.7",
+        "slim/slim": "^4.14",
+        "vlucas/phpdotenv": "^5.6"
     },
     "require-dev": {
         "phpunit/phpunit": "^11.4",
@@ -25,7 +29,10 @@
     "autoload": {
         "psr-4": {
             "Gomrok\\": "src/"
-        }
+        },
+        "exclude-from-classmap": [
+            "/src/Database/Migrations/"
+        ]
     },
     "autoload-dev": {
         "psr-4": {
@@ -47,6 +54,26 @@
         "cs:fix": "php-cs-fixer fix",
         "migrate": "phinx migrate",
         "rollback": "phinx rollback",
+        "rollback:all": "phinx rollback -t 0",
+        "seed": "phinx seed:run",
+        "db:setup": [
+            "@migrate",
+            "@seed"
+        ],
+        "db:reset": [
+            "@rollback:all",
+            "@migrate",
+            "@seed"
+        ],
+        "db:fresh": [
+            "@rollback:all",
+            "@migrate"
+        ],
+        "idempotency:purge": "php bin/PurgeIdempotencyKeys.php",
+        "client:create": "php bin/CreateClient.php",
+        "client:issue-key": "php bin/IssueClientApiKey.php",
+        "client:revoke-key": "php bin/RevokeClientApiKey.php",
+        "client:list": "php bin/ListClients.php",
         "ci": [
             "@cs",
             "@stan",
@@ -67,6 +94,16 @@
         "cs:fix": "Apply code-style fixes",
         "migrate": "Run pending database migrations (Phinx)",
         "rollback": "Roll back the last database migration",
+        "rollback:all": "Roll back every migration (down to an empty schema)",
+        "seed": "Run all database seeders (Phinx)",
+        "db:setup": "Run migrations then seeders (needs MySQL)",
+        "db:reset": "Roll everything back, re-migrate, re-seed (needs MySQL)",
+        "db:fresh": "Roll everything back and re-migrate, no seed (needs MySQL)",
+        "idempotency:purge": "Delete expired idempotency-key rows",
+        "client:create": "Create a client + first API key (--slug --name --currency ...)",
+        "client:issue-key": "Issue another API key for a client (--client=<slug|id>)",
+        "client:revoke-key": "Revoke an API key (--key-id=<key_id>)",
+        "client:list": "List clients with their active key counts",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }

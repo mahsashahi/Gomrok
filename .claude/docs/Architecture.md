@@ -11,7 +11,7 @@ Phase 1 decisions (see `.claude/PhaseResults/Phase01Result.md` for the Q&A):
 | --- | --- |
 | 1 | Module-based hexagonal, **per-module** `Domain / Application / Infrastructure / Http` layers |
 | 2 | Cross-module: **direct calls through published interfaces** + an **in-process synchronous domain-event dispatcher** for reactions |
-| 3 | **BIGINT auto-increment** primary/foreign keys + a **public ULID** column on every externally-visible row |
+| 3 | ~~BIGINT PK + public ULID~~ → **changed 2026-09-08**: plain `INT AUTO_INCREMENT` PKs (from 1), plain `INT` FKs, no ULID/UUID, no typed-ID classes — `int` in DB and PHP (§6) |
 | 4 | Money via **`brick/money`**, wrapped in our own `Money` value object; stored as integer **minor units + `CHAR(3)`** currency |
 | 5 | Provider adapters: a **required core `PaymentProviderPort`** + **optional capability interfaces** (`SupportsSubscriptions`, `SupportsRefunds`, …) + a runtime `ProviderCapabilities` descriptor |
 
@@ -118,17 +118,17 @@ src/
     Webhooks/       { Domain, Application, Infrastructure, Http, Tests }
     Notifications/  { Domain, Application, Infrastructure, Http, Tests }
     Admin/          { Domain, Application, Infrastructure, Http, Views, Tests }
-  Shared/
-    Domain/         Money, Currency, CountryCode, Ulid, typed ids, Result, DomainError, Clock
-    Application/    Command/Query bus contracts, DomainEvent + Dispatcher contracts, Pagination
-    Infrastructure/ PDO helpers, transaction runner, ULID generator, JSON logger, event dispatcher impl
-    Http/           Base action, JSON responder, error handler (DomainError → HTTP), middleware base
+  Shared/          (Phase 3 — no ID types; IDs are plain int)
+    Domain/         Money, Currency, CountryCode, Result, DomainError, ErrorType
+    Infrastructure/ SystemClock (PSR-20), CorrelationId, Logging/{LoggerFactory,CorrelationIdProcessor}, Persistence/TransactionRunner
+    Http/           Action (base), JsonResponder (json + RFC-7807 problem), JsonErrorHandler, CorrelationIdMiddleware
+    Application/    Command/Query + DomainEvent + Dispatcher contracts, Pagination  (added when first needed)
   Bootstrap/        AppFactory — the composition root (builds the DI container + Slim app)
   Http/             app-level HTTP endpoints owned by no module (e.g. HealthAction)
   Config/           container.php (PHP-DI), routes.php, Settings/DatabaseSettings, env loading
   Database/
-    Migrations/     Phinx migration classes (first ones in Phase 4)
-    Seeds/          Phinx seeders (reference data, Phase 4/5)
+    Migrations/     Phinx migrations — namespaced `Gomrok\Database\Migrations\`, `YYYYMMDDHHMMSS_*.php`
+    Seeds/          Phinx seeders (`CurrenciesSeeder`, `CountriesSeeder`, `ProviderTypesSeeder`) + data/countries.json
   Jobs/             queue worker entrypoint, job handlers registry
   Public/           index.php (Slim front controller)
 ```
@@ -153,6 +153,11 @@ A module that needs another module's behaviour depends on an interface in that m
 **Reactions — an in-process synchronous domain-event dispatcher.**
 `Shared\Application\DomainEventDispatcher` (implemented in `Shared\Infrastructure`). Handlers are
 registered per module via DI. Events are dispatched **after** the triggering transaction commits.
+*Status:* `Shared\Domain\DomainEvent` (marker) and the per-module `Domain/Events/*` classes
+exist from Phase 6; the **dispatcher itself is not built yet** — it lands with the first
+subscriber (a later module). Until then, use cases return their event(s) in the result and write
+audit rows directly.
+
 Initial event catalogue (each module owns the events it raises):
 
 | Event | Raised by | Typical subscribers |
@@ -163,6 +168,8 @@ Initial event catalogue (each module owns the events it raises):
 | `SubscriptionStatusChanged` | Subscriptions | Notifications |
 | `WebhookReceived` / `WebhookProcessed` | Webhooks | (audit, metrics) |
 | `ClientNotificationFailed` | Notifications | (alerting, admin dead-letter) |
+| `ClientCreated` / `ClientUpdated` / `ClientDisabled` / `ClientEnabled` | Clients | (audit) |
+| `ApiKeyIssued` / `ApiKeyRevoked` | Clients | (audit) |
 
 Async only where it must be (webhook processing, callback delivery): the entry point stores the
 work and enqueues a job; the job handler does the real processing and dispatches the resulting
@@ -170,28 +177,40 @@ domain events. No event is used to cross a process boundary — the queue is.
 
 ## 6. Identifiers
 
-- **Primary/foreign keys:** `BIGINT UNSIGNED AUTO_INCREMENT`. Tight InnoDB clustered index, cheap
-  joins.
-- **Public reference:** a `ulid CHAR(26)` column (Crockford base32, time-sortable), `UNIQUE`, on
-  every row a client, provider, or admin URL can reference — clients, payments, subscriptions,
-  packages, provider accounts, vouchers, refunds, webhook events, etc.
-- **APIs, client callbacks, admin routes use the ULID, never the numeric `id`.** The numeric id
-  never leaves the database boundary.
-- Optional short type prefix for readability in logs/UX (e.g. `pay_…`, `sub_…`) — decided per
-  entity in its module's phase; the stored value is the bare ULID.
-- ULID generation lives in `Shared\Infrastructure\UlidGenerator` behind a `Shared\Domain\Ulid`
-  value object; time source is the injected `Clock`.
+**Decision changed 2026-09-08** (was: BIGINT PK + public ULID — see `PhaseDecisions.md` Phase 1
+Q3). Plain numeric IDs, no abstraction:
+
+- **Primary key:** every table has `id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY`, values
+  from 1. **Not `BIGINT`.**
+- **Foreign keys:** plain `INT UNSIGNED`.
+- **No `ulid` / public-reference column.** No UUID, no typed-ID value objects, no per-entity ID
+  classes (`PaymentId`, `ClientId`, …). Domain entities and repositories use `int` for identity,
+  in PHP and in the DB alike.
+- **The `id` is used directly everywhere** — DB, PHP, and API paths / callback URLs / admin
+  routes (`/api/v1/payments/42`).
+- **Enumeration is not prevented by the ID.** Sequential ints are guessable, so cross-tenant
+  isolation is enforced by **authorization** — every query is scoped to the authenticated client
+  (§11, `Rule.md` §8, `knowledge/TenantIsolation.md`). A client requesting another client's
+  `id` gets 404/403, not the row.
+- `INT UNSIGNED` holds ~4.29 billion rows/table — revisit only if a table realistically nears
+  that.
+- See `.claude/agents/DatabaseAgent.md` for the migration rules.
 
 ## 7. Money
 
 - Library: **`brick/money`** for all arithmetic — rounding modes, per-currency scale (JPY 0dp,
   USD/EUR 2dp, BHD/KWD 3dp — relevant to Turkey/Gulf/EU pricing), `allocate()` for splits,
   overflow-safe.
-- Wrapped: `Shared\Domain\Money` is our value object; it holds a `Brick\Money\Money` internally
-  and exposes only domain-meaningful operations (`fromMinor`, `plus`, `minus`, `multipliedBy`,
-  `allocate`, `toMinor`, `currency`). The domain depends on our `Money`, never on `brick`.
-- Storage: `amount_minor BIGINT` + `currency CHAR(3)` (ISO 4217). Never `FLOAT`/`DOUBLE`; a
-  `DECIMAL` column only where a third party demands one.
+- Wrapped: `Shared\Domain\Money` is our value object; it holds a `Brick\Money\Money` internally.
+  API (Phase 3 Q1 — richer): `fromMinor`, `zero`, `toMinor`, `plus`, `minus`, `multipliedBy`,
+  `allocate`, `percentage`, `ratioOf`, `equals`, `isZero/isPositive/isNegative`, `currency`,
+  `format(locale)` (via `ext-intl`), `convertTo(Currency, rate)` (caller supplies the rate —
+  `Money` never fetches rates). Rounding fixed to `HALF_EVEN`. The domain depends on our `Money`,
+  never on `brick`.
+- Storage: `amount_minor BIGINT` + `currency CHAR(3)` (ISO 4217). **`BIGINT` here is deliberate**
+  — currency minor-unit amounts can exceed `INT` (e.g. large JPY sums); the "no BIGINT" rule
+  (§6) is about primary/foreign keys only. Never `FLOAT`/`DOUBLE`; a `DECIMAL` column only where
+  a third party demands one.
 - Every payment/subscription creation persists a **price snapshot** (base, overrides applied,
   currency, discount, tax, fee, final) so later pricing changes never alter history.
 
@@ -281,18 +300,21 @@ and flagged, never dropped.
 
 | Concern | Approach |
 | --- | --- |
-| **DI** | PHP-DI; definitions in `src/Config/container.php`. Nothing is `new`-ed in a controller/handler. |
+| **DI** | PHP-DI; shared definitions in `src/Config/container.php`, per-module in `src/Modules/<Name>/Infrastructure/definitions.php` (merged by `ContainerFactory`). Nothing is `new`-ed in a controller/handler. Use cases depend on the `Transactions` port, not `TransactionRunner` directly. |
 | **Config** | `.env` → typed settings object; secrets from env or a secret store, never committed, never logged. |
 | **Logging** | Structured JSON via `Shared` logger; every payment/subscription flow carries `correlation_id`, `client_id`, `client_user_id?`, `package_id?`, `payment_id?`, `subscription_id?`, `voucher_id?`, `country`, `currency`, `purchase_type`, `payment_method?`, `provider`, provider txn/sub ids. Never log secrets. |
-| **Idempotency** | `Idempotency-Key` on client writes → `idempotency_keys` table stores the response; provider webhook event ids deduped. Duplicate webhooks/retries never double-apply. |
-| **Errors** | Domain returns `Result`/`DomainError`; a single HTTP error handler maps to status + problem body. Provider/network failures use retry-with-backoff; unrecoverable work → dead-letter / failed-jobs table, retryable from the admin panel. |
-| **Background jobs** | A queue + worker (`src/Jobs/`). Webhook processing, callback delivery + retries, reconciliation, expired-payment cleanup, refund/subscription reconciliation, voucher reservation expiry. Webhook responses never block on processing. |
+| **Idempotency** | `Idempotency-Key` on client writes → `IdempotencyMiddleware` + `idempotency_keys` (Phase 5, decision Q1: **lock + entity mapping**, no stored response bodies). Claim `processing` → run handler → `done` (records `target_type`/`target_id`) or `failed`. Replay of `done` re-serialises the entity's *current* state via an `IdempotentReplayResolver`; `processing` → 409; same key, different request fingerprint → 422. 24h TTL, purge job. Middleware wired to routes in Phase 7. Provider webhook event ids deduped separately. |
+| **Audit log** | `AuditLogWriter` port + `audit_logs` (Phase 5, decision Q2: **event + full before/after row snapshots**, secret keys redacted). Called by sensitive admin write paths from Phase 6 on. Append-only. |
+| **Error log** | `ErrorLogWriter` port + `error_logs` (Phase 5, decision Q3: **explicit writer only**, never a log handler). Backs the admin Error Logs screen (Phase 27). `JsonErrorHandler` logs unhandled non-HTTP exceptions here; provider/webhook/notification/job call sites added per phase. Writer failures are swallowed. |
+| **Errors** | **Hybrid** (Phase 3 Q3): use cases **return `Result<T>`** (`ok` / `err(DomainError)`) for anything the caller must branch on — validation, business-rule / eligibility / capability rejections, "not found", invalid voucher, unsupported provider·country·method combo, idempotency conflicts. They **throw** for programmer errors, config errors, and infra/transport faults (DB down, provider timeout/5xx). The `Shared\Http` handler maps `DomainError` → 4xx problem body, uncaught `Throwable` → 500/502 (logged with stack trace + correlation id). Provider/network faults use retry-with-backoff first; unrecoverable work → dead-letter / failed-jobs table, retryable from the admin panel. |
+| **Background jobs** | A queue + worker (`src/Jobs/`). Webhook processing, callback delivery + retries, reconciliation, expired-payment cleanup, refund/subscription reconciliation, voucher reservation expiry, expired-idempotency-key purge (`PurgeExpiredIdempotencyKeys` — Phase 5, a plain invokable + `bin/PurgeIdempotencyKeys.php` until the runner exists). Webhook responses never block on processing. |
 | **Security** | API-key auth + per-client scoping on every request; webhook signature verification; replay protection; admin RBAC enforced at UI **and** backend; provider secrets masked in the UI (reveal-on-demand). A client can never see another client's data. |
+| **API auth (Phase 7)** | `/api/v1` group behind `AuthenticationMiddleware` — `Authorization: Bearer gk_<mode>_<key_id>.<secret>`; `ApiKeyAuthenticator` (Clients) implements the `Shared\Http\ClientAuthenticator` port. Success → `ClientContext` (per-request holder) + `authClient*` attributes; failure → `401 unauthorized` (opaque) / `403 client_disabled`. `last_used_at` stamped throttled; every attempt logged to `client_auth_attempts`. `/health` is the only public route. Writes require `Idempotency-Key`. Rate limiting: deferred (own concern), `client_auth_attempts` is its groundwork. |
 
 ## 12. Testing approach
 
 - **Unit** (`tests/Unit/`): domain + application. No DB, no network. Covers value objects
-  (`Money`, `Ulid`), resolution engines (pricing, routing, voucher), status mapping, state
+  (`Money`, `Currency`), resolution engines (pricing, routing, voucher), status mapping, state
   machines, capability gating.
 - **Integration** (`tests/Integration/`): infrastructure adapters against a real MySQL (migrations
   applied) and provider **sandboxes** (Stripe/Mollie/PayPal test mode; a Ziraat stub until real

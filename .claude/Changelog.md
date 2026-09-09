@@ -7,6 +7,326 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-08 — Phase 7: Client API authentication & scoping
+
+**Summary.** Gomrok's first real API surface: `/api/v1` group behind Bearer API-key auth, plus
+`GET /api/v1/me`; `/health` stays public. Decisions (`PhaseDecisions.md` Phase 7 Q1–Q5):
+`Authorization: Bearer` only · a per-request `ClientContext` holder + request attributes ·
+`last_used_at` written throttled (≤ 1/key/5 min) · `401 unauthorized` for any credential fault,
+`403 client_disabled` for a valid key on a disabled client, generic bodies · `Idempotency-Key`
+required on `/api/v1` writes + failed-attempt logging to a new table, **no rate limiting yet**.
+**Schema confirmed by the user** before the migration.
+
+**Files created**
+- Migration `20260908170001_create_client_auth_attempts_table.php` → `CreateClientAuthAttemptsTable`.
+- Shared\Http: `ClientAuthenticator` (port), `AuthResult`, `AuthenticatedClient`,
+  `AuthRequestMeta`, `ClientContext`, `AuthenticationMiddleware`.
+- Clients: `Domain/AuthFailureReason`; `Application/Authenticate/{ApiKeyAuthenticator,AuthAttempt,AuthAttemptLog}`;
+  `Infrastructure/PdoAuthAttemptLog`.
+- `src/Http/Api/MeAction.php` — `GET /api/v1/me`.
+- Tests: `tests/Unit/Shared/Http/{ClientContextTest,AuthenticationMiddlewareTest}.php`,
+  `tests/Unit/Modules/Clients/Application/ApiKeyAuthenticatorTest.php`,
+  `tests/Unit/Http/{MeActionTest,ApiRoutingTest}.php`,
+  `tests/Integration/AuthAttemptsPersistenceTest.php`,
+  `tests/Support/{StubClientAuthenticator,RecordingAuthAttemptLog,InMemoryClientDirectory}.php`.
+- `.claude/PhaseResults/Phase07Result.md`.
+
+**Files modified**
+- `src/Config/routes.php` — `/api/v1` group with `AuthenticationMiddleware` + `IdempotencyMiddleware`;
+  `/health` stays outside it.
+- `src/Shared/Http/IdempotencyMiddleware.php` — `requireKeyOnWrites` flag (keyless write → 400).
+- `src/Config/container.php` — `IdempotencyMiddleware` autowired with `requireKeyOnWrites: true`,
+  `replayResolver: null`.
+- `src/Bootstrap/AppFactory.php` — `create(?ContainerInterface $container = null)`.
+- `src/Modules/Clients/Domain/ClientApiKeyRepository.php` (+ Pdo impl, + in-memory double) —
+  `touchLastUsed()`.
+- `src/Modules/Clients/Infrastructure/definitions.php` — binds `ClientAuthenticator`,
+  `AuthAttemptLog`.
+- `tests/Unit/Shared/Http/IdempotencyMiddlewareTest.php` — keyless-write 400 case.
+  `tests/Integration/MigrationRoundTripTest.php` — `client_auth_attempts` in the table list.
+- DB docs (`database-design.md`, `database-diagram.md` + `.html`, `db_explain.md` — 10 tables),
+  `.claude/docs/Phases.md` (row 7 → ☑), `Architecture.md`, `FileIndex.md`, `knowledge/Knowledge.md`,
+  `Commands.md`, `Orders.md` (D10), `PhaseDecisions.md` (Phase 7 Q1–Q5).
+
+**DB changes.** New table `client_auth_attempts` (FK to `clients(id)` SET NULL, three
+`(*, created_at)` indexes). No changes to existing tables.
+
+**Verification.** `composer ci` green — 124 unit tests, 383 assertions. PHPStan `max` +
+strict-rules clean (175 files). php-cs-fixer clean. `composer test:integration` → 21 tests, all
+self-skip (no Docker). Real HTTP responses captured: `GET /health` → 200
+`{"status":"ok","service":"gomrok"}`; `GET /api/v1/me` no key → 401 +
+`WWW-Authenticate: Bearer realm="gomrok"`; with a (stubbed) valid key → 200 client JSON.
+
+**NOT verified here.** Migration + `AuthAttemptsPersistenceTest` against real MySQL — runs in
+GitHub Actions, or `docker compose up -d mysql && composer db:reset && composer test:integration`.
+
+**Breaking changes.** None (all additive; `AppFactory::create()` gained an optional parameter).
+
+## 2026-09-08 — Phase 6: Clients module (domain & persistence)
+
+**Summary.** The tenant model — the first `src/Modules/` module. Decisions (`PhaseDecisions.md`
+Phase 6 Q1–Q5): API key = prefixed token + `sha256(secret)` looked up by a public `key_id` ·
+client settings = typed columns on `clients` + a `client_endpoints` table · required immutable
+`slug` · soft reversible `active`/`disabled` (keys untouched) · CLI commands + an
+`APP_ENV`-gated dev seeder. **Schema confirmed by the user** before any migration.
+
+**Files created**
+- Migrations: `20260908150001..04_*` → `Create{Clients,ClientApiKeys,ClientEndpoints}Table`,
+  `AddClientFksToCrossCuttingTables` (the Phase 5 `client_id` FKs). Seeder: `ClientsSeeder`.
+- `src/Modules/Clients/Domain/*` — `Client`, `ClientEndpoint`, `ClientApiKey`, `ClientSlug`,
+  `InvalidClientSlug`, `ClientStatus`, `ApiKeyStatus`, `ApiKeyPrefix`, `EndpointPurpose`,
+  `ClientRepository`, `ClientApiKeyRepository`, `ApiKeyGenerator`, `ApiKeyToken`,
+  `GeneratedApiKey`, `Events/{ClientCreated,ClientUpdated,ClientDisabled,ClientEnabled,ApiKeyIssued,ApiKeyRevoked}`.
+- `src/Modules/Clients/Application/*` — `ClientDirectory`, `ClientSnapshot`, `ClientAuditSnapshot`,
+  and `{CreateClient,UpdateClient,DisableClient,EnableClient,SetClientEndpoint,RemoveClientEndpoint,IssueApiKey,RevokeApiKey}/`
+  (handler + command [+ result]).
+- `src/Modules/Clients/Infrastructure/*` — `PdoClientRepository`, `PdoClientApiKeyRepository`,
+  `PdoClientDirectory`, `RandomApiKeyGenerator`, `definitions.php`.
+- Shared: `src/Shared/Application/{TokenGenerator,ReferenceCatalog,Transactions}.php`,
+  `src/Shared/Infrastructure/RandomTokenGenerator.php`,
+  `src/Shared/Infrastructure/Persistence/{PdoReferenceCatalog,Row}.php`,
+  `src/Shared/Domain/DomainEvent.php`.
+- CLI: `bin/{CreateClient,IssueClientApiKey,RevokeClientApiKey,ListClients}.php`.
+- Tests: `tests/Unit/Modules/Clients/**` (Domain: ClientSlug, Client, ApiKeyToken, ClientApiKey;
+  Infrastructure: RandomApiKeyGenerator; Application: CreateClientHandler, ClientHandlers),
+  `tests/Integration/ClientsPersistenceTest.php`, `tests/Support/{SynchronousTransactions,
+  InMemoryClientRepository,InMemoryClientApiKeyRepository,FixedTokenGenerator,
+  InMemoryReferenceCatalog,RecordingAuditLogWriter}.php`.
+- `.claude/PhaseResults/Phase06Result.md`.
+
+**Files modified**
+- `src/Shared/Infrastructure/Persistence/TransactionRunner.php` — implements the new
+  `Transactions` port. `src/Bootstrap/ContainerFactory.php` — merges module `definitions.php`.
+- `src/Config/container.php` — binds `TokenGenerator`, `ReferenceCatalog`, `Transactions`.
+- `composer.json` — `client:create` / `client:issue-key` / `client:revoke-key` / `client:list`.
+- DB docs (`database-design.md`, `database-diagram.md` + `.html`, `db_explain.md` — 9 tables),
+  `.claude/docs/Phases.md` (row 6 → ☑), `Architecture.md`, `FileIndex.md`, `knowledge/Knowledge.md`,
+  `Commands.md`, `Orders.md` (D9), `.env.example`, `PhaseDecisions.md` (Phase 6 Q1–Q5).
+
+**DB changes.** New tables `clients`, `client_api_keys`, `client_endpoints` (all FK to
+`clients(id)` CASCADE). Added `fk_idempotency_keys_client_id` (CASCADE),
+`fk_audit_logs_client_id` / `fk_error_logs_client_id` (SET NULL). Seeder `ClientsSeeder` is a
+no-op outside `local` / `testing`.
+
+**Verification.** `composer ci` green — 104 unit tests, 306 assertions. PHPStan `max` +
+strict-rules clean (153 files). php-cs-fixer clean. `composer test:integration` → 19 tests, all
+self-skip (no Docker). Migration classes load and extend the right Phinx bases; the DI container
+builds and resolves the module ports (only the live DB connection fails here).
+
+**NOT verified here.** Migrations + `ClientsPersistenceTest` + `ClientsSeeder` against real
+MySQL — runs in GitHub Actions, or `docker compose up -d mysql && composer db:reset && composer test:integration`.
+
+**Breaking changes.** None (all additive; `TransactionRunner` gained an interface it already
+satisfied).
+
+## 2026-09-08 — Phase 5: Migration workflow & cross-cutting tables
+
+**Summary.** The tables nearly every later module writes to, plus their ports/adapters, plus CI
+that finally executes migrations against real MySQL. Decisions (`PhaseDecisions.md` Phase 5
+Q1–Q5): idempotency = lock + entity mapping (no stored response bodies) · audit = event + full
+before/after row snapshots · error log = explicit writer only (no Monolog DB handler) ·
+idempotency retention = `expires_at` + purge job · hardening = round-trip test + `db:reset` +
+GitHub Actions CI. **Schema confirmed by the user** before any migration.
+
+**Files created**
+- Migrations: `src/Database/Migrations/2026090814000{1,2,3}_create_{idempotency_keys,audit_logs,error_logs}_table.php`
+  → `Gomrok\Database\Migrations\Create{IdempotencyKeys,AuditLogs,ErrorLogs}Table`.
+- Idempotency: `src/Shared/Application/Idempotency/{IdempotencyStore,IdempotencyRecord,IdempotencyStatus}.php`,
+  `src/Shared/Infrastructure/Persistence/PdoIdempotencyStore.php`,
+  `src/Shared/Http/{IdempotencyMiddleware,IdempotencyContext,IdempotentReplayResolver}.php`.
+- Audit: `src/Shared/Application/Audit/{AuditLogWriter,AuditEntry,AuditActor}.php`,
+  `src/Shared/Infrastructure/Persistence/PdoAuditLogWriter.php`.
+- Error log: `src/Shared/Application/ErrorLog/{ErrorLogWriter,ErrorLogEntry,ErrorLogLevel}.php`,
+  `src/Shared/Infrastructure/Persistence/{PdoErrorLogWriter,NullErrorLogWriter}.php`.
+- `src/Shared/Infrastructure/SecretRedactor.php` (shared redaction helper).
+- `src/Jobs/PurgeExpiredIdempotencyKeys.php`, `bin/PurgeIdempotencyKeys.php`.
+- `src/Bootstrap/ContainerFactory.php` (extracted from `AppFactory`; shared by HTTP + CLI).
+- `.github/workflows/Ci.yml`.
+- Tests: `tests/Unit/Shared/Http/IdempotencyMiddlewareTest.php`,
+  `tests/Unit/Shared/Infrastructure/SecretRedactorTest.php`,
+  `tests/Unit/Shared/Application/Audit/AuditEntryTest.php`,
+  `tests/Unit/Shared/Application/ErrorLog/ErrorLogEntryTest.php`,
+  `tests/Unit/Jobs/PurgeExpiredIdempotencyKeysTest.php`,
+  `tests/Support/InMemoryIdempotencyStore.php`,
+  `tests/Integration/{MigrationRoundTripTest,CrossCuttingWritersTest}.php`.
+- `.claude/PhaseResults/Phase05Result.md`.
+
+**Files modified**
+- `src/Shared/Http/JsonErrorHandler.php` — now takes `ErrorLogWriter` + `CorrelationId`; logs
+  unhandled (non-HTTP) exceptions to `error_logs`.
+- `src/Bootstrap/AppFactory.php` — uses `ContainerFactory`.
+- `src/Config/container.php` — binds `IdempotencyStore`, `AuditLogWriter`, `ErrorLogWriter` to
+  their PDO adapters.
+- `composer.json` — `+ rollback:all`, `db:reset`, `db:fresh`, `idempotency:purge` scripts.
+- `phpstan.neon`, `.php-cs-fixer.dist.php` — analyse/lint `bin/`.
+- `tests/Unit/Shared/Http/JsonErrorHandlerTest.php` — new constructor args + error-log assertion.
+- DB docs: `.claude/docs/database-design.md`, `database-diagram.md`, `database-diagram.html`,
+  `db_explain.md` (3 new tables, total 6). `.claude/docs/Phases.md` (row 5 → ☑),
+  `.claude/FileIndex.md`, `.claude/knowledge/Knowledge.md`, `.claude/docs/Commands.md`,
+  `.claude/Rule.md` (## Project Documents / §7), `.claude/docs/Architecture.md`.
+
+**DB changes.** New tables `idempotency_keys`, `audit_logs`, `error_logs`. Business tables
+(timestamps). `client_id` columns are unconstrained until Phase 6 adds the `clients` FKs. No
+seeders. Migrations: `up()` creates, `down()` drops.
+
+**Verification.** `composer ci` green — 63 unit tests, 190 assertions. PHPStan `max` +
+strict-rules clean (76 files). php-cs-fixer clean. `composer test:integration` → 13 tests, all
+self-skip (no Docker / local MariaDB rejects `gomrok`). Migration classes load and extend
+`Phinx\Migration\AbstractMigration`. Container builds and resolves the non-DB services.
+
+**NOT verified here.** `composer db:setup` / `db:reset` / `test:integration` against real MySQL
+and the `Ci.yml` run — needs Docker or GitHub Actions. Run
+`docker compose up -d mysql && composer db:reset && composer test:integration`, or let CI do it
+on push.
+
+**Breaking changes.** `JsonErrorHandler::__construct` gained two required parameters (internal;
+autowired via the container).
+
+## 2026-09-08 — Phase 4: Database foundations (reference tables)
+
+**Summary.** Migration workflow + the three reference tables. Decisions (`PhaseDecisions.md`
+Phase 4 Q1–Q5): DB docs = the spec's kebab-case files + `mkdocs.yml` · namespaced Phinx
+migrations, no base class · currencies from `brick/money`, countries from a bundled JSON ·
+capability catalogue **deferred to Phase 8** · full ISO currencies + 18 curated countries.
+**Schema confirmed by the user** before any migration.
+
+**Files created**
+- `src/Database/Migrations/20260908130001_create_currencies_table.php` (+ `..._countries_`,
+  `..._provider_types_`) — `Gomrok\Database\Migrations\Create{Currencies,Countries,ProviderTypes}Table`.
+- `src/Database/Seeds/{CurrenciesSeeder,CountriesSeeder,ProviderTypesSeeder}.php` +
+  `src/Database/Seeds/data/countries.json` (18 rows).
+- `.claude/docs/database-design.md`, `database-diagram.md`, `database-diagram.html`,
+  `db_explain.md`; root `mkdocs.yml`.
+- `tests/Integration/ReferenceTablesTest.php`.
+- `.claude/PhaseResults/Phase04Result.md`.
+
+**Files modified**
+- `phinx.php` — namespaced `paths` + collation. `composer.json` — `+ seed`, `db:setup` scripts;
+  `exclude-from-classmap` for the migrations dir. Removed `src/Database/{Migrations,Seeds}/.gitkeep`.
+- `.claude/Rule.md` §3.1 (exceptions: DB docs kebab-case, Phinx migration filenames), §3.3 note
+  resolved, ## Project Documents row. `.claude/docs/Architecture.md` §4, `.claude/docs/Commands.md`,
+  `.claude/docs/Phases.md` (Phase 4 scope trimmed + row → ☑; Phase 8 scope gains the capability
+  catalogue), `.claude/FileIndex.md`, `.claude/knowledge/Knowledge.md`.
+
+**DB changes.** New tables `currencies`, `countries` (FK → `currencies.code`), `provider_types`.
+Reference data only — no timestamps.
+
+**Verification.** PHPStan `max` clean (incl. migrations/seeders), cs clean, `composer ci` green
+(42 tests). Migration + seeder classes load and extend the correct Phinx bases; `countries.json`
+validated (18 rows, every `default_currency` in `brick`'s list; brick has 166 currencies).
+**Not verified:** `composer db:setup` / `migrate` / `rollback` and `ReferenceTablesTest` against
+a real MySQL — no Docker daemon and the local MariaDB rejects the `gomrok` user. Run
+`docker compose up -d mysql && composer db:setup && composer test:integration`.
+
+**Migration notes.** `composer install` (autoload change), then `composer db:setup`.
+**Breaking changes.** None.
+
+## 2026-09-08 — Phase 3: Shared kernel
+
+**Summary.** Built `src/Shared/**` — 15 classes every module will use. No business logic, no
+schema. Decisions (`PhaseDecisions.md` Phase 3 Q1–Q5): richer `Money` API · plain-int IDs (Q2,
+tied to the Q3-of-Phase-1 change) · **hybrid** error model (`Result`/`DomainError` returned;
+exceptions for bugs/infra) · **Monolog** logger · **PSR-20** clock.
+
+**Files created**
+- `src/Shared/Domain/` — `Money.php`, `Currency.php`, `CountryCode.php`, `Result.php`,
+  `DomainError.php`, `ErrorType.php`.
+- `src/Shared/Infrastructure/` — `SystemClock.php`, `CorrelationId.php`,
+  `Logging/{LoggerFactory,CorrelationIdProcessor}.php`, `Persistence/TransactionRunner.php`.
+- `src/Shared/Http/` — `Action.php`, `JsonResponder.php`, `JsonErrorHandler.php`,
+  `CorrelationIdMiddleware.php`.
+- `tests/Support/FrozenClock.php` + 11 unit test files + `tests/Integration/TransactionRunnerTest.php`.
+- `.claude/PhaseResults/Phase03Result.md`.
+
+**Files modified**
+- `composer.json` / `composer.lock` — `+ monolog/monolog:^3`, `psr/clock:^1`, `brick/money:^0.10`;
+  pinned `brick/math:~0.12.0` (avoids a `brick/money` internal deprecation).
+- `src/Config/container.php` — bind `ClockInterface`, `LoggerInterface`, `ResponseFactoryInterface`.
+- `src/Bootstrap/AppFactory.php` — add `CorrelationIdMiddleware` + `JsonErrorHandler`.
+- `.claude/docs/Architecture.md` §4, `.claude/docs/Phases.md` (row → ☑), `.claude/FileIndex.md`,
+  `.claude/knowledge/Knowledge.md`.
+
+**API changes.** All error responses are now JSON (was: possibly HTML). `GET /health` gains an
+`X-Correlation-Id` response header.
+
+**Verification.** `composer ci` green (42 tests, 113 assertions); PHPStan `max` clean; cs clean;
+live `/health` returns JSON + `X-Correlation-Id` (inbound header reused); `/nope` → JSON 404.
+Integration test (`TransactionRunnerTest`) written, **skipped** — no Docker daemon.
+
+**Migration notes.** `composer install` after pulling. **Breaking changes.** None.
+
+## 2026-09-08 — Decision change: simple integer IDs (no ULID / typed IDs)
+
+**Summary.** User reversed the Phase 1 Q3 identifier decision. Now: every table PK is
+`id INT UNSIGNED AUTO_INCREMENT` (from 1, **not `BIGINT`**); FKs plain `INT UNSIGNED`; **no**
+ULID / UUID / typed-ID value objects / entity-specific ID classes; the same `int` in DB, PHP,
+and API/callback/admin URLs. Isolation is enforced by authorization, not by unguessable IDs.
+`BIGINT` still allowed for non-key columns (money `amount_minor`).
+
+**Files modified**
+- `.claude/PhaseDecisions.md` — Phase 1 Q3 marked *changed* (Previously/Current/Changed/Reason);
+  Phase 3 Q2 resolved as "no ID abstraction".
+- `.claude/docs/Architecture.md` — §6 rewritten; §3 decision table; §4 folder layout; §7 Money
+  note; §12 testing mention.
+- `.claude/docs/Phases.md` — Phase 3 scope (drop `Ulid` / `UlidGenerator` / typed IDs).
+- `.claude/Rule.md` §5 — new "Simple integer IDs" rule + client-scoped note.
+- `.claude/knowledge/Knowledge.md`, `.claude/knowledge/TenantIsolation.md` — identifier sections.
+- `.claude/Orders.md` — D3 superseded.
+- `.claude/agents/DatabaseAgent.md` — **filled in** with the identifier rules + schema conventions
+  + workflow (per the user's "add it to databaseagent.md").
+- `.claude/FileIndex.md`; `.claude/PhaseResults/Phase01Result.md` + `Phase02Result.md` —
+  forward-pointer / superseded markers (result files not rewritten).
+
+**Reason.** User: "I do not want unnecessarily complex ID abstractions."
+**Migration notes.** No code/schema exists yet — nothing to migrate.
+**Breaking changes.** None (supersedes an unbuilt decision).
+
+## 2026-09-08 — Removed `.claude/CLAUDE.md` pointer stub
+
+**Summary.** Deleted the `.claude/CLAUDE.md` pointer stub (created from `struct.md`). The
+project-root `CLAUDE.md` is the single entry point; a second file added only confusion.
+
+**Files removed:** `.claude/CLAUDE.md`.
+**Files modified:** `.claude/Rule.md` (§3.3 tree, "outside" note, ## Project Documents row),
+`.claude/FileIndex.md` — references removed. `struct.md`'s `CLAUDE.md` entry is now noted as
+covered by the root file.
+
+**Migration notes.** None. **Breaking changes.** None.
+
+## 2026-09-08 — Design folder moved into `.claude/docs/`
+
+**Summary.** `Design/` (project root) → `.claude/docs/Design/`. PascalCase kept (our own sub-dir).
+Contents (`GomrokAdminPanelV4.dc.html`, `GomrokAdminPanelV4Export.dc.html`, `Support.js`,
+`Readme.md`) unchanged; the `.dc.html` `<script src="./Support.js">` stays correct (moved
+together).
+
+**Files modified** (references `Design/` → `.claude/docs/Design/`)
+- `CLAUDE.md` (Documentation-directory note), `.claude/Rule.md` (§3.1, §3.3 tree + "outside"
+  list, §3.4, ## Project Documents, §7), `.claude/FileIndex.md`, `.claude/docs/Ui.md`,
+  `.claude/docs/LastAiAnswer.md`, `.claude/skills/FrontendSkill.md`,
+  `.claude/docs/Design/Readme.md`.
+
+**Migration notes.** Design bookmarks: `Design/…` → `.claude/docs/Design/…`.
+**Breaking changes.** None.
+
+## 2026-09-08 — Design: keep only v4
+
+**Summary.** Deleted the superseded admin-panel design iterations; only v4 is kept.
+
+**Files removed**
+- `Design/GomrokAdminPanel.dc.html` (v1)
+- `Design/GomrokAdminPanelV2.dc.html`
+- `Design/GomrokAdminPanelV3.dc.html`
+
+**Kept:** `Design/GomrokAdminPanelV4.dc.html` (the design), `Design/GomrokAdminPanelV4Export.dc.html`
+(redundant export — same UI as v4), `Design/Support.js`, `Design/Readme.md`.
+
+**Files modified**
+- `Design/Readme.md` — file table trimmed to the kept files.
+
+**Reason.** v1–v3 are no longer relevant; recoverable from git history if needed.
+**Migration notes.** None. **Breaking changes.** None.
+
 ## 2026-09-07 — `.claude/` structure completed from `struct.md`
 
 **Summary.** Built out the full `.claude/` tree described in `.claude/struct.md`, keeping every

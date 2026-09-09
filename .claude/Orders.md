@@ -27,11 +27,14 @@ full text — link to `CLAUDE.md`, `.claude/Rule.md`, `.claude/docs/Architecture
 |---|---|---|---|---|---|---|
 | D1 | Module-based hexagonal, per-module layers | 2026-09-06 | Phase 1 Q1 | accepted | 1 | `.claude/PhaseDecisions.md` |
 | D2 | Direct interface calls + in-process domain events | 2026-09-06 | Phase 1 Q2 | accepted | 1 | `.claude/PhaseDecisions.md` |
-| D3 | BIGINT PK + public ULID | 2026-09-06 | Phase 1 Q3 | accepted | 1 | `.claude/PhaseDecisions.md` |
+| D3 | ~~BIGINT PK + public ULID~~ → **plain `INT AUTO_INCREMENT` IDs, no ULID/UUID/typed-ID classes** | 2026-09-06 → **changed 2026-09-08** | Phase 1 Q3 (user) | superseded → accepted | 1 / 3 | `.claude/PhaseDecisions.md`, `Architecture.md` §6 |
 | D4 | Money via brick/money wrapped in a `Money` VO | 2026-09-06 | Phase 1 Q4 | accepted | 1 | `.claude/PhaseDecisions.md` |
 | D5 | Provider adapters: core port + optional capability interfaces | 2026-09-06 | Phase 1 Q5 | accepted | 1 | `.claude/PhaseDecisions.md` |
 | D6 | Docker Compose · PHP 8.4 · Phinx · PHPUnit 11 · PHPStan max | 2026-09-06 | Phase 2 Q1–Q5 | implemented | 2 | `.claude/PhaseDecisions.md` |
 | D7 | `src/Bootstrap/` + `src/Http/` kept as app-level dirs | 2026-09-06 | Phase 2 Q6 | implemented | 2 | `.claude/PhaseDecisions.md` |
+| D8 | Idempotency = lock + entity mapping (no stored response bodies); audit = full before/after row snapshots; error log = explicit writer only; idempotency TTL 24h + purge job; migration CI via GitHub Actions | 2026-09-08 | Phase 5 Q1–Q5 | implemented | 5 | `.claude/PhaseDecisions.md`, `Architecture.md` §11 |
+| D9 | API key = prefixed token + `sha256(secret)` looked up by public `key_id`; client settings = typed columns + `client_endpoints` table; required immutable `slug`; soft reversible client disable (keys untouched); onboarding via CLI + `APP_ENV`-gated dev seeder | 2026-09-08 | Phase 6 Q1–Q5 | implemented | 6 | `.claude/PhaseDecisions.md` |
+| D10 | Auth = `Authorization: Bearer` only; authenticated client in a `ClientContext` holder + request attributes; `last_used_at` written throttled (≤1/key/5min); `401` for any credential fault + `403 client_disabled`, generic bodies; `Idempotency-Key` required on `/api/v1` writes; failed/successful auth logged to `client_auth_attempts`; **no rate limiting yet** | 2026-09-08 | Phase 7 Q1–Q5 | implemented | 7 | `.claude/PhaseDecisions.md`, `Architecture.md` §11 |
 
 ## Workflow & process rules
 

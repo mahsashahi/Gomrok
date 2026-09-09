@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Gomrok\Bootstrap;
 
 use Closure;
-use DI\ContainerBuilder;
 use Gomrok\Config\Settings;
+use Gomrok\Shared\Http\CorrelationIdMiddleware;
+use Gomrok\Shared\Http\JsonErrorHandler;
 use Psr\Container\ContainerInterface;
 use Slim\App;
 use Slim\Factory\AppFactory as SlimAppFactory;
@@ -17,18 +18,17 @@ use Slim\Factory\AppFactory as SlimAppFactory;
 final class AppFactory
 {
     /**
+     * @param ContainerInterface|null $container overrides the default container
+     *                                           (tests inject one with stubbed
+     *                                           adapters so no DB is needed)
+     *
      * @return App<ContainerInterface|null>
      */
-    public static function create(): App
+    public static function create(?ContainerInterface $container = null): App
     {
         $rootDir = \dirname(__DIR__, 2);
 
-        /** @var array<string, mixed> $definitions */
-        $definitions = require $rootDir . '/src/Config/container.php';
-
-        $container = (new ContainerBuilder())
-            ->addDefinitions($definitions)
-            ->build();
+        $container ??= ContainerFactory::create();
 
         SlimAppFactory::setContainer($container);
         $app = SlimAppFactory::create();
@@ -41,9 +41,12 @@ final class AppFactory
 
         $settings = Settings::fromEnvironment($rootDir);
 
+        $app->add(CorrelationIdMiddleware::class);
         $app->addRoutingMiddleware();
         $app->addBodyParsingMiddleware();
-        $app->addErrorMiddleware($settings->appDebug, true, true);
+
+        $errorMiddleware = $app->addErrorMiddleware($settings->appDebug, true, true);
+        $errorMiddleware->setDefaultErrorHandler(JsonErrorHandler::class);
 
         return $app;
     }

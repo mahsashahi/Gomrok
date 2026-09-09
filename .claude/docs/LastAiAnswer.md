@@ -1,46 +1,54 @@
-# Q: Implement the full .claude/ structure from struct.md
+# Q: Phase 7 — Client API authentication & scoping
 
-Built the complete tree from `.claude/struct.md` — **51 files created**, **0 pre-existing files
-deleted / renamed / overwritten**, 3 files edited additively. `struct.md`'s SCREAMING/kebab names
-mapped to PascalCase per `.claude/Rule.md` §3.1 (chosen by the user). Not committed — awaiting
-review.
+**Status:** ☑ code + docs complete, `composer ci` green (124 unit tests). The one migration +
+persistence tests run in GitHub Actions (no Docker / usable MySQL here). 2026-09-08 16:56 →
+17:49, 53m (Est. 3–5h).
 
-## Created (51)
+## Decisions (PhaseDecisions.md Phase 7 Q1–Q5)
 
-- `.claude/CLAUDE.md` — pointer stub to the real root `CLAUDE.md`.
-- `.claude/Orders.md` — requirements & decisions register (index over `PhaseDecisions.md`;
-  seeded with D1–D7 / P1–P5 from Phases 1–2).
-- `.claude/agents/` ×10 — `<Role>Agent.md` subagent templates (valid frontmatter + placeholder
-  bodies, description marked TEMPLATE).
-- `.claude/commands/` — `Implement/Plan/Refactor/Review/Spec.md`; `workflow/` (5 multi-agent
-  variants); `phases/` (`Phase00Foundation`, `Phase01ProjectDiscovery`,
-  `Phase02RepositoryBootstrap`, `PhaseTemplate`, `Readme` — thin pointers to `docs/Phases.md`).
-- `.claude/docs/` ×8 — `ProjectDescription`, `Domain`, `Permissions`, `Ui` (thin, point at
-  `CLAUDE.md`/`Architecture.md`/`Design/`); `Recommendations` (cross-phase follow-up rollup,
-  seeded); `Deployment`, `Server` (empty placeholders — no infra chosen); `FeatureTemplate`.
-- `.claude/knowledge/` ×8 — `SecurityRules`, `TenantIsolation`, `RolePermissionModel` (policy
-  statements pinning `CLAUDE.md` sections); `DeploymentRunbook`, `DnsRecords`, `LocalAssets`,
-  `MediaStorage` (empty placeholders); `PolicyTemplate`.
-- `.claude/skills/` ×8 — `Backend/Database/Deployment/Frontend/Git/Security/TestingSkill.md`
-  templates + `SkillTemplate.md`.
+1. **`Authorization: Bearer gk_<mode>_<key_id>.<secret>`** only. `/api/v1/*` all require it;
+   `/health` stays public (outside the group, no I/O, `{"status":"ok","service":"gomrok"}`).
+2. Authenticated client rides in a per-request **`ClientContext`** holder (DI singleton, like
+   `CorrelationId`) **plus** request attributes `authClient` / `authClientId` / `authKeyMode`.
+3. `last_used_at` written **throttled** — only if null or stale by > 5 min (`touchLastUsed()`).
+4. **`401 unauthorized`** for any credential fault (opaque body, `WWW-Authenticate: Bearer`);
+   **`403 client_disabled`** only for a valid key on a disabled client.
+5. **`Idempotency-Key` required on every `/api/v1` write** (`400 idempotency_key_required`).
+   Abuse protection = failed/successful auth logged to a new `client_auth_attempts` table.
+   **No rate limiting this phase** — its own future concern.
 
-## Preserved (unchanged)
+## Built (schema confirmed by the user first)
 
-Root `CLAUDE.md`; all pre-existing `.claude/` files — `Rule.md`, `Changelog.md`,
-`PhaseDecisions.md`, `FileIndex.md`, `struct.md`, `docs/{Architecture,Phases,Commands,LastAiAnswer,ClaudeOld}.md`,
-`knowledge/Knowledge.md`, `{agents,commands,skills}/Readme.md`, `PhaseResults/*`. No source /
-tests / DB / Docker / Composer files touched — `composer ci` still green.
+- **Migration** `CreateClientAuthAttemptsTable` (`client_auth_attempts` — one append-only row per
+  auth attempt; FK to `clients` SET NULL; parsed `key_id` only, never the secret). **10 tables.**
+- `Shared\Http`: `ClientAuthenticator` port, `AuthResult`, `AuthenticatedClient`,
+  `AuthRequestMeta`, `ClientContext`, `AuthenticationMiddleware`.
+- `Clients`: `AuthFailureReason`, `Application/Authenticate/{ApiKeyAuthenticator, AuthAttempt,
+  AuthAttemptLog}`, `Infrastructure/PdoAuthAttemptLog`. `ApiKeyAuthenticator` implements the
+  Shared port so the middleware never depends on the module.
+- `IdempotencyMiddleware` gained `requireKeyOnWrites`; attached to the `/api/v1` group.
+- `src/Http/Api/MeAction.php` → `GET /api/v1/me`. `routes.php` group. `AppFactory::create()`
+  takes an optional container for functional tests. `ClientApiKeyRepository::touchLastUsed()`.
 
-## Modified (additive only)
+## Verified
 
-- `.claude/Rule.md` — §3.3 tree + naming notes for `agents/commands/skills`; ## Project Documents
-  rows for the new families. (anchors + old rows verified intact)
-- `.claude/FileIndex.md` — entries for the new dirs/files.
-- `.claude/Changelog.md` — a 2026-09-07 entry.
+`composer cs` clean · `composer stan` `[OK]` (175 files, level `max` + strict-rules) ·
+`composer test` **OK (124 tests, 383 assertions)** · `composer ci` green ·
+`composer test:integration` → 21 tests, all self-skip. **Real HTTP:** `GET /health` → 200
+`{"status":"ok","service":"gomrok"}`; `GET /api/v1/me` no key → 401 +
+`WWW-Authenticate: Bearer realm="gomrok"`; stubbed valid key → 200 client JSON.
 
-## Heads-up
+## NOT verified here
 
-The agent files (frontmatter) and command files (`description:`) are valid, so Claude Code will
-now show **~10 subagents and ~15 slash commands, all marked TEMPLATE**. `settings.local.json` not
-created (local, auto-managed, already in `.gitignore`). `struct.md`'s `[feature]/[policy]/[tech]`
-placeholders → `*Template.md` files.
+Migration + `AuthAttemptsPersistenceTest` against real MySQL. Push to `main` (CI) or
+`docker compose up -d mysql && composer db:reset && composer test:integration`.
+
+## `.claude/` updated
+
+`database-design.md` / `database-diagram.md` / `.html` / `db_explain.md` (10 tables);
+`Architecture.md` §11; `Phases.md` (row 7 → ☑); `Changelog.md`; `FileIndex.md`; `Knowledge.md`;
+`Commands.md`; `Orders.md` (D10); `PhaseDecisions.md`; `PhaseResults/Phase07Result.md`.
+
+Next: **Phase 8 — Providers module: types & capability model** (the provider-capability
+catalogue deferred from Phase 4 Q4 — enum and/or `provider_capabilities` table + per-type
+capability mapping).

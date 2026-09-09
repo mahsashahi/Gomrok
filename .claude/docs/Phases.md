@@ -1,4 +1,4 @@
-# Phases.md — Gomrok implementation plan
+        د# Phases.md — Gomrok implementation plan
 
 ## Status & execution tracking
 
@@ -20,11 +20,11 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | --- | --- | :---: | --- | --- | --- | --- | --- |
 | 1 | Groundwork: architecture baseline | ☑ | 2026-09-06 17:42 | 2026-09-06 17:54 | 2–4h | 12m | N/A |
 | 2 | Project scaffold & toolchain | ☑ | 2026-09-06 18:20 | 2026-09-06 18:50 | 3–5h | 30m | N/A |
-| 3 | Shared kernel | ☐ | — | — | 3–5h | — | — |
-| 4 | Database foundations: base & reference tables only | ☐ | — | — | 2–4h | — | — |
-| 5 | Migration workflow & cross-cutting tables | ☐ | — | — | 2–4h | — | — |
-| 6 | Clients module: domain & persistence | ☐ | — | — | 3–5h | — | — |
-| 7 | Client API authentication & scoping | ☐ | — | — | 3–5h | — | — |
+| 3 | Shared kernel | ☑ | 2026-09-08 11:34 | 2026-09-08 12:22 | 3–5h | 48m | N/A |
+| 4 | Database foundations: base & reference tables only | ☑ | 2026-09-08 12:28 | 2026-09-08 13:30 | 2–4h | 62m | N/A |
+| 5 | Migration workflow & cross-cutting tables | ☑ | 2026-09-08 13:35 | 2026-09-08 15:04 | 2–4h | 1h 29m | N/A |
+| 6 | Clients module: domain & persistence | ☑ | 2026-09-08 15:14 | 2026-09-08 16:33 | 3–5h | 1h 19m | N/A |
+| 7 | Client API authentication & scoping | ☑ | 2026-09-08 16:56 | 2026-09-08 17:49 | 3–5h | 53m | N/A |
 | 8 | Providers module: types & capability model | ☐ | — | — | 4–6h | — | — |
 | 9 | Provider accounts (per client) | ☐ | — | — | 4–6h | — | — |
 | 10 | Country provider configuration & routing resolution | ☐ | — | — | 5–8h | — | — |
@@ -151,10 +151,10 @@ to analyze. No application code.
 **Goal:** the primitives every module depends on.
 
 **Scope:**
-- `Shared/Domain`: `Money`, `Currency`, `CountryCode`, typed IDs, `Result` / `DomainError`,
-  `Clock`, UUID generation.
-- `Shared/Infrastructure`: structured JSON logger carrying `correlation_id`; request-id
-  middleware; PDO helpers; a transaction helper.
+- `Shared/Domain`: `Money`, `Currency`, `CountryCode`, `Result` / `DomainError`, `Clock`.
+  **No ID types** — identifiers are plain `int` (Phase 1 Q3, changed 2026-09-08; Phase 3 Q2).
+- `Shared/Infrastructure`: structured JSON logger carrying a `correlation_id` (plain random hex
+  string, not a ULID); request-id middleware; PDO helpers; a transaction helper.
 - `Shared/Http`: base action, JSON response helper, error handler mapping `DomainError` → HTTP
   status.
 
@@ -169,10 +169,12 @@ to analyze. No application code.
 phase (see *Database strategy* above).
 
 **Scope:**
-- Migration runner + workflow (`up` / `down`, repeatable, runs in CI).
-- Base / reference tables only — the low-churn foundations other tables will point at:
-  `countries`, `currencies`, `provider_types` (`requires_registration`, `api_capable`), the
-  capability catalogue, and any similar pure lookup data. Seed them.
+- Migration runner + workflow (`up` / `down`, repeatable, runs in CI). Namespaced Phinx
+  migrations, `up()`/`down()` (Phase 4 Q2).
+- Exactly three reference tables — the low-churn foundations other tables will point at:
+  `countries`, `currencies`, `provider_types` (`requires_registration`, `api_capable`). Seed
+  them: currencies from `brick/money`'s ISO provider, countries from a bundled JSON (Q3).
+  *(The provider-capability catalogue is deferred to Phase 8 — Q4.)*
 - Start the DB docs as living skeletons that grow per phase: `.claude/docs/database-design.md`
   (canonical spec), `.claude/docs/database-diagram.md` + `.claude/docs/database-diagram.html`
   (Mermaid ER per module + module map), `.claude/docs/db_explain.md` (per-table guide), root
@@ -190,56 +192,100 @@ match what was created.
 **Goal:** the tables that nearly every later phase writes to, so they exist before the modules do.
 
 **Scope:**
-- `idempotency_keys` table + middleware persistence.
-- `audit_logs` and `error_logs` tables + writers (`error_logs` backs the admin Error Logs screen
-  in Phase 27).
-- Harden the migration workflow: seed vs schema separation, rollback tests, CI wiring.
+- `idempotency_keys` table + `IdempotencyStore` port / `PdoIdempotencyStore` adapter +
+  `IdempotencyMiddleware` (lock + entity mapping; wired to routes in Phase 7).
+- `audit_logs` and `error_logs` tables + `AuditLogWriter` / `ErrorLogWriter` ports and PDO
+  adapters (`error_logs` backs the admin Error Logs screen in Phase 27; explicit writer only).
+- `PurgeExpiredIdempotencyKeys` job + `bin/PurgeIdempotencyKeys.php` + `composer idempotency:purge`.
+- Harden the migration workflow: `composer db:reset` / `db:fresh`, a migration round-trip
+  integration test, and a GitHub Actions CI workflow (`.github/workflows/Ci.yml`, `mysql:8.4`
+  service) — the first place migrations actually execute.
 
-**DB:** `idempotency_keys`, `audit_logs`, `error_logs`. Propose the slice, confirm, migrate,
-update the DB docs.
+**DB:** `idempotency_keys`, `audit_logs`, `error_logs` (schema confirmed by the user). `client_id`
+columns carry no FK yet — Phase 6 adds them.
 
-**Exit:** migrations run up and down cleanly; idempotency store and error-log writer tested.
+**Decisions:** `PhaseDecisions.md` Phase 5 Q1–Q5.
+
+**Exit:** ☑ code + docs complete, `composer ci` green (63 unit tests), PHPStan `max` clean, CI
+workflow authored. Migration up/down + writer integration tests self-skip locally (no Docker);
+they execute in GitHub Actions.
 
 ## Phase 6 — Clients module: domain & persistence
 
 **Goal:** the tenant model.
 
-**Scope:**
-- Tables: `clients`, `client_api_keys` (stored hashed), client settings.
-- `Client` aggregate, repository, `CreateClient` / `UpdateClient` / `DisableClient` use cases.
-- No admin UI yet — clients are seeded via fixtures / a CLI command.
+First `src/Modules/<Name>/` module — sets the `Domain` / `Application` / `Infrastructure` /
+`Http` layout and a per-module `Infrastructure/definitions.php` merged by `ContainerFactory`.
 
-**DB:** `clients`, `client_api_keys`, client settings — designed here, not earlier. Propose the
-slice → confirm → migrate → update the DB docs. **Every module phase from here on follows this
-same loop for its own tables**, and may add columns to earlier modules' tables via additive
-migrations as the design firms up.
+**Scope (done):**
+- Tables: `clients`, `client_api_keys` (secret stored `sha256`), `client_endpoints`. Plus the
+  additive `AddClientFksToCrossCuttingTables` migration (the Phase 5 FKs).
+- `Client` aggregate + `ClientEndpoint` / `ClientApiKey`; `ClientSlug` VO; `ClientRepository` /
+  `ClientApiKeyRepository` ports + PDO adapters; `ClientDirectory` published read port +
+  `ClientSnapshot` DTO.
+- Use cases: `CreateClient`, `UpdateClient`, `DisableClient`, `EnableClient`,
+  `SetClientEndpoint`, `RemoveClientEndpoint`, `IssueApiKey`, `RevokeApiKey` — each returns
+  `Result` / `DomainError` and writes an `audit_logs` row (actor = system).
+- Shared: `TokenGenerator` port + `RandomTokenGenerator`; `ReferenceCatalog` port +
+  `PdoReferenceCatalog`; `Transactions` port (`TransactionRunner` implements it); `Row`
+  coercion helper; `DomainEvent` marker + `Domain/Events/*` (defined, not dispatched).
+- CLI: `bin/{CreateClient,IssueClientApiKey,RevokeClientApiKey,ListClients}.php`
+  (`composer client:*`). `ClientsSeeder` — one `local-dev` client + fixed dev key, gated to
+  `APP_ENV ∈ {local, testing}`.
 
-**Exit:** client lifecycle, API-key hashing, and uniqueness constraints tested.
+**Decisions:** `PhaseDecisions.md` Phase 6 Q1–Q5 (SHA-256 + `key_id` lookup · typed columns +
+`client_endpoints` · required immutable `slug` · soft reversible disable, keys untouched · CLI +
+env-gated dev seeder).
+
+**Exit:** ☑ client lifecycle, API-key hashing/verification, uniqueness + FK constraints tested —
+104 unit tests; integration tests (`ClientsPersistenceTest`, round-trip) self-skip locally,
+run in CI. Domain events not dispatched (no subscriber yet); admin-actor audit propagation
+deferred to Phase 26.
 
 ## Phase 7 — Client API authentication & scoping
 
 **Goal:** every API request is authenticated and locked to one client.
 
-**Scope:**
-- API-key auth middleware; per-request client scoping; hard rejection of any cross-client access.
-- `Idempotency-Key` handling on write endpoints (replay returns the original result).
-- Basic replay / abuse protection.
+Gomrok's first real API surface — `/api/v1` group + `GET /api/v1/me`. `/health` stays public.
 
-**DB:** none beyond Phase 5/6.
+**Scope (done):**
+- `ClientAuthenticator` port (Shared\Http) + `ApiKeyAuthenticator` (Clients) — `Authorization:
+  Bearer gk_<mode>_<key_id>.<secret>` → point-read by `key_id` → constant-time compare → key
+  status/expiry → client status → throttled `last_used_at` → record the attempt.
+- `AuthenticationMiddleware` (Shared\Http) on the `/api/v1` group — populates `ClientContext`
+  (per-request holder) + `authClient` / `authClientId` / `authKeyMode` request attributes;
+  `401 unauthorized` (any credential fault) / `403 client_disabled` (Q4).
+- `IdempotencyMiddleware` attached to the group with `requireKeyOnWrites` — a keyless write →
+  `400 idempotency_key_required` (Q5).
+- Table `client_auth_attempts` + `AuthAttemptLog` port + `PdoAuthAttemptLog`.
+- `ClientApiKeyRepository::touchLastUsed()`; `AppFactory::create()` takes an optional container
+  for functional tests.
 
-**Exit:** auth pass/fail, scoping enforcement, and idempotent-replay behaviour tested.
+**Decisions:** `PhaseDecisions.md` Phase 7 Q1–Q5 (Bearer only · `ClientContext` holder + attrs ·
+throttled `last_used_at` · 401/403 generic bodies · Idempotency-Key required on writes,
+failed-attempt logging, no rate limiting yet).
+
+**DB:** `client_auth_attempts` (schema confirmed). No changes to `client_api_keys`.
+
+**Exit:** ☑ auth pass/fail, 401/403 shape, `ClientContext` population, keyless-write 400, and
+the public/authenticated route split tested — 124 unit tests + a boot-the-real-app routing test;
+persistence + round-trip integration tests self-skip locally, run in CI. Rate limiting deferred
+to its own concern.
 
 ## Phase 8 — Providers module: types & capability model
 
 **Goal:** model what each provider *can* do before wiring any SDK.
 
 **Scope:**
-- `provider_types`, the capability structure per type, and payment-method-level capability nuance
-  (e.g. a provider may do recurring card but not recurring PayPal).
+- The **provider-capability catalogue** (deferred here from Phase 4 Q4): a PHP enum and/or a
+  `provider_capabilities` reference table for the ~20 flags in `Architecture.md` §8.
+- The capability structure per type, and payment-method-level capability nuance (e.g. a provider
+  may do recurring card but not recurring PayPal).
 - Capability resolution service: type capabilities → account overrides → client/country
   enable-disable.
 
-**DB:** `provider_types` (seeded Phase 5) + capability tables.
+**DB:** `provider_types` already exists (Phase 4). New: the capability catalogue + per-type /
+per-method capability tables.
 
 **Exit:** capability-resolution matrix tested (Stripe vs Ziraat; Mollie card vs PayPal).
 

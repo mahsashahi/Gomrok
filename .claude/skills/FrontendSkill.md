@@ -2,7 +2,7 @@
 
 **Status:** template / not yet written.
 
-**Purpose.** Building admin-panel views with Alpine.js + CSS + server-rendered PHP, to the Design/ mockups.
+**Purpose.** Building admin-panel views with Alpine.js + CSS + server-rendered PHP, to the  .claude/docs/Design/ mockups.
 
 > `.claude/struct.md` models skills as flat how-to guides. If you later want any of these to be an
 > *invocable* Claude Code skill, it needs the folder form `skills/<name>/SKILL.md` instead.

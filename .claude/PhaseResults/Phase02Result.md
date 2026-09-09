@@ -231,8 +231,8 @@ test is written and self-skips; run it for real with Docker Desktop up:
 - **CI pipeline file** (GitHub Actions / etc.) — `composer ci` / `ci:full` are the building
   blocks; wiring an actual CI service is deferred (Phase 30 hardening, or when a repo/remote
   exists — this project is not yet a git repo).
-- **Shared kernel** (`src/Shared/**` — `Money`, `Ulid`, `Clock`, `Result`, logger, event
-  dispatcher, base HTTP action/responder/error-handler) — **Phase 3**.
+- **Shared kernel** (`src/Shared/**` — `Money`, `Currency`, `Clock`, `Result`, logger, event
+  dispatcher, base HTTP action/responder/error-handler; no ID types) — **Phase 3**.
 - **`src/Jobs/`** queue worker — Phase 29.
 - A custom Phinx migration base class / namespaced migrations — deferred to Phase 4 when the
   first migration is designed.

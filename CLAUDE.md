@@ -803,10 +803,10 @@ Every file authored for this project is named in **PascalCase** (`Phases.md`, `L
 All project documentation lives under **`.claude/`** — `.claude/Rule.md`, `.claude/Changelog.md`,
 `.claude/PhaseDecisions.md`, `.claude/FileIndex.md`, `.claude/docs/*` (Architecture, Phases,
 Commands, LastAiAnswer, …), `.claude/knowledge/*`, `.claude/PhaseResults/*`, plus the `agents/`
-`commands/` `skills/` skeletons — never loose in the project root. `CLAUDE.md` is the one
-exception (the harness auto-loads `./CLAUDE.md`); `Design/` also stays at the root (§3.3). Files
-in `.claude/` are PascalCase (incl. the `PhaseResults/` sub-dir); the tool-recognised
-`agents/ commands/ skills/` sub-dirs plus `docs/ knowledge/` are lowercase. Full rule:
+`commands/` `skills/` skeletons, `.claude/docs/Design/` (the design export) — never loose in the
+project root. `CLAUDE.md` is the one exception (the harness auto-loads `./CLAUDE.md`). Files
+in `.claude/` are PascalCase (incl. the `PhaseResults/` and `docs/Design/` sub-dirs); the
+tool-recognised `agents/ commands/ skills/` sub-dirs plus `docs/ knowledge/` are lowercase. Full rule:
 `.claude/Rule.md` §3.3. Every documentation file is also registered in
 `.claude/Rule.md` → **## Project Documents** (name, path, purpose), kept in sync whenever a doc
 is created / renamed / moved / removed (§3.5).

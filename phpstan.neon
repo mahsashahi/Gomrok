@@ -8,4 +8,5 @@ parameters:
     paths:
         - src
         - tests
+        - bin
     tmpDir: .phpstan.cache

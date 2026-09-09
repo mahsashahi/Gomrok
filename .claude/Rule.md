@@ -49,7 +49,7 @@ at the fuller text.
 Every file **and directory** in this repo is named in `PascalCase`:
 
 - Words joined with no separator, each capitalised: `Phases.md`, `LastAiAnswer.md`, `Rule.md`,
-  `DatabaseDesign.md`, `ProviderAdapter.php`, `Design/`, `Src/Modules/Payments/`.
+  `DatabaseDesign.md`, `ProviderAdapter.php`, `.claude/docs/Design/`, `Src/Modules/Payments/`.
   (Bare filenames are used here as naming examples — for their actual location see §3.4.)
 - No `snake_case`, `kebab-case`, `SCREAMING_CASE`, or spaces.
 - **Inside `.claude/`**, directory names follow Claude Code's own lowercase convention —
@@ -62,7 +62,7 @@ Every file **and directory** in this repo is named in `PascalCase`:
 - Acronyms are treated as words: `LastAiAnswer.md` not `LastAIAnswer.md`; `HttpClient.php` not
   `HTTPClient.php`.
 - The extension stays lowercase (`.md`, `.php`, `.html`, `.dc.html`).
-- Third-party / generated artefacts (e.g. the Claude Design exports under `Design/`) are renamed
+- Third-party / generated artefacts (e.g. the Claude Design exports under `.claude/docs/Design/`) are renamed
   to PascalCase too. If a rename breaks an internal reference — as `support.js` → `Support.js`
   did for the `<script src>` in the `.dc.html` files — fix the reference in the same change.
 - When a rule elsewhere, or the user, names a file in lowercase, apply PascalCase anyway and note
@@ -80,6 +80,14 @@ Every file **and directory** in this repo is named in `PascalCase`:
 - **Non-class PHP config files that return a value** (`src/Config/container.php`,
   `src/Config/routes.php`, and future `settings.php` etc.) keep the conventional lowercase name —
   they are `require`-d, not autoloaded, and this matches `.claude/docs/Architecture.md` §4.
+- **The database docs** — `.claude/docs/database-design.md`, `.claude/docs/database-diagram.md`
+  (+ `.html`), `.claude/docs/db_explain.md`, and root `mkdocs.yml` — keep their kebab-case names
+  (Phase 4 Q1; the inherited spec's *Database Diagram Maintenance Rule* names them that way and
+  `mkdocs` expects `mkdocs.yml`).
+- **Phinx migration files** keep Phinx's required `YYYYMMDDHHMMSS_snake_name.php` form (needed
+  for `version_order: creation`). The migration **classes** are namespaced PascalCase
+  (`Gomrok\Database\Migrations\CreateCountriesTable`). Seeder files are plain PascalCase
+  (`CurrenciesSeeder.php`).
 
 ### 3.2 Domain naming
 
@@ -95,7 +103,6 @@ loose in the project root. Layout:
 
 ```
 .claude/
-├── CLAUDE.md            pointer stub → the project-root CLAUDE.md is authoritative
 ├── Rule.md              this file — the standing-rules catalogue
 ├── Changelog.md         chronological change log            (= struct.md CHANGELOG.md)
 ├── PhaseDecisions.md    every phase decision Q/options/selection
@@ -117,7 +124,8 @@ loose in the project root. Layout:
 ├── docs/               reference docs Claude reads before implementing
 │   ├── Architecture.md  Phases.md  Commands.md  LastAiAnswer.md  ClaudeOld.md
 │   ├── ProjectDescription.md  Domain.md  Permissions.md  Ui.md  Recommendations.md
-│   └── Deployment.md  Server.md   (placeholders — no infra chosen yet)
+│   ├── Deployment.md  Server.md   (placeholders — no infra chosen yet)
+│   └── Design/              admin-panel design export (GomrokAdminPanelV4.dc.html + Support.js)
 └── PhaseResults/       per-phase records — Readme.md, Template.md, PhaseNNResult.md (append-only)
 ```
 
@@ -143,16 +151,17 @@ Naming inside `.claude/`:
 
 **Intentionally outside `.claude/`:**
 
-- `CLAUDE.md` — sits at the **project root**; the harness auto-loads `./CLAUDE.md`, and it is not
-  confirmed to auto-load `.claude/CLAUDE.md`. It is the entry point and points into `.claude/`.
-- `Design/` (project root) — design assets (HTML mockups), not documentation.
+- `CLAUDE.md` — sits at the **project root** (the harness auto-loads `./CLAUDE.md`). It is the
+  entry point and points into `.claude/`. There is deliberately **no `.claude/CLAUDE.md`**
+  (`struct.md` lists one; the root file covers that role).
 
-`.claude/PhaseResults/` lives *inside* `.claude/` (moved there 2026-09-07) but is a
-special-purpose append-only record store, not general reference documentation.
+Everything else lives under `.claude/`: `.claude/PhaseResults/` (per-phase records — moved there
+2026-09-07) and `.claude/docs/Design/` (the admin-panel design export — moved there 2026-09-08).
+Both are PascalCase sub-dirs (our own, not tool folders).
 
-The Phase-4 database docs (`DatabaseDesign.md`, the ER diagram, the per-table guide,
-`mkdocs.yml`) will live under `.claude/docs/` too; their exact names are a Phase 4 decision
-(the inherited spec writes them kebab-case).
+The **database docs** live under `.claude/docs/` with kebab-case names (Phase 4 Q1 —
+§3.1 exception): `database-design.md` (canonical spec), `database-diagram.md` (+ `.html`),
+`db_explain.md`, plus root `mkdocs.yml`. They are kept in lock-step per §5.
 
 ### 3.4 Where things live
 
@@ -164,7 +173,7 @@ The Phase-4 database docs (`DatabaseDesign.md`, the ER diagram, the per-table gu
   phase (see `.claude/PhaseResults/Readme.md`).
 - The map of key files across the whole repo: `.claude/FileIndex.md`.
 - Cross-cutting conventions: this file, `.claude/Rule.md`.
-- The admin-panel design is mirrored under `Design/` (project root; see `Design/Readme.md`).
+- The admin-panel design is mirrored under `.claude/docs/Design/` (see `.claude/docs/Design/Readme.md`).
 - Do not put the full decision questionnaire inside `.claude/docs/Phases.md`; it links to
   `.claude/PhaseDecisions.md`.
 
@@ -196,23 +205,22 @@ The complete list of the project's documentation files. Keep this table in sync 
 | PhaseResults/Readme.md | `.claude/PhaseResults/Readme.md` | Explains the phase-result convention: naming, structure, and the rules for `PhaseNNResult.md` files. |
 | PhaseResults/Template.md | `.claude/PhaseResults/Template.md` | The section layout to copy when creating a phase result file. |
 | PhaseNNResult.md | `.claude/PhaseResults/PhaseNNResult.md` | One per completed phase (zero-padded, e.g. `Phase01Result.md`): the detailed record of what was *actually* done that phase. Append-only. |
-| CLAUDE.md (pointer) | `.claude/CLAUDE.md` | Pointer stub — says the project-root `CLAUDE.md` + `.claude/Rule.md` are authoritative. Not the real instruction file. |
 | Orders.md | `.claude/Orders.md` | Requirements & decisions register — one row per requirement/decision with date/source/status/phase, pointing at `PhaseDecisions.md` / `CLAUDE.md` / `Rule.md`. Higher-level index over `PhaseDecisions.md`. |
 | struct.md | `.claude/struct.md` | The user's target-structure spec that this `.claude/` tree was built from. User-owned — do not edit. |
 | agents/\*.md | `.claude/agents/<Role>Agent.md` | Subagent definitions (`BackendAgent`, `DatabaseAgent`, `DiscoveryAgent`, `DocsAgent`, `FrontendAgent`, `QaAgent`, `ReviewAgent`, `SecurityAgent`, `TestingAgent`, `DeploymentAgent`). **Templates** — frontmatter set, bodies are placeholders; refine before relying on any. |
 | commands/\*.md | `.claude/commands/<Command>.md` (+ `phases/`, `workflow/`) | Slash-command definitions: `/Implement /Plan /Refactor /Review /Spec`, their `/workflow:*` multi-agent variants, and `/phases:*` thin pointers to `docs/Phases.md`. **Templates.** |
 | skills/\*.md | `.claude/skills/<Topic>Skill.md` | How-to guides (`BackendSkill`, `DatabaseSkill`, `FrontendSkill`, `GitSkill`, `SecuritySkill`, `TestingSkill`, `DeploymentSkill`) + `SkillTemplate.md`. **Templates.** Flat files, not invocable Claude Code skills (those need `skills/<name>/SKILL.md`). |
-| docs — reference | `.claude/docs/{ProjectDescription,Domain,Permissions,Ui}.md` | Thin reference docs that **point at** `CLAUDE.md` / `Architecture.md` / `Design/` rather than duplicating them. |
+| docs — reference | `.claude/docs/{ProjectDescription,Domain,Permissions,Ui}.md` | Thin reference docs that **point at** `CLAUDE.md` / `Architecture.md` / `.claude/docs/Design/` rather than duplicating them. |
 | docs — placeholders | `.claude/docs/{Deployment,Server}.md`, `.claude/docs/Recommendations.md` | `Deployment`/`Server`: empty until infra is chosen (Phase 30). `Recommendations`: cross-phase rollup of open follow-ups from each `PhaseNNResult.md` → Deferred Work. |
 | knowledge — policies | `.claude/knowledge/{SecurityRules,TenantIsolation,RolePermissionModel}.md` | Stable policy statements that pin the corresponding `CLAUDE.md` sections. |
 | knowledge — placeholders | `.claude/knowledge/{DeploymentRunbook,DnsRecords,LocalAssets,MediaStorage}.md` | Empty until real infrastructure exists — no hosts/records/credentials invented. |
 | templates | `.claude/docs/FeatureTemplate.md`, `.claude/knowledge/PolicyTemplate.md`, `.claude/skills/SkillTemplate.md`, `.claude/commands/phases/PhaseTemplate.md` | Copy-me templates for the `[feature].md` / `[policy].md` / `[tech]-skill.md` / `phase-NN-[name].md` placeholders in `struct.md`. |
 | skeleton Readmes | `.claude/{agents,commands,skills,commands/phases}/Readme.md` | Notes on what each folder is for. |
-| Design/Readme.md | `Design/Readme.md` | Describes the mirrored Claude Design admin-panel export files under `Design/` and how to open them. |
+| database docs | `.claude/docs/database-design.md` (canonical) · `database-diagram.md` (+ `.html`) · `db_explain.md` · root `mkdocs.yml` | The schema: full spec, Mermaid ER diagrams per module, per-table plain-language guide, mkdocs site config. Kebab-case (§3.1 exception). Kept in lock-step (§5). |
+| Design/Readme.md | `.claude/docs/Design/Readme.md` | Describes the admin-panel design export (`GomrokAdminPanelV4.dc.html`, its export variant, `Support.js`) and how to open it. |
 
-`Design/` sits at the project root (not documentation), but its `Readme.md` is registered here
-too. `.claude/PhaseResults/` is under `.claude/` but is a record store rather than reference
-documentation.
+`.claude/PhaseResults/` and `.claude/docs/Design/` are under `.claude/` but are a record store /
+asset export rather than reference documentation; their `Readme.md` files are still registered here.
 
 ## 4. Phase workflow
 
@@ -330,9 +338,15 @@ Applies automatically to all current and future phases.
   nullable fields, JSON fields, security-sensitive fields, migration risks, alternatives — then
   ask, verbatim: *"Please confirm the database design before I create migrations or schema
   files."* No migrations before confirmation. Re-confirm if the design changes.
-- **Client-scoped.** Every business table carries `client_id`; composite indexes and foreign keys
-  lead with `client_id`. Packages are client-scoped: `UNIQUE (client_id, code)`, no global
-  catalogue, no `client_packages` junction. *(CLAUDE.md → Package Ownership Rule)*
+- **Simple integer IDs.** Every table PK is `id INT UNSIGNED AUTO_INCREMENT` (from 1) — **not
+  `BIGINT`**. Foreign keys are plain `INT UNSIGNED`. No ULID / UUID / typed-ID value objects /
+  entity-specific ID classes; the same `int` is used in the DB, in PHP, and in API/callback/admin
+  URLs. `BIGINT` is still allowed for non-key columns (money `amount_minor`). Full rules:
+  `.claude/agents/DatabaseAgent.md`. *(user directive 2026-09-08; `Architecture.md` §6)*
+- **Client-scoped.** Every business table carries `client_id INT UNSIGNED`; composite indexes and
+  foreign keys lead with `client_id`. Packages are client-scoped: `UNIQUE (client_id, code)`, no
+  global catalogue, no `client_packages` junction. Because IDs are guessable, isolation is
+  enforced by authorization (§8), not by the ID. *(CLAUDE.md → Package Ownership Rule)*
 - **Store snapshots.** Persist a price / voucher / provider-routing decision snapshot on the
   payment or subscription record so later rule changes never alter historical transactions.
   *(CLAUDE.md → Pricing Requirement, Voucher Requirement)*
@@ -366,7 +380,7 @@ Applies automatically to all current and future phases.
 | `.claude/docs/Architecture.md` | When an architecture-level decision (module boundaries, IDs, money, adapter shape, events…) is made or revised. |
 | `.claude/knowledge/Knowledge.md` | When a durable domain fact or gotcha (provider quirk, edge case) is learned. |
 | `.claude/FileIndex.md` | When a file is added / removed / moved that a newcomer would need pointed to (docs, source entry points, config, key modules). |
-| `Design/Readme.md` | When the mirrored design files change. |
+| `.claude/docs/Design/Readme.md` | When the mirrored design files change. |
 
 ## 8. Security & correctness
 

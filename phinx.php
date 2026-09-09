@@ -11,8 +11,12 @@ $db = $settings->database;
 
 return [
     'paths' => [
-        'migrations' => __DIR__ . '/src/Database/Migrations',
-        'seeds' => __DIR__ . '/src/Database/Seeds',
+        'migrations' => [
+            'Gomrok\Database\Migrations' => __DIR__ . '/src/Database/Migrations',
+        ],
+        'seeds' => [
+            'Gomrok\Database\Seeds' => __DIR__ . '/src/Database/Seeds',
+        ],
     ],
     'templates' => [
         'style' => 'up_down',
@@ -28,6 +32,7 @@ return [
             'user' => $db->user,
             'pass' => $db->password,
             'charset' => $db->charset,
+            'collation' => 'utf8mb4_0900_ai_ci',
         ],
     ],
     'version_order' => 'creation',
