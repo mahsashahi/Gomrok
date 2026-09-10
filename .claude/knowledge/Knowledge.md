@@ -266,6 +266,34 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
 - `GET /api/v1/packages` is finally mounted (deferred through Phases 11–12). Response shape is
   stable — Phase 14 overrides / Phase 15 A/B change the *number*, not the structure.
 
+## Pricing overrides (Phase 14)
+
+- **One `price_rules` table, 7 nullable dimensions** (`pricing_group_id`, `country_code`,
+  `provider_account_id`, `payment_method`, `purchase_type`, `subscription_interval`,
+  `currency_code`). Null = wildcard. `PriceRule::DIMENSIONS` is the canonical order and doubles
+  as the tie-break priority (subscription_interval first … pricing_group_id last).
+- **Winner** (`PriceRuleResolver`): most matched dimensions → dimension-priority order → highest
+  `id`. Only rules where *every* pinned dimension equals the request are candidates.
+- **Unavailable is a hard stop.** The most-specific matching rule with `is_available = 0` →
+  `pricing.combination_unavailable`; the resolver does **not** fall back to the base price or a
+  less-specific rule. This is the exit criterion — a disabled combo never yields a wrong price.
+- `PriceResolver` runs rules **after** the Phase 13 base price, so the pricing group + currency
+  are already fixed. The `PriceRuleContext.currency` is the *resolved group* currency — a rule
+  that pins `currency_code = EUR` therefore never matches inside a USD group (the `converted`
+  base price stands there). A pinned group + currency must agree at write time
+  (`price_rule.currency_mismatch`).
+- Available rule needs `pricing_group_id` **or** `currency_code` pinned (`PriceRule::validate`),
+  so a bare "card = €25" must also pin the currency — expect `appliedDimensions` to include
+  `currency_code` in that case.
+- **NULL-distinct unique index.** `uniq_price_rules_dimensions` spans 8 columns with NULLs;
+  MySQL treats NULLs as distinct, so `ON DUPLICATE KEY` won't fire. `PdoPriceRuleRepository`
+  upserts via a null-safe (`<=>`) `findByDimensions` lookup; `PricingSeeder` deletes-then-inserts.
+- `PriceCatalog` (the browse list, `GET /api/v1/packages`) still uses `priceForGroup` only — **no
+  dimension rules**. Rules apply on `GET /api/v1/pricing/resolve` (which gained `method` /
+  `purchase_type` / `interval` query params).
+- New `SubscriptionInterval` enum: `monthly` / `quarterly` / `yearly`. A rule pinning it needs a
+  subscription/recurring `purchase_type` (`price_rule.interval_needs_subscription`).
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

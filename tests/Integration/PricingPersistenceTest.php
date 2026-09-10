@@ -123,7 +123,15 @@ final class PricingPersistenceTest extends TestCase
         self::assertSame(['DE'], $stored->countryCodes());
         self::assertSame(1, $stored->priority());
 
-        $resolver = new PriceResolver($groups, $rows, $defaults, $rates, $packages, $clock);
+        $resolver = new PriceResolver(
+            $groups,
+            $rows,
+            $defaults,
+            $rates,
+            $packages,
+            new \Gomrok\Modules\Pricing\Application\PriceRuleResolver(new \Gomrok\Modules\Pricing\Infrastructure\PdoPriceRuleRepository($this->pdo)),
+            $clock,
+        );
 
         $de = $this->price($resolver->resolve($this->clientId, $this->packageId, 'DE'));
         self::assertSame('dach', $de->pricingGroupSlug);

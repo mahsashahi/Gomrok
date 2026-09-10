@@ -93,6 +93,9 @@
         "pricing:set-default-price": "php bin/SetDefaultPackagePrice.php",
         "pricing:set-rate": "php bin/SetClientExchangeRate.php",
         "pricing:set-group-package": "php bin/SetPricingGroupPackage.php",
+        "pricing:set-rule": "php bin/SetPriceRule.php",
+        "pricing:delete-rule": "php bin/DeletePriceRule.php",
+        "pricing:list-rules": "php bin/ListPriceRules.php",
         "pricing:list": "php bin/ListPricing.php",
         "ci": [
             "@cs",
@@ -142,6 +145,9 @@
         "pricing:set-default-price": "Set a package's baseline price (--client --package --amount-minor --currency)",
         "pricing:set-rate": "Set a client FX rate (--client --base --quote --rate [--from])",
         "pricing:set-group-package": "Set a package's price/display in a pricing group (--client --group --package --status ...)",
+        "pricing:set-rule": "Upsert a dimension price rule (--client --package [dimensions] --amount-minor --currency | --unavailable)",
+        "pricing:delete-rule": "Delete a price rule by id (--client --rule=<id>)",
+        "pricing:list-rules": "List a package's price rules, most specific first (--client --package)",
         "pricing:list": "List a client's pricing groups (--client=<slug|id>)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"

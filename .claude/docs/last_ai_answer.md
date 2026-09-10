@@ -1,68 +1,121 @@
-# Q: Phase 13 — Pricing module: default prices & pricing groups
+# Q: Phase 14 — Pricing overrides & resolution engine (completion summary)
 
-**Status:** ☑ code + docs complete. `composer ci` green — `composer cs` clean, `composer stan`
-`[OK] No errors` (level `max` + strict-rules, 411 files), `composer test` **OK (242 tests, 921
-assertions)**. `composer test:integration` → `Skipped: 33` (no usable local MySQL; runs in CI).
-2026-09-10 13:23 → 13:58.
+## What was implemented
 
-## Decisions (PhaseResults/PhaseDecisions.md Phase 13 Q1–Q5)
+The **override layer** above the Phase 13 base price. One new table, `price_rules`, holds
+`(client, package)` overrides keyed by **7 nullable dimensions** — `pricing_group_id`,
+`country_code`, `provider_account_id`, `payment_method`, `purchase_type`,
+`subscription_interval`, `currency_code`. A null dimension is a wildcard. Each row either
+overrides `amount_minor` (`is_available = 1`) or marks the combination **not for sale**
+(`is_available = 0`).
 
-1. **Priority-ordered, overlapping pricing groups** + optional `device_type` + `is_default`
-   pinned last. Distinct from Phase 10 provider groups (exclusive routing) — a "Global iOS"
-   overlay can shadow a regional group for one device.
-2. **Single baseline per package** (`default_package_prices`) + **`client_exchange_rates`**
-   (client-configured, effective-dated) for `status=default` cross-currency conversion.
-3. **One `(group, package)` row**; `no row = implicit default`; `override` amount must be in the
-   group currency.
-4. **Dedicated `PriceResolver` / `PriceCatalog` + `ResolvedPrice`**; `GET /api/v1/packages` +
-   `GET /api/v1/pricing/resolve` mount now (GET not POST — pure reads).
-5. **One audited handler per operation** + `pricing:*` CLI + `PricingSeeder`.
+- **`PriceRuleResolver`** picks the winning rule: most matched dimensions → fixed dimension
+  priority (`subscription_interval > purchase_type > payment_method > provider_account_id >
+  currency_code > country_code > pricing_group_id`) → highest `id`.
+- **`PriceResolver::applyRules`** runs it *after* the base price (so the pricing group + currency
+  are already fixed). Available winner → `ResolvedPrice.source = dimension_override` with
+  `applied_rule_id` / `applied_dimensions`. Unavailable winner → hard
+  `pricing.combination_unavailable`, **no fallback** to a less-specific rule or the base price.
+- New `SubscriptionInterval` enum (`monthly` / `quarterly` / `yearly`).
+- `SetPriceRule` / `DeletePriceRule` audited use cases; `PriceRuleDirectory` list projection.
+- `bin/SetPriceRule.php`, `bin/DeletePriceRule.php`, `bin/ListPriceRules.php` +
+  `composer pricing:set-rule` / `delete-rule` / `list-rules`.
+- `GET /api/v1/pricing/resolve` gains `method` / `purchase_type` / `interval` query params and
+  `applied_rule_id` / `applied_dimensions` in the response. `GET /api/v1/packages` unchanged
+  (browse list stays base-price only).
+- `PricingSeeder` seeds two `pro` rules (stripe+EUR → €27; US group + yearly subscription →
+  unavailable).
 
-## Built (schema confirmed by the user first)
+## Files created
 
-- **New Pricing module** + **migrations `20260910140001-05`** (5 tables). **35 tables total.**
-- `PricingGroup` / `PricingGroupPackage` aggregates, `DefaultPackagePrice` / `ClientExchangeRate`
-  VOs, 4 repository ports + 5 `Pdo*` adapters.
-- `PriceResolver`: group match (priority, device, default last) → row → baseline /
-  `Money::convertTo` via client rate / override → `ResolvedPrice` (`source` = `baseline` /
-  `converted` / `group_override`). `PriceCatalog` wraps `PackageCatalog` + attaches a price.
-- **HTTP:** `GET /api/v1/packages?country=DE[&method&device]`, `GET /api/v1/pricing/resolve?package&country[&device]` — client-authenticated.
-- 7 use-case handlers (`CreatePricingGroup`, `SetPricingGroupCountries`, `ReorderPricingGroups`,
-  `ChangePricingGroupStatus`, `SetDefaultPackagePrice`, `SetClientExchangeRate`,
-  `SetPricingGroupPackage`); 5 `bin/` scripts; `PricingSeeder` (default/dach/us groups + EUR→USD rate).
-- `Money::amount()` — decimal-string accessor.
+- `src/Database/Migrations/20260910150001_create_price_rules_table.php`
+- `src/Modules/Pricing/Domain/` — `SubscriptionInterval.php`, `PriceRule.php`,
+  `PriceRuleRepository.php`
+- `src/Modules/Pricing/Application/` — `PriceRuleContext.php`, `PriceRuleResolver.php`,
+  `PriceRuleAuditSnapshot.php`, `PriceRuleSummary.php`, `PriceRuleDirectory.php`,
+  `SetPriceRule/{Command,Result,Handler}.php`, `DeletePriceRule/DeletePriceRuleHandler.php`
+- `src/Modules/Pricing/Infrastructure/` — `PdoPriceRuleRepository.php`, `PdoPriceRuleDirectory.php`
+- `bin/SetPriceRule.php`, `bin/DeletePriceRule.php`, `bin/ListPriceRules.php`
+- `tests/Support/InMemoryPriceRuleRepository.php`
+- `tests/Unit/Modules/Pricing/Domain/PriceRuleTest.php`,
+  `tests/Unit/Modules/Pricing/Application/PriceRuleResolverTest.php`,
+  `tests/Unit/Modules/Pricing/Application/PriceRuleHandlersTest.php`
+- `.claude/PhaseResults/Phase14Result.md`
 
-## Verified — captured `PriceResolver` output
+## Files updated
+
+- `src/Modules/Pricing/Application/{PriceResolver,PriceSource,ResolvedPrice}.php`,
+  `Infrastructure/definitions.php`
+- `src/Http/Api/PricingResolveAction.php`
+- `src/Database/Seeds/PricingSeeder.php`
+- `composer.json` / `composer.lock`
+- `tests/Integration/{MigrationRoundTripTest,PricingPersistenceTest}.php`,
+  `tests/Unit/{Http/PackagesApiTest,Modules/Pricing/Application/PriceCatalogTest,Modules/Pricing/Application/PriceResolverTest}.php`
+- Docs: `database-design.md` (36 tables), `database-diagram.md` + `.html` (12/12 mermaid),
+  `db_explain.md`, `Architecture.md` (§8/§9), `Phases.md` (row 14 → ☑), `Changelog.md`,
+  `FileIndex.md`, `knowledge/Knowledge.md`, `Commands.md`, `Orders.md` (D17)
+
+## Files removed
+
+None.
+
+## Database changes
+
+One additive table, `price_rules` (migration `20260910150001`). Unique index
+`uniq_price_rules_dimensions` over `(package_id, pricing_group_id, country_code,
+provider_account_id, payment_method, purchase_type, subscription_interval, currency_code)` —
+NULL-distinct, so upserts use a null-safe (`<=>`) lookup, not `ON DUPLICATE KEY`. Plus
+`idx_price_rules_client_package`, `idx_price_rules_provider_account`,
+`idx_price_rules_pricing_group`. FKs: `client_id` / `package_id` / `pricing_group_id` /
+`provider_account_id` CASCADE, `country_code` / `currency_code` RESTRICT. Total: **36 tables**.
+
+## Tests added / changed
+
+- New: `PriceRuleTest` (3), `PriceRuleResolverTest` (6), `PriceRuleHandlersTest` (3).
+- Changed: `PriceResolverTest` (+2 cases + new ctor arg), `PriceCatalogTest`, `PackagesApiTest`,
+  `PricingPersistenceTest`, `MigrationRoundTripTest`.
+- Run with: `composer test` (unit), `composer test:integration` (CI-only — no local MySQL),
+  `composer ci` (cs + stan + unit).
+
+## Captured evidence
 
 ```
-DE / ios   -> 29.00 EUR  group=global-ios  source=baseline        name="Pro"
-DE / web   -> 24.00 EUR  group=dach         source=group_override  name="Pro (DACH)"
-AT / web   -> 24.00 EUR  group=dach         source=group_override  name="Pro (DACH)"
-US / web   -> 31.32 USD  group=us           source=converted       name="Pro"
-FR / web   -> 29.00 EUR  group=default      source=baseline        name="Pro"
+$ composer ci
+ [OK] No errors        # php-cs-fixer
+ [OK] No errors        # phpstan (max + strict-rules)
+OK (256 tests, 983 assertions)
+
+$ composer test:integration
+OK, but some tests were skipped!
+Tests: 33, Assertions: 0, Skipped: 33.
+
+$ composer validate --no-check-publish
+./composer.json is valid
 ```
 
-Exit criteria — `DE/ios` picks `global-ios` (priority 1) over `dach` (priority 2); `FR` falls to
-the `default` group; `US` converts 29.00 EUR → 31.32 USD @ 1.08. Covered by `PriceResolverTest`
-(8) + `PricingPersistenceTest` + `PackagesApiTest`.
+`PriceRuleEvidence.php` (in-memory resolver — precedence matrix + unavailable combo):
 
-## Tests
+```
+DE, no method (base group price)               ->    2900 EUR  source=baseline           rule=- dims=[]
+DE, card  (rule#2: card+DE most specific)      ->    2500 EUR  source=dimension_override rule=2 dims=[payment_method,currency_code,country_code]
+FR, card  (rule#1: card wildcard country)      ->    2700 EUR  source=dimension_override rule=1 dims=[payment_method,currency_code]
+DE, subscription/monthly (rule#3)              ->    2000 EUR  source=dimension_override rule=3 dims=[purchase_type,currency_code]
+US, subscription/monthly (rule#3, USD conv)    ->    3132 USD  source=converted          rule=- dims=[]
+US, subscription/yearly  (rule#4 UNAVAILABLE)  ->  ERROR  pricing.combination_unavailable
+```
 
-- New: `PriceResolverTest` (8), `PricingGroupTest` (5), `PricingHandlersTest` (7),
-  `PriceCatalogTest` (1), `PackagesApiTest` (3, functional), `PricingPersistenceTest` (1,
-  self-skips); 5 support doubles.
-- Modified: `MigrationRoundTripTest`.
+Row 5: an EUR-pinned rule correctly does not match inside the USD `us` group. Row 6 is the exit
+criterion — a disabled combination resolves to `pricing.combination_unavailable`, never a wrong
+price.
 
-## NOT verified here
+## Known limitations
 
-The 5 migrations + `PricingPersistenceTest` against real MySQL — CI, or `docker compose up -d
-mysql && composer db:reset && composer test:integration`.
+- `providerAccountId` is a resolver dimension but `/pricing/resolve` doesn't accept it as a
+  query param yet (needs a slug → account lookup).
+- `price_rules` DB round-trip is asserted only in CI (local MySQL unavailable → skipped).
+- Price snapshotting onto payment / subscription records is Phase 19+.
 
-## `.claude/` updated
+## Next recommended phase
 
-`database-design.md` (35 tables) / `database-diagram.md` + `.html` (11/11 mermaid) /
-`db_explain.md`; `Architecture.md` §8 + §9; `Phases.md` (row 13 → ☑); `Changelog.md`;
-`FileIndex.md`; `knowledge/Knowledge.md`; `Commands.md`; `Orders.md` (D16);
-`PhaseResults/PhaseDecisions.md` (Phase 13 Q1–Q5 Decided); `PhaseResults/Phase13Result.md`.
-
-Next: **Phase 14 — Pricing overrides & resolution engine.**
+**Phase 15 — Price lists (A/B):** `price_lists` per pricing group, deterministic visitor → list
+assignment via a stable hash, package prices per list, disable-fallback.

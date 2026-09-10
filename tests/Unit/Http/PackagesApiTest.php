@@ -111,6 +111,7 @@ final class PackagesApiTest extends TestCase
         $defaults->save(new DefaultPackagePrice($proId, 2900, 'EUR'));
         $container->set(DefaultPackagePriceRepository::class, $defaults);
         $container->set(\Gomrok\Modules\Pricing\Domain\ClientExchangeRateRepository::class, new InMemoryClientExchangeRateRepository());
+        $container->set(\Gomrok\Modules\Pricing\Domain\PriceRuleRepository::class, new \Gomrok\Tests\Support\InMemoryPriceRuleRepository());
 
         $app = AppFactory::create($container);
 

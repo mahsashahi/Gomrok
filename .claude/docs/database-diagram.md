@@ -13,7 +13,7 @@ flowchart TD
     Clients["Clients<br/>clients · client_api_keys · client_endpoints"]
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
     Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
-    Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)"]
+    Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -529,3 +529,42 @@ package in that group; no row = implicit `default`. `PriceResolver` / `PriceCata
 `ResolvedPrice` (`baseline` / `converted` / `group_override`); `GET /api/v1/packages` and
 `GET /api/v1/pricing/resolve` mount this phase. `local-dev` seeds `default` (EUR) / `dach`
 (DE/AT/CH, EUR, `pro` overridden €24) / `us` (USD, converted) groups + an EUR→USD rate.
+
+## Pricing — dimension overrides (Phase 14)
+
+```mermaid
+erDiagram
+    price_rules {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        int package_id FK "-> packages.id (CASCADE)"
+        int pricing_group_id FK "-> pricing_groups.id (CASCADE); nullable dimension"
+        char country_code FK "-> countries.code (RESTRICT); nullable dimension"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE); nullable dimension"
+        varchar payment_method "PaymentMethod; nullable dimension"
+        varchar purchase_type "PurchaseType; nullable dimension"
+        varchar subscription_interval "monthly | quarterly | yearly; nullable dimension"
+        char currency_code FK "-> currencies.code (RESTRICT); nullable dimension"
+        tinyint is_available "0 => combination not for sale"
+        bigint amount_minor "set iff is_available = 1"
+        datetime created_at
+        datetime updated_at
+    }
+
+    clients ||--o{ price_rules : "overrides for"
+    packages ||--o{ price_rules : "priced by"
+    pricing_groups ||--o{ price_rules : "scoped to"
+    provider_accounts ||--o{ price_rules : "scoped to"
+    countries ||--o{ price_rules : "scoped to"
+    currencies ||--o{ price_rules : "priced in"
+```
+
+One `(client, package)` override table keyed by up to 7 nullable dimensions (null = wildcard).
+`UNIQUE (package_id, pricing_group_id, country_code, provider_account_id, payment_method,
+purchase_type, subscription_interval, currency_code)`. Layered *after* the Phase 13 base price:
+`PriceRuleResolver` picks the most-specific matching rule (most matched dimensions → fixed
+dimension priority → highest `id`). An available winner replaces the amount
+(`ResolvedPrice.source = dimension_override`); an `is_available = 0` winner fails the resolve
+with `pricing.combination_unavailable` (no fallback). `GET /api/v1/pricing/resolve` gains
+`method` / `purchase_type` / `interval` query params. `local-dev` seeds a `pro` Stripe+EUR rule
+(€27) and a `pro` US-group yearly-subscription unavailable rule.

@@ -16,6 +16,196 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 14 — Pricing overrides & resolution engine
+
+### Q5 — Resolver / DTO / API changes + CRUD surface
+
+**Question:** How does the override layer surface, and how are rules managed?
+
+**Options:**
+
+1. **`PriceResolver` gains dimension params; dedicated `PriceRuleResolver`; `/pricing/resolve`
+   takes the params, `/packages` stays base-price; `SetPriceRule` / `DeletePriceRule` /
+   `ListPriceRules` + `pricing:*` CLI + seeder.**
+2. Same, but `/packages` also becomes context-specific. Over-scopes the browse endpoint.
+3. Fold rule resolution inline — precedence not testable in isolation, not reusable by Phase 17.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — dedicated `PriceRuleResolver`; `PriceResolver` gains
+`?method` / `?purchaseType` / `?interval`; `/pricing/resolve` gains those query params;
+`/packages` stays base; `SetPriceRule` / `DeletePriceRule` / `ListPriceRules` + `pricing:*` CLI +
+seeder demo
+
+**Status:** Decided
+
+**Decision Notes:**
+- `PriceRuleResolver::resolve(int clientId, int packageId, PriceRuleContext $ctx):
+  ?PriceRuleMatch` — `$ctx` = `{ pricingGroupId, country, providerAccountId?, paymentMethod?,
+  purchaseType?, subscriptionInterval?, currency? }`. Returns the winning rule (or null → no
+  override). Precedence per Q3.
+- `PriceResolver::resolve(clientId, packageId, country, ?deviceType, ?method, ?purchaseType,
+  ?interval)`: unchanged Phase 13 flow (group → group-package status → base/convert/override) →
+  then `PriceRuleResolver` with the resolved `pricingGroupId` + the request context. Winning
+  rule `is_available = 0` → `pricing.combination_unavailable`. `is_available = 1` → its amount,
+  `source = dimension_override`. No rule → the Phase 13 result unchanged.
+- `PriceSource` gains `DimensionOverride = 'dimension_override'`. `ResolvedPrice` gains
+  `?appliedRuleId` + `list<string> $appliedDimensions` (the pinned dimension names).
+- Use cases (audited `price_rule.*`): `SetPriceRule` (upsert on the 7-tuple; validates the
+  group / country / provider account belong to the client, method/type/interval enums,
+  interval only with subscription/recurring purchase type, `is_available`/amount consistency,
+  currency = group currency when the rule doesn't pin its own), `DeletePriceRule` (by id).
+- Read: `PriceRuleDirectory` + `PriceRuleSummary`; `bin/{SetPriceRule,DeletePriceRule,ListPriceRules}.php`
+  (`composer pricing:set-rule` / `:delete-rule` / `:list-rules`).
+- HTTP: `GET /api/v1/pricing/resolve` gains `method` / `purchase_type` / `interval` query
+  params. `GET /api/v1/packages` unchanged (base-price browse list).
+- `PricingSeeder` gains: `pro` + `provider_account = stripe-test` → €27.00 (a card-fee discount
+  demo) and `pro` + `subscription_interval = yearly` → `is_available = 0` in the `us` group
+  (an unavailable-combo demo).
+
+### Q4 — Unavailable combinations
+
+**Question:** "a disabled combination resolves to 'unavailable', never a wrong price."
+
+**Options:**
+
+1. **`is_available` flag on `price_rules`; the winning (most-specific) rule decides.**
+   `is_available = 0` ⇒ amount NULL; if that rule wins, resolution returns a hard
+   `pricing.combination_unavailable` — no fallback to a less-specific rule or the group base.
+2. **Separate `price_exclusions` table** — duplicate dimension columns, second precedence computation.
+3. **Reuse only Phase 13 `pricing_group_packages.status = disabled`** — no per-dimension
+   unavailability; can't say "sold, but not via Ziraat".
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `is_available` on `price_rules`; a most-specific matching
+`is_available = 0` rule → `pricing.combination_unavailable`, never a downgrade
+
+**Status:** Decided
+
+**Decision Notes:**
+- `is_available TINYINT(1) NOT NULL DEFAULT 1`. `= 0` ⇒ `amount_minor` + `currency_code` forced
+  NULL (domain guard).
+- Resolver: after selecting the winning rule (Q3), if `is_available = 0` → `Result::err(
+  DomainError::unsupported('pricing.combination_unavailable', …, context: the pinned
+  dimensions))`. If `is_available = 1` → use the rule's amount (`PriceSource::DimensionOverride`).
+- A less-specific *available* rule does **not** rescue an unavailable more-specific match — the
+  precedence sort already put the specific rule first; the resolver reads only the winner.
+- `pricing_group_packages.status = disabled` (Phase 13) stays as the coarse "not in this group
+  at all" switch and is checked first, before rules.
+
+### Q3 — Precedence: how is "most specific" decided?
+
+**Question:** Two matching rules can pin different dimensions. Resolution must be a deterministic
+total order.
+
+**Options:**
+
+1. **Matched-dimension count → fixed dimension-priority list → newest rule id.**
+2. **Weighted score** (powers of two per dimension). Functionally identical, less legible.
+3. **Explicit `priority` integer per rule.** Operator sets it; loses automatic specificity.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — score = count of matched non-null dimensions (higher wins); tie → the
+rule pinning the earlier dimension in the fixed priority order wins; still tied → highest `id`
+
+**Status:** Decided
+
+**Decision Notes:**
+- **Dimension priority order** (most specific first, for the tie-break):
+  `subscription_interval` > `purchase_type` > `payment_method` > `provider_account_id` >
+  `currency_code` > `country_code` > `pricing_group_id`.
+- `PriceRuleResolver`: load the client+package's rules, keep those where every non-null dimension
+  matches the request, sort by `[matchedCount DESC, tieBreakVector DESC, id DESC]`, take the
+  first. `tieBreakVector` = for each dimension in priority order, `1` if the rule pins it else
+  `0`.
+- No matching rule → fall through to the Phase 13 group-package base price (unchanged behaviour).
+- Documented in `database-design.md` §Pricing overrides and in the `PriceRuleResolver` docblock;
+  the exit "precedence matrix" test enumerates the ordering.
+
+### Q2 — The dimension set, and how "subscription interval" is modelled
+
+**Question:** Which dimensions does `price_rules` carry, and what is `subscription_interval`?
+
+**Options:**
+
+1. **7 dimensions; `subscription_interval` = a new `SubscriptionInterval` enum**
+   (`pricing_group_id`, `country_code`, `provider_account_id`, `payment_method`, `purchase_type`,
+   `subscription_interval` [`monthly`/`quarterly`/`yearly`], `currency_code` as a filter).
+2. **6 dimensions; no `subscription_interval` yet** — add it with Subscriptions (Phase 20).
+3. **5 dimensions; `country` only via `pricing_group_id`** — a country override needs a whole
+   pricing group.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — 7 dimensions; new `SubscriptionInterval` enum
+(`monthly` / `quarterly` / `yearly`), string-stored like `PurchaseType`; `country_code` is a
+first-class rule dimension; `currency_code` is a niche filter (normally NULL)
+
+**Status:** Decided
+
+**Decision Notes:**
+- New `Gomrok\Modules\Pricing\Domain\SubscriptionInterval` backed enum:
+  `Monthly = 'monthly'`, `Quarterly = 'quarterly'`, `Yearly = 'yearly'`. Reused by the
+  Subscriptions module (Phase 20). Not a lookup table — app-enforced, like `PurchaseType` /
+  `PaymentMethod`.
+- Rule dimensions (all nullable = wildcard): `pricing_group_id`, `country_code`,
+  `provider_account_id`, `payment_method`, `purchase_type`, `subscription_interval`,
+  `currency_code`.
+- `currency_code` as a dimension: only meaningful when a rule targets a currency different from
+  the resolved group's; normally NULL. Still validated against `currencies`.
+- `subscription_interval` is only ever set on a rule whose `purchase_type` is `subscription` or
+  `recurring_payment` (validated in the handler; not a DB constraint).
+
+### Q1 — How are the dimension overrides stored?
+
+**Question:** Phase 14 adds price overrides by currency / provider / payment method / purchase
+type / subscription interval / country. `CLAUDE.md`: "more specific valid rule wins."
+
+**Options:**
+
+1. **One `price_rules` table with nullable dimension columns + specificity resolution.**
+   `(client_id, package_id, pricing_group_id NULL, country_code NULL, provider_account_id NULL,
+   payment_method NULL, purchase_type NULL, subscription_interval NULL, amount_minor NULL,
+   currency_code NULL, is_available)`. A rule matches a request when every non-null dimension
+   equals the request; the most specific matching rule wins. One table, one resolver, one
+   documented precedence.
+2. **A table per dimension** (`package_provider_prices`, `package_method_prices`,
+   `package_purchase_type_prices`, …). Typed FKs per table, but precedence *across* tables is
+   bespoke and every new dimension is a new table + migration + resolver branch.
+3. **JSON rule array on the `pricing_group_packages` row.** No new table. But un-queryable,
+   un-indexable, and the precedence logic lives in PHP over decoded JSON.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — one `price_rules` table with nullable dimension columns; a rule matches
+when every non-null dimension equals the request, most-specific match wins
+
+**Status:** Decided
+
+**Decision Notes:**
+- `price_rules (id, client_id → clients.id CASCADE, package_id → packages.id CASCADE,
+  pricing_group_id → pricing_groups.id CASCADE NULL, country_code CHAR(2) → countries.code
+  RESTRICT NULL, provider_account_id → provider_accounts.id CASCADE NULL, payment_method
+  VARCHAR(20) NULL, purchase_type VARCHAR(20) NULL, subscription_interval VARCHAR(20) NULL,
+  amount_minor BIGINT UNSIGNED NULL, currency_code CHAR(3) → currencies.code RESTRICT NULL,
+  is_available TINYINT(1) NOT NULL DEFAULT 1, created_at, updated_at)`.
+- **Match:** a rule applies to a request iff every non-null dimension column equals the request's
+  value for that dimension. NULL = wildcard.
+- **Uniqueness:** `UNIQUE` on the full dimension tuple
+  `(package_id, pricing_group_id, country_code, provider_account_id, payment_method,
+  purchase_type, subscription_interval)` — one rule per exact combination (NULLs distinct in
+  MySQL, so a partial-unique app guard also rejects a duplicate all-null-but-one). Set via
+  upsert.
+- **Amount:** `is_available = 1` ⇒ `amount_minor` + `currency_code` set, `currency_code` = the
+  resolved pricing group's currency; `is_available = 0` ⇒ both NULL (this combination is not
+  sold — resolution fails, never falls back — see Q4).
+- Indexes: `(client_id, package_id)`, `(provider_account_id)`, `(pricing_group_id)`.
+- Specificity / tie-break: Q3. Which dimensions + how `subscription_interval` is modelled: Q2.
+
+---
+
 ## Phase 13 — Pricing module: default prices & pricing groups
 
 ### Q5 — CRUD surface

@@ -7,6 +7,59 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-10 — Phase 14: Pricing overrides & resolution engine
+
+**Summary.** The override layer above the Phase 13 base price: one `price_rules` table keyed by
+7 nullable dimensions (`pricing_group_id`, `country_code`, `provider_account_id`,
+`payment_method`, `purchase_type`, `subscription_interval`, `currency_code`; null = wildcard),
+each row either overriding `amount_minor` or marking the combination not for sale
+(`is_available = 0`). A dedicated `PriceRuleResolver` picks the winner — most matched dimensions
+→ fixed dimension priority (`subscription_interval > purchase_type > payment_method >
+provider_account_id > currency_code > country_code > pricing_group_id`) → highest `id`.
+`PriceResolver` runs it after the base price; an unavailable winner is a hard
+`pricing.combination_unavailable` with **no fallback**. Decisions
+(`PhaseResults/PhaseDecisions.md` Phase 14 Q1–Q5): single table w/ nullable dimensions · 7
+dimensions + new `SubscriptionInterval` enum · matched-count → dimension-priority → id · row-level
+`is_available`, no fallback · dedicated resolver + `/pricing/resolve` query params + CLI + seeder.
+**Schema confirmed by the user.**
+
+**Files created**
+- Migration `20260910150001_create_price_rules_table.php` → `CreatePriceRulesTable`.
+- Pricing domain: `SubscriptionInterval` enum, `PriceRule` aggregate (`DIMENSIONS`, `validate`,
+  `matches`, `pinnedDimensions`, `specificity`, `tieBreak`), `PriceRuleRepository` port.
+- Pricing application: `PriceRuleContext`, `PriceRuleResolver`, `PriceRuleAuditSnapshot`,
+  `PriceRuleSummary`, `PriceRuleDirectory`, `SetPriceRule/{Command,Result,Handler}`,
+  `DeletePriceRule/DeletePriceRuleHandler`. `PriceSource::DimensionOverride`;
+  `ResolvedPrice::withRule` + `appliedRuleId` / `appliedDimensions`.
+- Pricing infrastructure: `PdoPriceRuleRepository` (null-safe `<=>` upsert), `PdoPriceRuleDirectory`.
+- CLI: `bin/{SetPriceRule,DeletePriceRule,ListPriceRules}.php` + `composer pricing:set-rule|delete-rule|list-rules`.
+- Tests: `PriceRuleTest`, `PriceRuleResolverTest`, `PriceRuleHandlersTest`; +2 `PriceResolverTest`
+  cases; support double `InMemoryPriceRuleRepository`.
+- `.claude/PhaseResults/Phase14Result.md`.
+
+**Files changed**
+- `src/Modules/Pricing/Application/PriceResolver.php` (new `PriceRuleResolver` ctor dep + `applyRules`),
+  `PriceSource.php`, `ResolvedPrice.php`, `Infrastructure/definitions.php`.
+- `src/Http/Api/PricingResolveAction.php` — `method` / `purchase_type` / `interval` query params
+  + `applied_rule_id` / `applied_dimensions` in the response.
+- `src/Database/Seeds/PricingSeeder.php` — two `pro` price rules.
+- `tests/Integration/{MigrationRoundTripTest,PricingPersistenceTest}.php`;
+  `tests/Unit/{Http/PackagesApiTest,Modules/Pricing/Application/PriceCatalogTest}.php`.
+- `composer.json` / `composer.lock`.
+- DB docs (`database-design.md` → 36 tables, `database-diagram.md` + `.html` 12/12 mermaid,
+  `db_explain.md`); `Architecture.md` (§8 Pricing, §9 PRICE pipeline); `Phases.md` (row 14 → ☑);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D17).
+
+**Reason.** Phase 14 of the 30-phase plan.
+
+**Migration notes.** 1 new table, additive; no existing-table changes; no backfill. The 8-column
+unique index is NULL-distinct, so upserts use a null-safe lookup rather than `ON DUPLICATE KEY`.
+Dimension ownership + group/currency agreement are handler-enforced.
+
+**Breaking changes.** None. `PriceResolver::__construct` gains a `PriceRuleResolver` argument and
+`resolve()` gains four optional trailing parameters — internal, all call sites updated.
+
 ## 2026-09-10 — Phase 13: Pricing module — default prices & pricing groups
 
 **Summary.** The baseline of Gomrok pricing: priority-ordered pricing groups, one baseline price

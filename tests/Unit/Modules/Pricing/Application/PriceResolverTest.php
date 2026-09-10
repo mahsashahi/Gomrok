@@ -6,17 +6,23 @@ namespace Gomrok\Tests\Unit\Modules\Pricing\Application;
 
 use DateTimeImmutable;
 use Gomrok\Modules\Pricing\Application\PriceResolver;
+use Gomrok\Modules\Pricing\Application\PriceRuleResolver;
 use Gomrok\Modules\Pricing\Application\PriceSource;
 use Gomrok\Modules\Pricing\Application\ResolvedPrice;
 use Gomrok\Modules\Pricing\Domain\ClientExchangeRate;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePrice;
+use Gomrok\Modules\Pricing\Domain\PriceRule;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupPackage;
 use Gomrok\Modules\Pricing\Domain\PricingGroupSlug;
 use Gomrok\Modules\Pricing\Domain\PricingRowStatus;
+use Gomrok\Modules\Pricing\Domain\SubscriptionInterval;
+use Gomrok\Modules\Providers\Domain\PaymentMethod;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
 use Gomrok\Tests\Support\InMemoryDefaultPackagePriceRepository;
+use Gomrok\Tests\Support\InMemoryPriceRuleRepository;
 use Gomrok\Tests\Support\InMemoryPricingGroupPackageRepository;
 use Gomrok\Tests\Support\InMemoryPricingGroupRepository;
 use Gomrok\Tests\Support\StubPackageDirectory;
@@ -32,6 +38,7 @@ final class PriceResolverTest extends TestCase
     private InMemoryPricingGroupPackageRepository $rows;
     private InMemoryDefaultPackagePriceRepository $defaults;
     private InMemoryClientExchangeRateRepository $rates;
+    private InMemoryPriceRuleRepository $priceRules;
     private StubPackageDirectory $packages;
     private PriceResolver $resolver;
     private DateTimeImmutable $now;
@@ -43,6 +50,7 @@ final class PriceResolverTest extends TestCase
         $this->rows = new InMemoryPricingGroupPackageRepository();
         $this->defaults = new InMemoryDefaultPackagePriceRepository();
         $this->rates = new InMemoryClientExchangeRateRepository();
+        $this->priceRules = new InMemoryPriceRuleRepository();
         $this->packages = (new StubPackageDirectory())->add(self::PACKAGE, self::CLIENT, 'pro', 'Pro');
         $this->resolver = new PriceResolver(
             $this->groups,
@@ -50,6 +58,7 @@ final class PriceResolverTest extends TestCase
             $this->defaults,
             $this->rates,
             $this->packages,
+            new PriceRuleResolver($this->priceRules),
             new FrozenClock('2026-09-10T12:00:00+00:00'),
         );
         $this->defaults->save(new DefaultPackagePrice(self::PACKAGE, 2900, 'EUR'));
@@ -159,6 +168,77 @@ final class PriceResolverTest extends TestCase
         $price = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE'));
 
         self::assertSame('eu', $price->pricingGroupSlug);
+    }
+
+    #[Test]
+    public function anAvailablePriceRuleOverridesTheBaseAmount(): void
+    {
+        $this->group('default', priority: 0, countries: [], currency: 'EUR', isDefault: true);
+        $this->priceRules->save(PriceRule::create(
+            self::CLIENT,
+            self::PACKAGE,
+            null,
+            null,
+            null,
+            PaymentMethod::Card,
+            null,
+            null,
+            'EUR',
+            true,
+            2500,
+            $this->now,
+        ));
+
+        $withCard = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, PaymentMethod::Card));
+        $noMethod = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE'));
+
+        self::assertSame(2500, $withCard->amountMinor);
+        self::assertSame(PriceSource::DimensionOverride, $withCard->source);
+        self::assertSame(['payment_method', 'currency_code'], $withCard->appliedDimensions);
+        self::assertSame(2900, $noMethod->amountMinor); // rule pins card → not matched
+    }
+
+    #[Test]
+    public function aMostSpecificUnavailableRuleFailsWithoutFallback(): void
+    {
+        $this->group('default', priority: 0, countries: [], currency: 'EUR', isDefault: true);
+        // general "subscription: €20" ...
+        $this->priceRules->save(PriceRule::create(
+            self::CLIENT,
+            self::PACKAGE,
+            null,
+            null,
+            null,
+            null,
+            PurchaseType::Subscription,
+            null,
+            'EUR',
+            true,
+            2000,
+            $this->now,
+        ));
+        // ... but "subscription + yearly: unavailable" is more specific
+        $this->priceRules->save(PriceRule::create(
+            self::CLIENT,
+            self::PACKAGE,
+            null,
+            null,
+            null,
+            null,
+            PurchaseType::Subscription,
+            SubscriptionInterval::Yearly,
+            null,
+            false,
+            null,
+            $this->now,
+        ));
+
+        $monthly = $this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, null, PurchaseType::Subscription, SubscriptionInterval::Monthly);
+        $yearly = $this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, null, PurchaseType::Subscription, SubscriptionInterval::Yearly);
+
+        self::assertSame(2000, $this->priceOf($monthly)->amountMinor);
+        self::assertTrue($yearly->isErr());
+        self::assertSame('pricing.combination_unavailable', $yearly->error()->code);
     }
 
     /**

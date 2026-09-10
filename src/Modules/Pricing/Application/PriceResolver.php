@@ -11,6 +11,9 @@ use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupPackageRepository;
 use Gomrok\Modules\Pricing\Domain\PricingGroupRepository;
 use Gomrok\Modules\Pricing\Domain\PricingRowStatus;
+use Gomrok\Modules\Pricing\Domain\SubscriptionInterval;
+use Gomrok\Modules\Providers\Domain\PaymentMethod;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Shared\Domain\Currency;
 use Gomrok\Shared\Domain\DomainError;
 use Gomrok\Shared\Domain\Money;
@@ -18,10 +21,13 @@ use Gomrok\Shared\Domain\Result;
 use Psr\Clock\ClockInterface;
 
 /**
- * Resolves the Phase 13 baseline price for a package in a market context:
- * pricing group match (priority, device, `is_default` last) → group-package row
- * (or implicit `default`) → baseline / client-rate conversion / group override.
- * A `disabled` row → the package is unavailable in that group.
+ * Resolves the price for a package in a market context:
+ *   1. pricing group match (Phase 13 — priority, device, `is_default` last);
+ *   2. group-package row status (Phase 13 — `disabled` → unavailable);
+ *   3. base amount (Phase 13 — baseline / client-rate conversion / group override);
+ *   4. most-specific matching `price_rules` row (Phase 14) — an available rule
+ *      overrides the amount (`source = dimension_override`); an unavailable rule
+ *      → hard `pricing.combination_unavailable`, never a fallback.
  */
 final readonly class PriceResolver
 {
@@ -31,6 +37,7 @@ final readonly class PriceResolver
         private DefaultPackagePriceRepository $defaults,
         private ClientExchangeRateRepository $rates,
         private PackageDirectory $packages,
+        private PriceRuleResolver $priceRules,
         private ClockInterface $clock,
     ) {
     }
@@ -38,8 +45,16 @@ final readonly class PriceResolver
     /**
      * @return Result ok({@see ResolvedPrice}) | err({@see DomainError})
      */
-    public function resolve(int $clientId, int $packageId, string $country, ?string $deviceType = null): Result
-    {
+    public function resolve(
+        int $clientId,
+        int $packageId,
+        string $country,
+        ?string $deviceType = null,
+        ?PaymentMethod $method = null,
+        ?PurchaseType $purchaseType = null,
+        ?SubscriptionInterval $interval = null,
+        ?int $providerAccountId = null,
+    ): Result {
         $package = $this->packages->findById($packageId);
         if ($package === null || $package->clientId !== $clientId) {
             return Result::err(DomainError::notFound('package.not_found', "Package {$packageId} was not found for this client."));
@@ -54,7 +69,56 @@ final readonly class PriceResolver
             ));
         }
 
-        return $this->priceForGroup($group, $packageId, $package->code, $package->name, $package->badge, $package->highlighted);
+        $base = $this->priceForGroup($group, $packageId, $package->code, $package->name, $package->badge, $package->highlighted);
+        if ($base->isErr()) {
+            return $base;
+        }
+
+        $resolved = $base->value();
+        \assert($resolved instanceof ResolvedPrice);
+        $groupId = $group->id();
+        \assert($groupId !== null);
+
+        return $this->applyRules($resolved, $clientId, $packageId, new PriceRuleContext(
+            $groupId,
+            strtoupper(trim($country)),
+            $group->currencyCode(),
+            $providerAccountId,
+            $method,
+            $purchaseType,
+            $interval,
+        ));
+    }
+
+    /**
+     * @return Result ok({@see ResolvedPrice}) | err({@see DomainError})
+     */
+    private function applyRules(ResolvedPrice $base, int $clientId, int $packageId, PriceRuleContext $context): Result
+    {
+        $rule = $this->priceRules->resolve($clientId, $packageId, $context);
+        if ($rule === null) {
+            return Result::ok($base);
+        }
+
+        if (!$rule->isAvailable()) {
+            return Result::err(DomainError::unsupported(
+                'pricing.combination_unavailable',
+                "Package '{$base->packageCode}' is not available for this combination.",
+                [
+                    'package' => $base->packageCode,
+                    'pinned' => implode(',', $rule->pinnedDimensions()),
+                    'rule_id' => $rule->id(),
+                ],
+            ));
+        }
+
+        $amountMinor = $rule->amountMinor();
+        \assert($amountMinor !== null);
+        $money = Money::fromMinor($amountMinor, Currency::of($base->currencyCode));
+        $ruleId = $rule->id();
+        \assert($ruleId !== null);
+
+        return Result::ok($base->withRule($amountMinor, $money->amount(), $ruleId, $rule->pinnedDimensions()));
     }
 
     public function resolveGroup(int $clientId, string $country, ?string $deviceType): ?PricingGroup

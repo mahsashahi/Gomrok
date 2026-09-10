@@ -318,10 +318,10 @@ and the provider-type declaration (Phase 8) — reject, never downgrade. `packag
 creation lands with each adapter (Phases 21–23). Editing a package flips its `synced` definitions
 to `drift` in-transaction.
 
-### Pricing (Phase 13 — baseline)
+### Pricing (Phase 13 — baseline, Phase 14 — dimension overrides)
 
-`Modules/Pricing`. The baseline of the pricing pipeline; Phase 14 layers dimension overrides,
-15 the A/B factor, 16–17 vouchers, 18 tax/fee.
+`Modules/Pricing`. The baseline of the pricing pipeline plus its override layer; Phase 15 adds
+the A/B factor, 16–17 vouchers, 18 tax/fee.
 
 - **`pricing_groups`** — priority-ordered country grouping *for pricing* (separate from Phase 10
   provider groups). A country may be in several groups; the lowest `priority` wins, so a
@@ -334,10 +334,22 @@ to `drift` in-transaction.
   `display_order`. No row = implicit `default`.
 - **`PriceResolver`** — group match → row → baseline / convert / override → `ResolvedPrice`
   (`source` = `baseline` / `converted` / `group_override`). **`PriceCatalog`** wraps
-  `PackageCatalog` and attaches a price to each package.
-- **HTTP:** `GET /api/v1/packages?country=…` (resolved catalogue) and
-  `GET /api/v1/pricing/resolve?package=…&country=…` (one price) — client-authenticated; mounted
-  this phase. Gomrok never trusts a client-supplied price.
+  `PackageCatalog` and attaches a base price to each package (browse list — no dimension rules).
+- **`price_rules` (Phase 14)** — one `(client, package)` override table keyed by 7 nullable
+  dimensions (`pricing_group_id`, `country_code`, `provider_account_id`, `payment_method`,
+  `purchase_type`, `subscription_interval`, `currency_code`; null = wildcard). Each rule either
+  overrides `amount_minor` (`is_available = 1`) or marks the combination not for sale
+  (`is_available = 0`). **`PriceRuleResolver`** picks the winner — most matched dimensions →
+  fixed dimension priority (`subscription_interval > purchase_type > payment_method >
+  provider_account_id > currency_code > country_code > pricing_group_id`) → highest `id`. An
+  available winner sets `ResolvedPrice.source = dimension_override` (+ `applied_rule_id` /
+  `applied_dimensions`); an unavailable winner → `pricing.combination_unavailable`, **no
+  fallback**. `PriceResolver::applyRules` runs this after the base price. Set via
+  `bin/SetPriceRule.php` / `DeletePriceRule.php` / `ListPriceRules.php`.
+- **HTTP:** `GET /api/v1/packages?country=…` (resolved catalogue, base prices) and
+  `GET /api/v1/pricing/resolve?package=…&country=…&method=…&purchase_type=…&interval=…` (one
+  price, dimension rules applied) — client-authenticated. Gomrok never trusts a client-supplied
+  price.
 
 ## 9. Resolution pipelines (sketch)
 
@@ -358,16 +370,20 @@ PACKAGE LIST
         → (group, package) row: status default / override / disabled
         → baseline / convert via client_exchange_rates / group override
         → ResolvedPrice (amount, currency, source, effective name/badge/highlighted)
+        (PriceCatalog browse list stops here — no dimension rules)
     → price list assignment (stable hash of user id)          [Phase 15]
 
-PRICE
+PRICE  (GET /api/v1/pricing/resolve — PriceResolver)
   1. client + package
-  2. package default price
-  3. country / pricing-group override
-  4. currency / provider / payment-method / purchase-type / interval override  (more specific wins)
-  5. voucher eligibility check
+  2. package default price (default_package_prices)
+  3. pricing-group match + (group, package) row  →  baseline / converted / group_override
+  4. price_rules: most-specific matching rule                [Phase 14]
+       - available rule  → override amount (source = dimension_override)
+       - unavailable rule → pricing.combination_unavailable (hard stop, no fallback)
+       - precedence: matched-dimension count → fixed dimension priority → highest id
+  5. voucher eligibility check                               [Phase 16–17]
   6. apply voucher discount
-  7. tax / fee rules (if any)
+  7. tax / fee rules (if any)                                [Phase 18]
   8. final payable amount  → snapshot
 
 PROVIDER

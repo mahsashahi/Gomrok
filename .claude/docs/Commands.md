@@ -133,7 +133,21 @@ composer pricing:set-default-price -- --client=televika --package=pro --amount-m
 composer pricing:set-rate -- --client=televika --base=EUR --quote=USD --rate=1.08 [--from="2026-01-01T00:00:00Z"]
 composer pricing:set-group-package -- --client=televika --group=dach --package=pro --status=override --amount-minor=2400 --currency=EUR [--name="Pro (DACH)" --order=1]
 composer pricing:list -- --client=televika
+
+# Price rules — dimension overrides (Phase 14)
+composer pricing:set-rule -- --client=televika --package=pro --method=card --currency=EUR --amount-minor=2500
+composer pricing:set-rule -- --client=televika --package=pro --group=us --purchase-type=subscription --interval=yearly --unavailable
+composer pricing:list-rules -- --client=televika --package=pro
+composer pricing:delete-rule -- --client=televika --rule=42
 ```
+
+A **price rule** is a `(client, package)` override keyed by any subset of 7 dimensions
+(`--group`, `--country`, `--provider-account`, `--method`, `--purchase-type`,
+`--interval`, `--currency`); an unset dimension is a wildcard. `--unavailable` marks the
+combination not for sale (omit `--amount-minor`). At resolve time the **most-specific** matching
+rule wins (most pinned dimensions → fixed dimension priority → newest); an unavailable winner
+returns `pricing.combination_unavailable` with no fallback. An available rule needs `--group` or
+`--currency` pinned. Rules apply on `/pricing/resolve`, not on the `/packages` browse list.
 
 Pricing groups are **priority-ordered and overlapping** — lowest `priority` wins, `is_default`
 (created with `--default`, no countries) is always last. A `status=default` group in a currency
@@ -143,12 +157,15 @@ its own amount in the group currency; `status=disabled` hides the package in tha
 ```bash
 # Client-facing catalogue (Phase 13)
 curl -s '.../api/v1/packages?country=DE&device=ios' -H 'Authorization: Bearer gk_...'
-curl -s '.../api/v1/pricing/resolve?package=pro&country=DE' -H 'Authorization: Bearer gk_...'
+curl -s '.../api/v1/pricing/resolve?package=pro&country=DE&method=card&purchase_type=subscription&interval=yearly' -H 'Authorization: Bearer gk_...'
 ```
 
-`GET /api/v1/packages` returns the availability + purchase capabilities + **resolved price** per
-package. `GET /api/v1/pricing/resolve` returns one price. Gomrok never trusts a client-supplied
-price. (Phase 14 refines the number with override dimensions; Phase 15 adds A/B lists.)
+`GET /api/v1/packages` returns the availability + purchase capabilities + **resolved base price**
+per package (no dimension rules). `GET /api/v1/pricing/resolve` returns one price with Phase 14
+`price_rules` applied — the optional `method` / `purchase_type` / `interval` query params feed
+the rule match, and the response `price` object carries `applied_rule_id` + `applied_dimensions`.
+An unavailable combination returns `422 pricing.combination_unavailable`. Gomrok never trusts a
+client-supplied price. (Phase 15 adds A/B lists.)
 
 Provider secrets are encrypted with `APP_ENCRYPTION_KEY` — set it before creating accounts
 (`php -r 'echo base64_encode(random_bytes(32));'`). Secrets are printed once at most, never by

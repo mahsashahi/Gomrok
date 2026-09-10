@@ -37,9 +37,10 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Packages — catalog & availability (Phase 11) | `packages`, `package_countries`, `package_currencies`, `package_payment_methods`, `package_provider_accounts` — **5** |
 | Packages — capabilities & provider defs (Phase 12) | `package_purchase_capabilities`, `package_country_purchase_capabilities`, `package_provider_definitions` — **3** (+ `badge` / `highlighted` / `client_package_id` columns on `packages`) |
 | Pricing — groups & default prices (Phase 13) | `pricing_groups`, `pricing_group_countries`, `default_package_prices`, `client_exchange_rates`, `pricing_group_packages` — **5** |
-| — | (more business tables land per module from Phase 14) |
+| Pricing — dimension overrides (Phase 14) | `price_rules` — **1** |
+| — | (more business tables land per module from Phase 15) |
 
-**Total: 35 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 36 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -616,8 +617,8 @@ transaction. Provider-API product creation is **not** implemented — Phases 21�
 
 ## Pricing — groups & default prices (Phase 13)
 
-The **baseline** of pricing — Phase 14 layers dimension overrides, Phase 15 A/B lists, 16–17
-vouchers. All client-scoped.
+The **baseline** of pricing — Phase 14 (`price_rules`, below) layers dimension overrides,
+Phase 15 A/B lists, 16–17 vouchers. All client-scoped.
 
 ### `pricing_groups` (Q1)
 
@@ -693,6 +694,65 @@ else convert via the client's rate → `converted` (or `pricing.no_exchange_rate
 
 ---
 
+## Pricing — dimension overrides (Phase 14)
+
+### `price_rules`
+
+One table of `(client, package)` price overrides keyed by up to **7 nullable dimensions**. A
+null dimension is a wildcard. A rule either overrides the amount (`is_available = 1`, amount set)
+or marks the combination **not for sale** (`is_available = 0`, amount NULL). Layered *after* the
+Phase 13 base price: the base amount is resolved first, then the most-specific matching rule (if
+any) replaces it or fails the resolve.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `pricing_group_id` | INT UNSIGNED | yes | FK → `pricing_groups(id)` CASCADE — dimension |
+| `country_code` | CHAR(2) | yes | FK → `countries(code)` RESTRICT — dimension |
+| `provider_account_id` | INT UNSIGNED | yes | FK → `provider_accounts(id)` CASCADE — dimension |
+| `payment_method` | VARCHAR(20) | yes | `PaymentMethod` value — dimension |
+| `purchase_type` | VARCHAR(20) | yes | `PurchaseType` value — dimension |
+| `subscription_interval` | VARCHAR(20) | yes | `SubscriptionInterval` (`monthly`/`quarterly`/`yearly`) — dimension; requires a subscription/recurring `purchase_type` |
+| `currency_code` | CHAR(3) | yes | FK → `currencies(code)` RESTRICT — dimension |
+| `is_available` | TINYINT(1) | no | default `1`; `0` ⇒ combination unavailable |
+| `amount_minor` | BIGINT UNSIGNED | yes | set iff `is_available = 1` |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (package_id, pricing_group_id, country_code, provider_account_id, payment_method,
+purchase_type, subscription_interval, currency_code)` = `uniq_price_rules_dimensions` (NULLs are
+distinct in MySQL, so the upsert path uses a null-safe `<=>` lookup, not `ON DUPLICATE KEY`);
+`INDEX (client_id, package_id)`, `INDEX (provider_account_id)`, `INDEX (pricing_group_id)`.
+
+**Domain guards (`PriceRule::validate`):** `subscription_interval` needs a subscription/recurring
+`purchase_type` (`price_rule.interval_needs_subscription`); available ⇒ amount set
+(`price_rule.amount_required`); available ⇒ at least `pricing_group_id` or `currency_code` pinned
+(`price_rule.needs_group_or_currency`); unavailable ⇒ amount NULL
+(`price_rule.unavailable_has_amount`). **Handler-enforced:** every dimension belongs to the
+client; a pinned group + currency must agree (`price_rule.currency_mismatch`).
+
+### Resolution (`PriceRuleResolver` → `PriceResolver::applyRules`)
+
+The base price (Phase 13) is resolved first, giving the effective pricing group + currency. The
+`PriceRuleContext` (`pricing_group_id`, `country`, `currency`, `?provider_account_id`,
+`?payment_method`, `?purchase_type`, `?subscription_interval`) is matched against
+`price_rules.forClientPackage`: a rule matches when **every** non-null dimension equals the
+request. Winner (Phase 14 Q3):
+
+1. most matched dimensions wins;
+2. tie → fixed dimension priority `subscription_interval > purchase_type > payment_method >
+   provider_account_id > currency_code > country_code > pricing_group_id`;
+3. still tied → highest `id`.
+
+Winner `is_available = 0` → hard `pricing.combination_unavailable` (no fallback to the base
+price). Winner available → its `amount_minor` replaces the base
+(`ResolvedPrice.source = dimension_override`, `applied_rule_id` + `applied_dimensions` set). No
+match → the base price stands. A currency-pinned rule only matches inside a group of that
+currency, so an EUR rule never bleeds into a USD group (the base `converted` price stands there).
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -743,7 +803,8 @@ else convert via the client's rate → `converted` (or `pricing.no_exchange_rate
 | `src/Database/Migrations/20260910140003_create_default_package_prices_table.php` | `Gomrok\Database\Migrations\CreateDefaultPackagePricesTable` |
 | `src/Database/Migrations/20260910140004_create_client_exchange_rates_table.php` | `Gomrok\Database\Migrations\CreateClientExchangeRatesTable` |
 | `src/Database/Migrations/20260910140005_create_pricing_group_packages_table.php` | `Gomrok\Database\Migrations\CreatePricingGroupPackagesTable` |
-| `src/Database/Seeds/PricingSeeder.php` | `Gomrok\Database\Seeds\PricingSeeder` (env-gated: `local-dev` gets default/dach/us groups + baselines + EUR→USD rate) |
+| `src/Database/Migrations/20260910150001_create_price_rules_table.php` | `Gomrok\Database\Migrations\CreatePriceRulesTable` |
+| `src/Database/Seeds/PricingSeeder.php` | `Gomrok\Database\Seeds\PricingSeeder` (env-gated: `local-dev` gets default/dach/us groups + baselines + EUR→USD rate + two `pro` price rules) |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

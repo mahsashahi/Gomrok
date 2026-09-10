@@ -71,6 +71,7 @@ final class PriceCatalogTest extends TestCase
             $defaults,
             new InMemoryClientExchangeRateRepository(),
             $directory,
+            new \Gomrok\Modules\Pricing\Application\PriceRuleResolver(new \Gomrok\Tests\Support\InMemoryPriceRuleRepository()),
             new FrozenClock('2026-09-10T12:00:00+00:00'),
         );
 

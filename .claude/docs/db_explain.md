@@ -360,7 +360,7 @@ nothing). One row per linked `(package, provider account)`, created lazily by
 
 ## Pricing — groups & default prices (Phase 13)
 
-The baseline of pricing. Phase 14 layers dimension overrides, Phase 15 A/B lists. All
+The baseline of pricing. Phase 14 (`price_rules`, below) layers dimension overrides, Phase 15 A/B lists. All
 client-scoped.
 
 ### `pricing_groups`
@@ -403,3 +403,40 @@ Per `(pricing group, package)`. **No row = implicit `status=default`.** `status=
 `highlighted_override` refine the display; `display_order` is the customer-facing position. Set
 by `bin/SetPricingGroupPackage.php`. `PriceResolver` reads all of this and returns a
 `ResolvedPrice` with `source` = `baseline` / `converted` / `group_override`.
+
+---
+
+## Pricing — dimension overrides (Phase 14)
+
+The layer *above* the Phase 13 base price. One table.
+
+### `price_rules`
+
+One `(client, package)` override table keyed by **7 nullable dimensions** — `pricing_group_id`,
+`country_code`, `provider_account_id`, `payment_method`, `purchase_type`,
+`subscription_interval`, `currency_code`. A null dimension is a wildcard. Every non-null
+dimension of a rule must equal the request for the rule to match. `UNIQUE` across all 7
+dimensions + `package_id` (`uniq_price_rules_dimensions`); because MySQL treats NULLs as
+distinct in a unique index, the upsert path (`PdoPriceRuleRepository::findByDimensions`) matches
+with the null-safe `<=>` operator instead of `ON DUPLICATE KEY`.
+
+- **`is_available`** — `1` (default) with `amount_minor` set overrides the price; `0` with
+  `amount_minor` NULL marks the combination **not for sale**.
+- **Domain guards** (`PriceRule::validate`): an interval needs a subscription/recurring
+  `purchase_type`; available needs an amount; available needs a `pricing_group_id` **or**
+  `currency_code` pinned (so a bare "card = €25" rule must also pin a currency); unavailable
+  must not carry an amount.
+- **Handler guards** (`SetPriceRuleHandler`): every dimension is checked to belong to the
+  client (group, provider account, country, currency); a pinned group + currency must agree
+  (`price_rule.currency_mismatch`).
+- **Resolution** — `PriceResolver` resolves the Phase 13 base first (which fixes the pricing
+  group + currency), then `PriceRuleResolver` picks the winning rule: **most matched dimensions**
+  → the fixed dimension priority `subscription_interval > purchase_type > payment_method >
+  provider_account_id > currency_code > country_code > pricing_group_id` → highest `id`. An
+  available winner replaces the amount (`ResolvedPrice.source = dimension_override`,
+  `applied_rule_id` + `applied_dimensions` populated); an unavailable winner fails the resolve
+  with `pricing.combination_unavailable` (**no fallback** to the base price). A currency-pinned
+  rule only matches inside a group of that currency.
+- **Set / removed by** `bin/SetPriceRule.php`, `bin/DeletePriceRule.php`, listed by
+  `bin/ListPriceRules.php`. Exposed through `GET /api/v1/pricing/resolve?...&method=&purchase_type=&interval=`.
+- **Referenced by:** nothing yet (payments snapshot the resolved price from Phase 19+).

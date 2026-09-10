@@ -478,6 +478,33 @@ erDiagram
     pricing_groups ||--o{ pricing_group_packages : "prices"
     packages ||--o{ pricing_group_packages : "priced in"
 </pre>
+
+<h2>Pricing — dimension overrides (Phase 14)</h2>
+<pre class="mermaid">
+erDiagram
+    price_rules {
+        int id PK
+        int client_id FK
+        int package_id FK
+        int pricing_group_id FK
+        char country_code FK
+        int provider_account_id FK
+        varchar payment_method
+        varchar purchase_type
+        varchar subscription_interval
+        char currency_code FK
+        tinyint is_available
+        bigint amount_minor
+        datetime created_at
+        datetime updated_at
+    }
+    clients ||--o{ price_rules : "overrides for"
+    packages ||--o{ price_rules : "priced by"
+    pricing_groups ||--o{ price_rules : "scoped to"
+    provider_accounts ||--o{ price_rules : "scoped to"
+    countries ||--o{ price_rules : "scoped to"
+    currencies ||--o{ price_rules : "priced in"
+</pre>
 </div>
 
 <script>

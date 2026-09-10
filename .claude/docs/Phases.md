@@ -31,7 +31,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 11 | Packages module: catalog & availability | ☑ | 2026-09-09 23:51 | 2026-09-10 00:43 | 4–6h | ~52m | N/A |
 | 12 | Package purchase capabilities & provider definitions | ☑ | 2026-09-10 10:16 | 2026-09-10 13:16 | 4–6h | ~3h | N/A |
 | 13 | Pricing module: default prices & pricing groups | ☑ | 2026-09-10 13:23 | 2026-09-10 13:58 | 4–6h | ~35m | N/A |
-| 14 | Pricing overrides & resolution engine | ☐ | — | — | 6–9h | — | — |
+| 14 | Pricing overrides & resolution engine | ☑ | 2026-09-10 14:04 | 2026-09-10 16:05 | 6–9h | 2h 01m | N/A |
 | 15 | Price lists (A/B) | ☐ | — | — | 3–5h | — | — |
 | 16 | Vouchers module: definitions & eligibility | ☐ | — | — | 4–6h | — | — |
 | 17 | Voucher validation, discount calc & redemption lifecycle | ☐ | — | — | 5–8h | — | — |
@@ -430,16 +430,27 @@ fallback group, cross-currency conversion (29.00 EUR → 31.32 USD @ 1.08) — `
 
 **Goal:** one deterministic price out of many layered rules.
 
-**Scope:**
-- Overrides by currency / provider / payment method / purchase type / subscription interval /
-  country; "more specific valid rule wins".
-- Price resolution pipeline: client + package → default price → country override → dimension
-  overrides → (voucher, tax/fee applied later) → final resolved price. Order documented.
+**As built:**
+- A single `price_rules` table (Q1) keyed by **7 nullable dimensions** (Q2): `pricing_group_id`,
+  `country_code`, `provider_account_id`, `payment_method`, `purchase_type`,
+  `subscription_interval` (new `SubscriptionInterval` enum — monthly/quarterly/yearly),
+  `currency_code`. Null = wildcard. `is_available` + `amount_minor` on the row (Q4).
+- `PriceRuleResolver` (Q5, dedicated class) picks the winner (Q3): most matched dimensions →
+  fixed dimension priority `subscription_interval > purchase_type > payment_method >
+  provider_account_id > currency_code > country_code > pricing_group_id` → highest `id`.
+- `PriceResolver` gains `?method` / `?purchaseType` / `?interval` / `?providerAccountId` and an
+  `applyRules` step after the Phase 13 base price → `ResolvedPrice.source = dimension_override`
+  (+ `applied_rule_id` / `applied_dimensions`), or hard `pricing.combination_unavailable` with
+  **no fallback** when the most-specific matching rule is unavailable.
+- `SetPriceRule` / `DeletePriceRule` use cases + `PriceRuleDirectory` (list); `bin/SetPriceRule.php`,
+  `bin/DeletePriceRule.php`, `bin/ListPriceRules.php` + `composer pricing:set-rule|delete-rule|list-rules`.
+- `GET /api/v1/pricing/resolve` gains `method` / `purchase_type` / `interval` query params;
+  `GET /api/v1/packages` stays base-price only. `PricingSeeder` seeds two `pro` rules.
 
-**DB:** override tables per dimension.
+**DB:** `price_rules` (1 table, migration `20260910150001`).
 
-**Exit:** precedence matrix tested; a disabled combination resolves to "unavailable", never a
-wrong price.
+**Exit:** precedence matrix tested (`PriceRuleResolverTest`, `PriceResolverTest`); a disabled
+combination resolves to `pricing.combination_unavailable`, never a wrong price.
 
 ## Phase 15 — Price lists (A/B)
 

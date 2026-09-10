@@ -67,6 +67,21 @@ final class PricingSeeder extends AbstractSeed
         if ($pro !== null) {
             $this->upsertDefaultPrice($pdo, $pro, 2900, 'EUR', $now);
             $this->upsertGroupPackage($pdo, $dach, $pro, 'override', 2400, 'EUR', $now);
+
+            // Phase 14 price rules: a Stripe card-fee discount, and yearly-in-US unavailable.
+            $pdo->prepare('DELETE FROM price_rules WHERE client_id = :c AND package_id = :p')->execute(['c' => $clientId, 'p' => $pro]);
+            $stripe = $this->scalarId($pdo, 'SELECT id FROM provider_accounts WHERE client_id = :c AND slug = :v', ['c' => $clientId, 'v' => 'stripe-test']);
+            if ($stripe !== null) {
+                $this->upsertPriceRule($pdo, $clientId, $pro, [
+                    'provider_account_id' => $stripe,
+                    'currency_code' => 'EUR',
+                ], true, 2700, $now);
+            }
+            $this->upsertPriceRule($pdo, $clientId, $pro, [
+                'pricing_group_id' => $us,
+                'purchase_type' => 'subscription',
+                'subscription_interval' => 'yearly',
+            ], false, null, $now);
         }
 
         $pdo->prepare(
@@ -131,6 +146,26 @@ final class PricingSeeder extends AbstractSeed
              VALUES (:g, :p, :status, :a, :c, 0, :now, :now)
              ON DUPLICATE KEY UPDATE status = VALUES(status), amount_minor = VALUES(amount_minor), currency_code = VALUES(currency_code), updated_at = VALUES(updated_at)',
         )->execute(['g' => $groupId, 'p' => $packageId, 'status' => $status, 'a' => $amountMinor, 'c' => $currency, 'now' => $now]);
+    }
+
+    /**
+     * @param array<string, scalar> $dimensions
+     */
+    private function upsertPriceRule(PDO $pdo, int $clientId, int $packageId, array $dimensions, bool $isAvailable, ?int $amountMinor, string $now): void
+    {
+        $cols = ['pricing_group_id', 'country_code', 'provider_account_id', 'payment_method', 'purchase_type', 'subscription_interval', 'currency_code'];
+        $params = ['c' => $clientId, 'p' => $packageId, 'avail' => $isAvailable ? 1 : 0, 'amount' => $amountMinor, 'now' => $now];
+        $placeholders = [];
+        foreach ($cols as $col) {
+            $params[$col] = $dimensions[$col] ?? null;
+            $placeholders[] = ":{$col}";
+        }
+
+        $pdo->prepare(
+            'INSERT INTO price_rules
+                (client_id, package_id, ' . implode(', ', $cols) . ', is_available, amount_minor, created_at, updated_at)
+             VALUES (:c, :p, ' . implode(', ', $placeholders) . ', :avail, :amount, :now, :now)',
+        )->execute($params);
     }
 
     /**
