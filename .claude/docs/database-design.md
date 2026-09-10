@@ -38,9 +38,10 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Packages — capabilities & provider defs (Phase 12) | `package_purchase_capabilities`, `package_country_purchase_capabilities`, `package_provider_definitions` — **3** (+ `badge` / `highlighted` / `client_package_id` columns on `packages`) |
 | Pricing — groups & default prices (Phase 13) | `pricing_groups`, `pricing_group_countries`, `default_package_prices`, `client_exchange_rates`, `pricing_group_packages` — **5** |
 | Pricing — dimension overrides (Phase 14) | `price_rules` — **1** |
-| — | (more business tables land per module from Phase 15) |
+| Pricing — A/B price lists (Phase 15) | `price_lists`, `price_list_packages` — **2** |
+| — | (more business tables land per module from Phase 16) |
 
-**Total: 36 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 38 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -751,6 +752,75 @@ price). Winner available → its `amount_minor` replaces the base
 match → the base price stands. A currency-pinned rule only matches inside a group of that
 currency, so an EUR rule never bleeds into a USD group (the base `converted` price stands there).
 
+The `price_rules` step runs **after** the Phase 15 price-list step, so a matching rule overrides
+whatever the assigned A/B list produced.
+
+---
+
+## Pricing — A/B price lists (Phase 15)
+
+Price experiments inside a pricing group. Every group has exactly one **control** list; a
+non-control list shifts the resolved base price by `factor` or (per package) by an exact
+`price_list_packages` amount. The step sits between the Phase 13 base amount and the Phase 14
+`price_rules` step.
+
+> **Deferred:** visitor→list assignment (a `price_list_assignments` table, the deterministic
+> bucketing service, `visitor_ref` endpoint params) is **not** in this phase — Phase 15 Q4/Q5,
+> deferred to Phase 24 (Payment creation flow). Until then every resolve uses the group's
+> control list.
+
+### `price_lists`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `pricing_group_id` | INT UNSIGNED | no | FK → `pricing_groups(id)` CASCADE |
+| `name` | VARCHAR(100) | no | e.g. `List A · control`, `List B · -10%` |
+| `is_control` | TINYINT(1) | no | default `0`; **exactly one `1` per group** (app-enforced) |
+| `factor` | DECIMAL(6,4) | no | default `1.0000`; `> 0`; control is pinned at `1.0000` |
+| `is_enabled` | TINYINT(1) | no | default `1`; control can never be `0` |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (pricing_group_id, name)` = `uniq_price_lists_group_name`; `INDEX (client_id,
+pricing_group_id)`. **App-enforced:** one control per group; the control list can't be renamed to
+`List A · control` by anyone else, can't be disabled (`price_list.cannot_disable_control`),
+can't change factor (`price_list.control_factor_locked`); a non-control list needs a positive
+decimal factor (`price_list.invalid_factor` / `price_list.non_positive_factor`). The control row
+is created with the pricing group (`CreatePricingGroupHandler`) and backfilled for pre-existing
+groups by the migration.
+
+### `price_list_packages`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `price_list_id` | INT UNSIGNED | no | FK → `price_lists(id)` CASCADE |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `amount_minor` | BIGINT UNSIGNED | no | exact price for this package on this list (`> 0`) |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT; **must equal the pricing-group currency** |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (price_list_id, package_id)` = `uniq_price_list_packages`; `INDEX (package_id)`.
+**Handler-enforced:** not allowed on a control list
+(`price_list.control_has_no_package_prices`); `package_id` belongs to the list's client;
+currency = pricing-group currency (`price_list_package.currency_mismatch`).
+
+### Resolution (`PriceListResolver` → `PriceResolver::resolve`)
+
+After the base amount, `PriceResolver` calls `PriceListResolver::apply(groupId, packageId,
+?priceListId, base)`. The list is the one identified by `$priceListId` **if** it belongs to the
+group and is enabled — otherwise the group's control list (this is the disable-fallback: a
+stored assignment pointing at a now-disabled list drops to control). Then:
+
+1. an exact `price_list_packages` row for `(list, package)` → that `amount_minor`
+   (`source = price_list`);
+2. else a non-neutral list → `base_amount × factor` HALF_EVEN (`source = price_list`);
+3. else (control / `factor = 1.0000`) → the base amount unchanged, but `price_list_id` /
+   `price_list_name` / `price_list_factor` are still stamped on the `ResolvedPrice`.
+
+`$priceListId` is `null` for every caller in this phase (assignment deferred) → always control.
+
 ---
 
 ## Migrations & seeders
@@ -804,7 +874,8 @@ currency, so an EUR rule never bleeds into a USD group (the base `converted` pri
 | `src/Database/Migrations/20260910140004_create_client_exchange_rates_table.php` | `Gomrok\Database\Migrations\CreateClientExchangeRatesTable` |
 | `src/Database/Migrations/20260910140005_create_pricing_group_packages_table.php` | `Gomrok\Database\Migrations\CreatePricingGroupPackagesTable` |
 | `src/Database/Migrations/20260910150001_create_price_rules_table.php` | `Gomrok\Database\Migrations\CreatePriceRulesTable` |
-| `src/Database/Seeds/PricingSeeder.php` | `Gomrok\Database\Seeds\PricingSeeder` (env-gated: `local-dev` gets default/dach/us groups + baselines + EUR→USD rate + two `pro` price rules) |
+| `src/Database/Migrations/20260910160001_create_price_lists_tables.php` | `Gomrok\Database\Migrations\CreatePriceListsTables` (also backfills a control list per existing pricing group) |
+| `src/Database/Seeds/PricingSeeder.php` | `Gomrok\Database\Seeds\PricingSeeder` (env-gated: `local-dev` gets default/dach/us groups + baselines + EUR→USD rate + two `pro` price rules + a control list per group + a disabled `dach` "List B · -10%" with an exact `pro` €21.00) |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

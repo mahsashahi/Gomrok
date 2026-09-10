@@ -318,10 +318,10 @@ and the provider-type declaration (Phase 8) — reject, never downgrade. `packag
 creation lands with each adapter (Phases 21–23). Editing a package flips its `synced` definitions
 to `drift` in-transaction.
 
-### Pricing (Phase 13 — baseline, Phase 14 — dimension overrides)
+### Pricing (Phase 13 — baseline, Phase 14 — dimension overrides, Phase 15 — A/B lists)
 
-`Modules/Pricing`. The baseline of the pricing pipeline plus its override layer; Phase 15 adds
-the A/B factor, 16–17 vouchers, 18 tax/fee.
+`Modules/Pricing`. The baseline of the pricing pipeline, its override layer, and the A/B
+price-list layer; Phases 16–17 add vouchers, 18 tax/fee.
 
 - **`pricing_groups`** — priority-ordered country grouping *for pricing* (separate from Phase 10
   provider groups). A country may be in several groups; the lowest `priority` wins, so a
@@ -346,6 +346,18 @@ the A/B factor, 16–17 vouchers, 18 tax/fee.
   `applied_dimensions`); an unavailable winner → `pricing.combination_unavailable`, **no
   fallback**. `PriceResolver::applyRules` runs this after the base price. Set via
   `bin/SetPriceRule.php` / `DeletePriceRule.php` / `ListPriceRules.php`.
+- **`price_lists` + `price_list_packages` (Phase 15)** — A/B experiments inside a pricing group.
+  Every group owns one **control** list (`is_control`, `factor 1.0000`, undeletable, never
+  disabled — created with the group + backfilled). A non-control list shifts the base by
+  `factor`, or by an exact `price_list_packages` amount per package. **`PriceListResolver`** runs
+  between the base amount and `price_rules`: exact list-package amount → else `base × factor` →
+  else base unchanged (`source = price_list` when moved). `ResolvedPrice` always carries
+  `priceListId` / `priceListName` / `priceListFactor`. A `$priceListId` that is unknown, from
+  another group, or disabled falls back to control (disable-fallback). Set via
+  `bin/CreatePriceList.php` / `SetPriceListStatus.php` / `SetPriceListFactor.php` /
+  `SetPriceListPackagePrice.php`; listed by `ListPriceLists.php`. **The visitor→list assignment
+  itself (persistence, hashing, `visitor_ref` params) is deferred to Phase 24** (Phase 15
+  Q4/Q5); until then `$priceListId` is always `null` and every resolve uses control.
 - **HTTP:** `GET /api/v1/packages?country=…` (resolved catalogue, base prices) and
   `GET /api/v1/pricing/resolve?package=…&country=…&method=…&purchase_type=…&interval=…` (one
   price, dimension rules applied) — client-authenticated. Gomrok never trusts a client-supplied
@@ -370,13 +382,16 @@ PACKAGE LIST
         → (group, package) row: status default / override / disabled
         → baseline / convert via client_exchange_rates / group override
         → ResolvedPrice (amount, currency, source, effective name/badge/highlighted)
-        (PriceCatalog browse list stops here — no dimension rules)
-    → price list assignment (stable hash of user id)          [Phase 15]
+        (PriceCatalog browse list stops here — no price lists, no dimension rules)
 
 PRICE  (GET /api/v1/pricing/resolve — PriceResolver)
   1. client + package
   2. package default price (default_package_prices)
   3. pricing-group match + (group, package) row  →  baseline / converted / group_override
+  3.5 price list (PriceListResolver)                         [Phase 15]
+       - control list (default; the assigned list once Phase 24 wires assignment)
+       - exact price_list_packages amount, else base x factor, else unchanged
+       - unknown / foreign / disabled list id → control (disable-fallback)
   4. price_rules: most-specific matching rule                [Phase 14]
        - available rule  → override amount (source = dimension_override)
        - unavailable rule → pricing.combination_unavailable (hard stop, no fallback)
@@ -439,5 +454,8 @@ and flagged, never dropped.
 - The full domain-event list and handler wiring — grows per module.
 - Admin panel structure and RBAC schema — Phase 27 (+ its schema proposed earlier when needed).
 - Pricing/voucher/routing resolution *precise* ordering and edge cases — Phases 10, 14–17.
+- A/B price-list **visitor→list assignment** (persistence, deterministic bucketing,
+  disable-fallback, `visitor_ref` params) — deferred from Phase 15 (Q4/Q5) to **Phase 24**
+  (Payment creation flow); the `price_lists` data model + resolver hook exist from Phase 15.
 - Queue technology choice (DB-backed vs Redis vs …) — Phase 29 (a `Jobs` port is defined earlier).
 - `mkdocs` site + DB docs location convention (repo-root vs `.claude/docs/`) — Phase 4.

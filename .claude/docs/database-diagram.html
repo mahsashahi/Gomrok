@@ -505,6 +505,36 @@ erDiagram
     countries ||--o{ price_rules : "scoped to"
     currencies ||--o{ price_rules : "priced in"
 </pre>
+
+<h2>Pricing — A/B price lists (Phase 15)</h2>
+<pre class="mermaid">
+erDiagram
+    price_lists {
+        int id PK
+        int client_id FK
+        int pricing_group_id FK
+        varchar name
+        tinyint is_control
+        decimal factor
+        tinyint is_enabled
+        datetime created_at
+        datetime updated_at
+    }
+    price_list_packages {
+        int id PK
+        int price_list_id FK
+        int package_id FK
+        bigint amount_minor
+        char currency_code FK
+        datetime created_at
+        datetime updated_at
+    }
+    clients ||--o{ price_lists : "experiments for"
+    pricing_groups ||--o{ price_lists : "A/B within"
+    price_lists ||--o{ price_list_packages : "exact prices"
+    packages ||--o{ price_list_packages : "priced on"
+    currencies ||--o{ price_list_packages : "priced in"
+</pre>
 </div>
 
 <script>

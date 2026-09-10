@@ -96,6 +96,11 @@
         "pricing:set-rule": "php bin/SetPriceRule.php",
         "pricing:delete-rule": "php bin/DeletePriceRule.php",
         "pricing:list-rules": "php bin/ListPriceRules.php",
+        "pricing:create-list": "php bin/CreatePriceList.php",
+        "pricing:set-list-status": "php bin/SetPriceListStatus.php",
+        "pricing:set-list-factor": "php bin/SetPriceListFactor.php",
+        "pricing:set-list-price": "php bin/SetPriceListPackagePrice.php",
+        "pricing:list-lists": "php bin/ListPriceLists.php",
         "pricing:list": "php bin/ListPricing.php",
         "ci": [
             "@cs",
@@ -148,6 +153,11 @@
         "pricing:set-rule": "Upsert a dimension price rule (--client --package [dimensions] --amount-minor --currency | --unavailable)",
         "pricing:delete-rule": "Delete a price rule by id (--client --rule=<id>)",
         "pricing:list-rules": "List a package's price rules, most specific first (--client --package)",
+        "pricing:create-list": "Create an A/B price list in a pricing group (--client --group --name [--factor])",
+        "pricing:set-list-status": "Enable or disable an A/B price list (--client --list=<id> --enable|--disable)",
+        "pricing:set-list-factor": "Change a non-control price list's multiplier (--client --list=<id> --factor)",
+        "pricing:set-list-price": "Pin an exact package price on an A/B list (--client --list=<id> --package --amount-minor --currency)",
+        "pricing:list-lists": "List a pricing group's A/B price lists (--client --group)",
         "pricing:list": "List a client's pricing groups (--client=<slug|id>)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"

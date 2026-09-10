@@ -7,6 +7,67 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-10 — Phase 15: Price lists (A/B) — data model, resolver & CRUD
+
+**Summary.** A/B price experiments inside a pricing group. Two tables: `price_lists` (one
+**control** row per group — `is_control`, `factor 1.0000`, undeletable, never disabled — plus
+non-control experiment lists carrying a `DECIMAL(6,4)` factor) and `price_list_packages` (an
+exact per-package amount that overrides the factor on a non-control list). `PriceListResolver`
+runs between the Phase 13 base amount and the Phase 14 `price_rules` step: exact list-package
+amount → else `base × factor` (HALF_EVEN) → else the base unchanged; `ResolvedPrice` always
+carries `priceListId` / `priceListName` / `priceListFactor` and `source` becomes `price_list`
+when the amount moved. A `$priceListId` that is unknown, from another group, or disabled falls
+back to the control list. Decisions (`PhaseResults/PhaseDecisions.md` Phase 15): **Q1 Option 2**
+explicit control row · **Q2 Option 3** factor + optional exact per-package price · **Q3 Option
+1** list applies to the base, before `price_rules` · **Q4 + Q5 DEFERRED** to Phase 24 (payment
+creation) — the visitor→list assignment table, hashing/bucketing service and `visitor_ref`
+endpoint params are **not** built; every resolve currently uses the control list. **Schema
+confirmed by the user.**
+
+**Files created**
+- Migration `20260910160001_create_price_lists_tables.php` → `CreatePriceListsTables` (also
+  backfills a control list per existing pricing group).
+- Pricing domain: `PriceList` aggregate (`control` / `experiment` / `fromStorage`, `rename`,
+  `changeFactor`, `enable`, `disable`, `isNeutral`, `validateFactor`), `PriceListPackage` VO,
+  `PriceListRepository` + `PriceListPackageRepository` ports.
+- Pricing application: `PriceListResolver`, `PriceListAuditSnapshot`, `PriceListSummary`,
+  `PriceListDirectory`, `PriceSource::PriceList`, `ResolvedPrice::withList` + `priceListId` /
+  `priceListName` / `priceListFactor`. Use cases `CreatePriceList`, `ChangePriceListStatus`,
+  `SetPriceListFactor`, `SetPriceListPackagePrice`.
+- Pricing infrastructure: `PdoPriceListRepository`, `PdoPriceListPackageRepository`,
+  `PdoPriceListDirectory`.
+- CLI: `bin/{CreatePriceList,SetPriceListStatus,SetPriceListFactor,SetPriceListPackagePrice,ListPriceLists}.php`
+  + `composer pricing:create-list|set-list-status|set-list-factor|set-list-price|list-lists`.
+- Tests: `PriceListTest`, `PriceListResolverTest`, `PriceListHandlersTest`; +1 `PriceResolverTest`
+  case; support doubles `InMemoryPriceListRepository`, `InMemoryPriceListPackageRepository`.
+- `.claude/PhaseResults/Phase15Result.md`.
+
+**Files changed**
+- `src/Modules/Pricing/Application/PriceResolver.php` — new `PriceListResolver` ctor dep +
+  `?int $priceListId` param + the price-list step; `PriceSource.php`, `ResolvedPrice.php`,
+  `Infrastructure/definitions.php`.
+- `src/Modules/Pricing/Application/CreatePricingGroup/CreatePricingGroupHandler.php` — creates
+  the control `price_lists` row in the same transaction (new `PriceListRepository` dep).
+- `src/Database/Seeds/PricingSeeder.php` — control list per group + a disabled `dach` "List B".
+- `composer.json` / `composer.lock`.
+- `tests/Integration/{MigrationRoundTripTest,PricingPersistenceTest}.php`;
+  `tests/Unit/{Http/PackagesApiTest,Modules/Pricing/Application/{PriceResolverTest,PriceCatalogTest,PricingHandlersTest}}.php`.
+- DB docs (`database-design.md` → 38 tables, `database-diagram.md` + `.html` 13/13 mermaid,
+  `db_explain.md`); `Architecture.md` (§8 Pricing, §9 PRICE pipeline, §13 deferred);
+  `Phases.md` (row 15 → ☑ narrowed scope; row 24 gains the deferred assignment);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D18).
+
+**Reason.** Phase 15 of the 30-phase plan (narrowed — visitor assignment deferred by the user).
+
+**Migration notes.** 2 new tables, additive; no existing-table changes. The migration backfills
+`price_lists` with a control row per existing `pricing_groups` row. `is_control` uniqueness and
+the control-list immutability rules are app-enforced.
+
+**Breaking changes.** None. `PriceResolver::__construct` gains a `PriceListResolver` argument and
+`resolve()` a trailing optional `?int $priceListId`; `CreatePricingGroupHandler::__construct`
+gains a `PriceListRepository` argument — all internal, all call sites updated.
+
 ## 2026-09-10 — Phase 14: Pricing overrides & resolution engine
 
 **Summary.** The override layer above the Phase 13 base price: one `price_rules` table keyed by

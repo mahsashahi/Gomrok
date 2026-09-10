@@ -139,6 +139,13 @@ composer pricing:set-rule -- --client=televika --package=pro --method=card --cur
 composer pricing:set-rule -- --client=televika --package=pro --group=us --purchase-type=subscription --interval=yearly --unavailable
 composer pricing:list-rules -- --client=televika --package=pro
 composer pricing:delete-rule -- --client=televika --rule=42
+
+# Price lists — A/B experiments (Phase 15)
+composer pricing:create-list -- --client=televika --group=dach --name="List B · -10%" --factor=0.9000
+composer pricing:set-list-price -- --client=televika --list=42 --package=pro --amount-minor=2100 --currency=EUR
+composer pricing:set-list-factor -- --client=televika --list=42 --factor=0.8500
+composer pricing:set-list-status -- --client=televika --list=42 --disable   # or --enable
+composer pricing:list-lists -- --client=televika --group=dach
 ```
 
 A **price rule** is a `(client, package)` override keyed by any subset of 7 dimensions
@@ -148,6 +155,14 @@ combination not for sale (omit `--amount-minor`). At resolve time the **most-spe
 rule wins (most pinned dimensions → fixed dimension priority → newest); an unavailable winner
 returns `pricing.combination_unavailable` with no fallback. An available rule needs `--group` or
 `--currency` pinned. Rules apply on `/pricing/resolve`, not on the `/packages` browse list.
+
+A **price list** is an A/B experiment inside one pricing group. Every group has an undeletable
+**control** list (`List A · control`, factor `1.0000`) created with the group. A non-control
+list shifts the resolved base price by `--factor`, or you pin an exact per-package amount with
+`pricing:set-list-price`. In the resolution pipeline the list applies **after** the base price
+and **before** the Phase 14 dimension rules. **Visitor→list assignment isn't wired yet** (it's
+deferred to the payment/checkout phase), so today every resolve uses the control list — these
+commands set up the experiments in advance.
 
 Pricing groups are **priority-ordered and overlapping** — lowest `priority` wins, `is_default`
 (created with `--default`, no countries) is always last. A `status=default` group in a currency
@@ -165,7 +180,9 @@ per package (no dimension rules). `GET /api/v1/pricing/resolve` returns one pric
 `price_rules` applied — the optional `method` / `purchase_type` / `interval` query params feed
 the rule match, and the response `price` object carries `applied_rule_id` + `applied_dimensions`.
 An unavailable combination returns `422 pricing.combination_unavailable`. Gomrok never trusts a
-client-supplied price. (Phase 15 adds A/B lists.)
+client-supplied price. (Phase 15 added `price_lists` between the base and the rules, but every
+resolve uses each group's control list until visitor→list assignment lands in the checkout phase
+— the API responses are unchanged.)
 
 Provider secrets are encrypted with `APP_ENCRYPTION_KEY` — set it before creating accounts
 (`php -r 'echo base64_encode(random_bytes(32));'`). Secrets are printed once at most, never by

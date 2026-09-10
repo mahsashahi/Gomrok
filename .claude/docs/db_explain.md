@@ -440,3 +440,56 @@ with the null-safe `<=>` operator instead of `ON DUPLICATE KEY`.
 - **Set / removed by** `bin/SetPriceRule.php`, `bin/DeletePriceRule.php`, listed by
   `bin/ListPriceRules.php`. Exposed through `GET /api/v1/pricing/resolve?...&method=&purchase_type=&interval=`.
 - **Referenced by:** nothing yet (payments snapshot the resolved price from Phase 19+).
+
+---
+
+## Pricing — A/B price lists (Phase 15)
+
+Price experiments inside a pricing group, layered between the Phase 13 base amount and the Phase
+14 `price_rules` step. Two tables.
+
+### `price_lists`
+
+One row per A/B list in a pricing group. Exactly one is the **control** (`is_control = 1`,
+`factor` pinned at `1.0000`, `is_enabled` always `1`, undeletable). `UNIQUE (pricing_group_id,
+name)`.
+
+- **`factor DECIMAL(6,4)`** — the list's multiplier on the resolved base amount
+  (`base × factor`, HALF_EVEN). `0.9000` = −10%. The control list is always `1.0000`.
+- **Domain guards** (`PriceList`): a non-control factor is a positive decimal with ≤2 integer +
+  ≤4 fractional digits (`price_list.invalid_factor` / `price_list.non_positive_factor`); the
+  control list rejects `disable()` (`price_list.cannot_disable_control`) and `changeFactor()`
+  (`price_list.control_factor_locked`).
+- **Handler guards** (`CreatePriceListHandler`): the pricing group belongs to the client; the
+  name is free in the group and is not the reserved control name.
+- **Created:** the control row is written by `CreatePricingGroupHandler` (same transaction as
+  the group) and backfilled for pre-existing groups by migration `20260910160001`. Experiment
+  lists via `bin/CreatePriceList.php`; status / factor via `bin/SetPriceListStatus.php` /
+  `bin/SetPriceListFactor.php`; listed by `bin/ListPriceLists.php`.
+
+### `price_list_packages`
+
+An exact price for one package on one **non-control** list — overrides that list's `factor` for
+that package. `UNIQUE (price_list_id, package_id)`.
+
+- **Handler guards** (`SetPriceListPackagePriceHandler`): the list is not control
+  (`price_list.control_has_no_package_prices`); the package belongs to the client; the amount is
+  positive; the currency equals the list's pricing-group currency
+  (`price_list_package.currency_mismatch`).
+- **Set by** `bin/SetPriceListPackagePrice.php`.
+
+### Resolution (`PriceListResolver` → `PriceResolver::resolve`)
+
+After the base amount, `PriceResolver` calls `PriceListResolver::apply(groupId, packageId,
+?priceListId, base)`. The list is the one named by `$priceListId` **if** it is in the group and
+enabled — otherwise the group's **control** list (this is the disable-fallback). Then: exact
+`price_list_packages` amount → else `base × factor` → else base unchanged. `ResolvedPrice`
+always carries `price_list_id` / `price_list_name` / `price_list_factor`; `source` becomes
+`price_list` only when the amount actually moved.
+
+**`$priceListId` is `null` for every caller in Phase 15** — the visitor→list assignment (the
+`price_list_assignments` table + hashing service + `visitor_ref` params) is deferred to Phase 24
+(Phase 15 Q4/Q5). So every resolve currently uses the control list; the machinery is in place
+for Phase 24 to pass a real list id.
+
+- **Referenced by:** nothing yet (Phase 24 assignment; payment snapshots later).

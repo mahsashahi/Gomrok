@@ -1,59 +1,62 @@
-# Q: Phase 14 — Pricing overrides & resolution engine (completion summary)
+# Q: Phase 15 — Price lists (A/B) (completion summary)
 
 ## What was implemented
 
-The **override layer** above the Phase 13 base price. One new table, `price_rules`, holds
-`(client, package)` overrides keyed by **7 nullable dimensions** — `pricing_group_id`,
-`country_code`, `provider_account_id`, `payment_method`, `purchase_type`,
-`subscription_interval`, `currency_code`. A null dimension is a wildcard. Each row either
-overrides `amount_minor` (`is_available = 1`) or marks the combination **not for sale**
-(`is_available = 0`).
+A/B price experiments inside a pricing group — **data model + resolver math + management
+surface**. Two tables:
 
-- **`PriceRuleResolver`** picks the winning rule: most matched dimensions → fixed dimension
-  priority (`subscription_interval > purchase_type > payment_method > provider_account_id >
-  currency_code > country_code > pricing_group_id`) → highest `id`.
-- **`PriceResolver::applyRules`** runs it *after* the base price (so the pricing group + currency
-  are already fixed). Available winner → `ResolvedPrice.source = dimension_override` with
-  `applied_rule_id` / `applied_dimensions`. Unavailable winner → hard
-  `pricing.combination_unavailable`, **no fallback** to a less-specific rule or the base price.
-- New `SubscriptionInterval` enum (`monthly` / `quarterly` / `yearly`).
-- `SetPriceRule` / `DeletePriceRule` audited use cases; `PriceRuleDirectory` list projection.
-- `bin/SetPriceRule.php`, `bin/DeletePriceRule.php`, `bin/ListPriceRules.php` +
-  `composer pricing:set-rule` / `delete-rule` / `list-rules`.
-- `GET /api/v1/pricing/resolve` gains `method` / `purchase_type` / `interval` query params and
-  `applied_rule_id` / `applied_dimensions` in the response. `GET /api/v1/packages` unchanged
-  (browse list stays base-price only).
-- `PricingSeeder` seeds two `pro` rules (stripe+EUR → €27; US group + yearly subscription →
-  unavailable).
+- **`price_lists`** — one **control** row per pricing group (`is_control = 1`, `factor 1.0000`,
+  `is_enabled = 1`, undeletable, never disabled, created with the group + backfilled for existing
+  groups by the migration) plus non-control experiment lists carrying a `DECIMAL(6,4)` factor.
+- **`price_list_packages`** — an exact per-package amount on a non-control list, overriding the
+  factor for that package.
+
+**`PriceListResolver`** runs in `PriceResolver::resolve` **between** the Phase 13 base amount and
+the Phase 14 `price_rules` step: exact list-package amount → else `base × factor` (HALF_EVEN) →
+else base unchanged. `ResolvedPrice` gained `priceListId` / `priceListName` / `priceListFactor`
+(always stamped) and `PriceSource` gained `PriceList` (set only when the amount moved). An
+unknown / foreign-group / disabled `$priceListId` falls back to the control list.
+
+### Deferred (Phase 15 Q4 + Q5 — your decision, 2026-09-10)
+
+The **visitor→list assignment** — `price_list_assignments` table, deterministic bucketing /
+hashing service, disable-fallback sweep, `visitor_ref` query params on `/packages` +
+`/pricing/resolve` — is **not built**. It moves to **Phase 24 (Payment creation flow)**, where
+Q4 and Q5 will be re-asked with their full option lists before anything is implemented. Until
+then `PriceResolver::resolve` passes `$priceListId = null` and every resolve uses the control
+list. Recorded in `PhaseDecisions.md`, `Phases.md` (Phase 15 + Phase 24), and a project memory.
+
+Q1 was also revised on your instruction: **explicit control row (Option 2)**, not the
+recommended implicit control.
 
 ## Files created
 
-- `src/Database/Migrations/20260910150001_create_price_rules_table.php`
-- `src/Modules/Pricing/Domain/` — `SubscriptionInterval.php`, `PriceRule.php`,
-  `PriceRuleRepository.php`
-- `src/Modules/Pricing/Application/` — `PriceRuleContext.php`, `PriceRuleResolver.php`,
-  `PriceRuleAuditSnapshot.php`, `PriceRuleSummary.php`, `PriceRuleDirectory.php`,
-  `SetPriceRule/{Command,Result,Handler}.php`, `DeletePriceRule/DeletePriceRuleHandler.php`
-- `src/Modules/Pricing/Infrastructure/` — `PdoPriceRuleRepository.php`, `PdoPriceRuleDirectory.php`
-- `bin/SetPriceRule.php`, `bin/DeletePriceRule.php`, `bin/ListPriceRules.php`
-- `tests/Support/InMemoryPriceRuleRepository.php`
-- `tests/Unit/Modules/Pricing/Domain/PriceRuleTest.php`,
-  `tests/Unit/Modules/Pricing/Application/PriceRuleResolverTest.php`,
-  `tests/Unit/Modules/Pricing/Application/PriceRuleHandlersTest.php`
-- `.claude/PhaseResults/Phase14Result.md`
+- Migration `20260910160001_create_price_lists_tables.php` (+ control-row backfill).
+- `src/Modules/Pricing/Domain/` — `PriceList.php`, `PriceListPackage.php`,
+  `PriceListRepository.php`, `PriceListPackageRepository.php`.
+- `src/Modules/Pricing/Application/` — `PriceListResolver.php`, `PriceListAuditSnapshot.php`,
+  `PriceListSummary.php`, `PriceListDirectory.php`, `CreatePriceList/`, `ChangePriceListStatus/`,
+  `SetPriceListFactor/`, `SetPriceListPackagePrice/`.
+- `src/Modules/Pricing/Infrastructure/` — `PdoPriceListRepository.php`,
+  `PdoPriceListPackageRepository.php`, `PdoPriceListDirectory.php`.
+- `bin/{CreatePriceList,SetPriceListStatus,SetPriceListFactor,SetPriceListPackagePrice,ListPriceLists}.php`.
+- `tests/Support/{InMemoryPriceListRepository,InMemoryPriceListPackageRepository}.php`.
+- `tests/Unit/Modules/Pricing/{Domain/PriceListTest,Application/PriceListResolverTest,Application/PriceListHandlersTest}.php`.
+- `.claude/PhaseResults/Phase15Result.md`.
 
 ## Files updated
 
-- `src/Modules/Pricing/Application/{PriceResolver,PriceSource,ResolvedPrice}.php`,
-  `Infrastructure/definitions.php`
-- `src/Http/Api/PricingResolveAction.php`
-- `src/Database/Seeds/PricingSeeder.php`
-- `composer.json` / `composer.lock`
-- `tests/Integration/{MigrationRoundTripTest,PricingPersistenceTest}.php`,
-  `tests/Unit/{Http/PackagesApiTest,Modules/Pricing/Application/PriceCatalogTest,Modules/Pricing/Application/PriceResolverTest}.php`
-- Docs: `database-design.md` (36 tables), `database-diagram.md` + `.html` (12/12 mermaid),
-  `db_explain.md`, `Architecture.md` (§8/§9), `Phases.md` (row 14 → ☑), `Changelog.md`,
-  `FileIndex.md`, `knowledge/Knowledge.md`, `Commands.md`, `Orders.md` (D17)
+- Pricing: `PriceResolver.php` (new dep + `?int $priceListId` + the step), `PriceSource.php`,
+  `ResolvedPrice.php`, `CreatePricingGroup/CreatePricingGroupHandler.php` (writes the control
+  row), `Infrastructure/definitions.php`.
+- `src/Database/Seeds/PricingSeeder.php` (control list per group + disabled `dach` List B).
+- `composer.json` / `composer.lock` (5 `pricing:*-list*` scripts).
+- Tests: `MigrationRoundTripTest`, `PricingPersistenceTest`, `PackagesApiTest`,
+  `PriceResolverTest` (+1 case), `PriceCatalogTest`, `PricingHandlersTest`.
+- Docs: `database-design.md` (38 tables), `database-diagram.md` + `.html` (13/13 mermaid),
+  `db_explain.md`, `Architecture.md` (§8/§9/§13), `Phases.md` (row 15 ☑, row 24 gains the
+  deferred work), `Changelog.md`, `FileIndex.md`, `Knowledge.md`, `Commands.md`, `Orders.md`
+  (D18).
 
 ## Files removed
 
@@ -61,61 +64,47 @@ None.
 
 ## Database changes
 
-One additive table, `price_rules` (migration `20260910150001`). Unique index
-`uniq_price_rules_dimensions` over `(package_id, pricing_group_id, country_code,
-provider_account_id, payment_method, purchase_type, subscription_interval, currency_code)` —
-NULL-distinct, so upserts use a null-safe (`<=>`) lookup, not `ON DUPLICATE KEY`. Plus
-`idx_price_rules_client_package`, `idx_price_rules_provider_account`,
-`idx_price_rules_pricing_group`. FKs: `client_id` / `package_id` / `pricing_group_id` /
-`provider_account_id` CASCADE, `country_code` / `currency_code` RESTRICT. Total: **36 tables**.
+Two additive tables (`price_lists`, `price_list_packages`), migration `20260910160001`, which
+also backfills one control `price_lists` row per existing `pricing_groups` row via
+`INSERT … SELECT`. `is_control` uniqueness and control-list immutability are app-enforced. Total:
+**38 tables**.
 
 ## Tests added / changed
 
-- New: `PriceRuleTest` (3), `PriceRuleResolverTest` (6), `PriceRuleHandlersTest` (3).
-- Changed: `PriceResolverTest` (+2 cases + new ctor arg), `PriceCatalogTest`, `PackagesApiTest`,
+- New: `PriceListTest` (4), `PriceListResolverTest` (7), `PriceListHandlersTest` (4).
+- Changed: `PriceResolverTest` (+1), `PriceCatalogTest`, `PricingHandlersTest`, `PackagesApiTest`,
   `PricingPersistenceTest`, `MigrationRoundTripTest`.
-- Run with: `composer test` (unit), `composer test:integration` (CI-only — no local MySQL),
-  `composer ci` (cs + stan + unit).
+- Run: `composer test` (unit), `composer test:integration` (CI-only), `composer ci`.
 
 ## Captured evidence
 
 ```
 $ composer ci
- [OK] No errors        # php-cs-fixer
- [OK] No errors        # phpstan (max + strict-rules)
-OK (256 tests, 983 assertions)
+ [OK] No errors        # php-cs-fixer + phpstan (max + strict-rules)
+OK (271 tests, 1064 assertions)
 
 $ composer test:integration
-OK, but some tests were skipped!
-Tests: 33, Assertions: 0, Skipped: 33.
-
-$ composer validate --no-check-publish
-./composer.json is valid
+Tests: 33, Assertions: 0, Skipped: 33.        # no local MySQL
 ```
 
-`PriceRuleEvidence.php` (in-memory resolver — precedence matrix + unavailable combo):
+`PriceListEvidence.php` (in-memory resolver; `$priceListId` passed directly since assignment is
+deferred):
 
 ```
-DE, no method (base group price)               ->    2900 EUR  source=baseline           rule=- dims=[]
-DE, card  (rule#2: card+DE most specific)      ->    2500 EUR  source=dimension_override rule=2 dims=[payment_method,currency_code,country_code]
-FR, card  (rule#1: card wildcard country)      ->    2700 EUR  source=dimension_override rule=1 dims=[payment_method,currency_code]
-DE, subscription/monthly (rule#3)              ->    2000 EUR  source=dimension_override rule=3 dims=[purchase_type,currency_code]
-US, subscription/monthly (rule#3, USD conv)    ->    3132 USD  source=converted          rule=- dims=[]
-US, subscription/yearly  (rule#4 UNAVAILABLE)  ->  ERROR  pricing.combination_unavailable
+no list arg (control)            ->   2900 EUR  source=baseline           list=List A · control (x1.0000)
+List B (factor 0.9000)           ->   2610 EUR  source=price_list         list=List B · -10% (x0.9000)
+List C (exact pro = 1999)        ->   1999 EUR  source=price_list         list=List C · hero price (x1.0000)
+List D (disabled -> control)     ->   2900 EUR  source=baseline           list=List A · control (x1.0000)
+List B + card (price rule wins)  ->   2500 EUR  source=dimension_override list=List B · -10% (x0.9000)
+unknown list id 999 -> control   ->   2900 EUR  source=baseline           list=List A · control (x1.0000)
 ```
-
-Row 5: an EUR-pinned rule correctly does not match inside the USD `us` group. Row 6 is the exit
-criterion — a disabled combination resolves to `pricing.combination_unavailable`, never a wrong
-price.
 
 ## Known limitations
 
-- `providerAccountId` is a resolver dimension but `/pricing/resolve` doesn't accept it as a
-  query param yet (needs a slug → account lookup).
-- `price_rules` DB round-trip is asserted only in CI (local MySQL unavailable → skipped).
-- Price snapshotting onto payment / subscription records is Phase 19+.
+- No visitor→list assignment yet (deferred to Phase 24) — every resolve uses control.
+- API responses unchanged; the applied list is carried only on the internal DTO.
+- `price_lists` DB round-trip is asserted only in CI.
 
 ## Next recommended phase
 
-**Phase 15 — Price lists (A/B):** `price_lists` per pricing group, deterministic visitor → list
-assignment via a stable hash, package prices per list, disable-fallback.
+**Phase 16 — Vouchers module: definitions & eligibility.**

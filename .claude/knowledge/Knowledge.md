@@ -294,6 +294,34 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
 - New `SubscriptionInterval` enum: `monthly` / `quarterly` / `yearly`. A rule pinning it needs a
   subscription/recurring `purchase_type` (`price_rule.interval_needs_subscription`).
 
+## A/B price lists (Phase 15 — narrowed)
+
+- **Only the data model + resolver + CRUD shipped.** Visitor→list assignment (persistence,
+  hashing, `visitor_ref` params) is **deferred to Phase 24** (Phase 15 Q4/Q5, user's call). See
+  [[phase15-ab-assignment-deferred]]. Every `PriceResolver::resolve` currently passes
+  `$priceListId = null` → the group's control list. Re-ask Phase 15 Q4 + Q5 at Phase 24.
+- **Explicit control row (Q1 Option 2 — user changed the recommendation).** Every pricing group
+  owns one `price_lists` row with `is_control = 1`, `factor = 1.0000`, `is_enabled = 1`. Created
+  by `CreatePricingGroupHandler` in the same transaction as the group; the migration backfills
+  one per pre-existing group; `PricingSeeder` upserts one per seeded group (it uses raw SQL, not
+  the handler). The control row can't be renamed-to-collide, disabled, deleted, or re-factored
+  (`price_list.cannot_disable_control` / `control_factor_locked`).
+- **Pipeline slot: base → price list → `price_rules`** (Q3). `PriceListResolver::apply` runs in
+  `PriceResolver::resolve` (not in `PriceCatalog` — the `/packages` browse list stays on the
+  base price). A matching Phase 14 `price_rule` still overrides whatever the list produced.
+- **Precedence within a list** (Q2): exact `price_list_packages` amount → else `base × factor`
+  (HALF_EVEN, `Money::multipliedBy`) → else base unchanged. `ResolvedPrice.source` becomes
+  `price_list` **only when the amount moved**; a control / factor-1 list just stamps
+  `priceListId` / `priceListName` / `priceListFactor`.
+- **Disable-fallback is in the resolver, not a sweep.** `PriceListResolver::resolveList` returns
+  the control list whenever `$priceListId` is null, unknown, from another group, or disabled — so
+  a future stored assignment pointing at a killed experiment silently drops to control.
+- `price_lists.factor` is `DECIMAL(6,4)` — PDO returns it as a string (`"0.9000"`);
+  `PriceList::experiment` / `changeFactor` normalise via `number_format(...,4)`.
+- `price_list_packages` currency **must** equal the pricing-group currency
+  (`price_list_package.currency_mismatch`); not allowed on a control list
+  (`price_list.control_has_no_package_prices`).
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

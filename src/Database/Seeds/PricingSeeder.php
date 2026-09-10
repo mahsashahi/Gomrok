@@ -18,6 +18,9 @@ use Phinx\Seed\AbstractSeed;
  *   default prices: starter €9.00, pro €29.00
  *   rate: EUR -> USD = 1.08
  *
+ * Phase 15: every group gets a control price list; `dach` additionally gets a
+ * disabled "List B · -10%" (factor 0.9000) with an exact `pro` price of €21.00.
+ *
  * Runs only for `APP_ENV` `local` / `testing`. Idempotent.
  */
 final class PricingSeeder extends AbstractSeed
@@ -59,6 +62,12 @@ final class PricingSeeder extends AbstractSeed
         $this->replaceCountries($pdo, $dach, ['DE', 'AT', 'CH'], $now);
         $this->replaceCountries($pdo, $us, ['US'], $now);
 
+        // Phase 15: a control list per group + a disabled -10% experiment on dach.
+        $this->upsertControlList($pdo, $clientId, $default, $now);
+        $this->upsertControlList($pdo, $clientId, $us, $now);
+        $this->upsertControlList($pdo, $clientId, $dach, $now);
+        $listB = $this->upsertExperimentList($pdo, $clientId, $dach, 'List B · -10%', '0.9000', false, $now);
+
         $starter = $this->scalarId($pdo, 'SELECT id FROM packages WHERE client_id = :c AND code = :v', ['c' => $clientId, 'v' => 'starter']);
         $pro = $this->scalarId($pdo, 'SELECT id FROM packages WHERE client_id = :c AND code = :v', ['c' => $clientId, 'v' => 'pro']);
         if ($starter !== null) {
@@ -67,6 +76,7 @@ final class PricingSeeder extends AbstractSeed
         if ($pro !== null) {
             $this->upsertDefaultPrice($pdo, $pro, 2900, 'EUR', $now);
             $this->upsertGroupPackage($pdo, $dach, $pro, 'override', 2400, 'EUR', $now);
+            $this->upsertListPackagePrice($pdo, $listB, $pro, 2100, 'EUR', $now);
 
             // Phase 14 price rules: a Stripe card-fee discount, and yearly-in-US unavailable.
             $pdo->prepare('DELETE FROM price_rules WHERE client_id = :c AND package_id = :p')->execute(['c' => $clientId, 'p' => $pro]);
@@ -90,7 +100,7 @@ final class PricingSeeder extends AbstractSeed
              ON DUPLICATE KEY UPDATE rate = VALUES(rate)',
         )->execute(['c' => $clientId, 'base' => 'EUR', 'quote' => 'USD', 'rate' => '1.08000000', 'from' => '2026-01-01 00:00:00', 'now' => $now]);
 
-        $this->output->writeln('<info>PricingSeeder: local-dev pricing ready (default, dach, us groups; EUR->USD rate).</info>');
+        $this->output->writeln('<info>PricingSeeder: local-dev pricing ready (default, dach, us groups; control lists + dach List B; EUR->USD rate).</info>');
     }
 
     private function upsertGroup(PDO $pdo, int $clientId, string $slug, string $name, int $priority, ?string $deviceType, string $currency, bool $isDefault, string $now): int
@@ -136,6 +146,42 @@ final class PricingSeeder extends AbstractSeed
              VALUES (:p, :a, :c, :now, :now)
              ON DUPLICATE KEY UPDATE amount_minor = VALUES(amount_minor), currency_code = VALUES(currency_code), updated_at = VALUES(updated_at)',
         )->execute(['p' => $packageId, 'a' => $amountMinor, 'c' => $currency, 'now' => $now]);
+    }
+
+    private function upsertControlList(PDO $pdo, int $clientId, int $groupId, string $now): int
+    {
+        return $this->upsertExperimentList($pdo, $clientId, $groupId, 'List A · control', '1.0000', true, $now, true);
+    }
+
+    private function upsertExperimentList(PDO $pdo, int $clientId, int $groupId, string $name, string $factor, bool $enabled, string $now, bool $isControl = false): int
+    {
+        $pdo->prepare(
+            'INSERT INTO price_lists (client_id, pricing_group_id, name, is_control, factor, is_enabled, created_at, updated_at)
+             VALUES (:c, :g, :name, :control, :factor, :enabled, :now, :now)
+             ON DUPLICATE KEY UPDATE factor = VALUES(factor), is_enabled = VALUES(is_enabled), updated_at = VALUES(updated_at)',
+        )->execute([
+            'c' => $clientId,
+            'g' => $groupId,
+            'name' => $name,
+            'control' => $isControl ? 1 : 0,
+            'factor' => $factor,
+            'enabled' => $enabled ? 1 : 0,
+            'now' => $now,
+        ]);
+
+        $id = $this->scalarId($pdo, 'SELECT id FROM price_lists WHERE pricing_group_id = :g AND name = :n', ['g' => $groupId, 'n' => $name]);
+        \assert($id !== null);
+
+        return $id;
+    }
+
+    private function upsertListPackagePrice(PDO $pdo, int $priceListId, int $packageId, int $amountMinor, string $currency, string $now): void
+    {
+        $pdo->prepare(
+            'INSERT INTO price_list_packages (price_list_id, package_id, amount_minor, currency_code, created_at, updated_at)
+             VALUES (:l, :p, :a, :c, :now, :now)
+             ON DUPLICATE KEY UPDATE amount_minor = VALUES(amount_minor), currency_code = VALUES(currency_code), updated_at = VALUES(updated_at)',
+        )->execute(['l' => $priceListId, 'p' => $packageId, 'a' => $amountMinor, 'c' => $currency, 'now' => $now]);
     }
 
     private function upsertGroupPackage(PDO $pdo, int $groupId, int $packageId, string $status, int $amountMinor, string $currency, string $now): void

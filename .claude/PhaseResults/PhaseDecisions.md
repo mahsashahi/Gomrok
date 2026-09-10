@@ -16,6 +16,160 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 15 — Price lists (A/B)
+
+### Q5 — Management surface + where the visitor assignment gets written
+
+**Question:** Which CRUD handlers / CLI / seeder ship now, and do `/packages` and
+`/pricing/resolve` take a `visitor_ref` and persist a `price_list_assignments` row?
+
+**Options:**
+
+1. Full surface; both endpoints take `visitor_ref` and persist the assignment on first sight.
+2. Full surface; only `/pricing/resolve` persists; `/packages` reads an existing assignment,
+   never creates one.
+3. Handlers + CLI only; no endpoint changes; resolver gains a `visitorRef` param exercised by
+   tests only until the payment/checkout phase.
+
+**Recommended:** Option 2
+
+**Selected:** **DEFERRED** — the user chose not to decide this in Phase 15. Visitor→list
+assignment persistence, the deterministic bucket-assignment service, and the `visitor_ref`
+endpoint wiring are all deferred to the **payment creation / checkout phase** (Phase 19 —
+*Payments module: creation & idempotency*, or whichever phase first builds the checkout flow).
+
+> **Action required at that later phase:** re-ask this question (and Q4 below) with the full
+> option list before implementing anything. Do **not** assume Option 2 — present the choices
+> fresh. User instruction, 2026-09-10: "When we reach the appropriate later phase … ask me this
+> question again and present the available options before implementing anything."
+
+**What Phase 15 still delivers** (assignment excluded): the `price_lists` table (explicit control
+row per group — Q1) + `price_list_packages` (Q2), the resolver math that applies a list to the
+base amount (Q3), and the `CreatePriceList` / enable / disable / `SetPriceListPackagePrice`
+audited handlers + `pricing:*` CLI + seeder. No `price_list_assignments` table, no hashing
+service, no `visitor_ref` params, no endpoint behaviour change. Phase 15's original exit
+criteria ("stable assignment, even split, disable-fallback") move to the later phase with the
+deferred decision.
+
+**Status:** Deferred → re-ask at the payment/checkout phase
+
+---
+
+### Q4 — How is a visitor assigned to a list, and is it stored?
+
+> **Status update (2026-09-10):** this decision is **DEFERRED** together with [Q5](#q5--management-surface--where-the-visitor-assignment-gets-written).
+> The "Selected: Option 2" below is **withdrawn** — no `price_list_assignments` table, no
+> hashing/bucket service is built in Phase 15. Re-ask this question with the full option list at
+> the payment creation / checkout phase before implementing visitor assignment. The original
+> Q&A is kept verbatim for context only.
+
+**Question:** The client passes an opaque visitor reference; Gomrok hashes it with the pricing
+group id. Stateless recompute or persisted assignment?
+
+**Options:**
+
+1. Stateless — `hash(group_id, visitor_ref) mod N` over currently-enabled lists; no table;
+   disable drops to control automatically, but creating/enabling any list re-buckets everyone.
+2. **Stateful `price_list_assignments` table** — first visit computes the bucket by deterministic
+   hash and persists `(client_id, pricing_group_id, visitor_ref_hash, price_list_id,
+   assigned_at)`; later visits read it; a now-disabled stored list → reassign to control +
+   `reassigned_at`. Starting a new experiment never moves an already-assigned visitor.
+3. Stateful but recomputed every visit (cache/log only) — same reshuffle problem as Option 1.
+
+**Recommended:** Option 2
+
+**Selected:** ~~Option 2 — persisted `price_list_assignments`, `UNIQUE (pricing_group_id,
+visitor_ref_hash)`, SHA-256 of the visitor ref (no raw id stored). Bucket chosen on first visit
+by deterministic hash over the group's enabled lists; a stored list that is later disabled is
+reassigned to the group's control row on the next visit.~~ **Withdrawn / deferred** — see the
+status note above and [Q5](#q5--management-surface--where-the-visitor-assignment-gets-written).
+
+**Status:** Deferred → re-ask at the payment/checkout phase
+
+---
+
+### Q3 — Where does the A/B step sit in the resolution pipeline?
+
+**Question:** Pipeline today: (1) group match → (2) group-package row → (3) base amount
+(baseline / FX / group override) → (4) most-specific `price_rules` row. Where does the price
+list apply?
+
+**Options:**
+
+1. **After step 3, before step 4** — the list adjusts the base price; a matching `price_rules`
+   row still overrides it as a deliberate explicit rule (wins for everyone regardless of bucket);
+   `price_rules` "unavailable" still means unavailable.
+2. After step 4 — the list factor multiplies whatever step 4 produced, including a `price_rules`
+   override amount. Silently rescales exact operator-set figures.
+3. List applies only to the base; any matching `price_rules` row bypasses the experiment
+   entirely for that combination. Risk of silent test-population leakage via a broad rule.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — the price list applies to the base amount (step 3.5): explicit
+`price_list_packages` amount → else base × list `factor`. A matching Phase 14 `price_rules` row
+then overrides the result as before; an unavailable rule still fails the resolve.
+
+**Status:** Decided
+
+---
+
+### Q2 — How does an experiment list change the price?
+
+**Question:** What mechanism does a non-control price list use to shift a package's price?
+
+**Options:**
+
+1. `factor DECIMAL(6,4)` only — list price = control × factor, HALF_EVEN to minor units. One
+   knob per list; can't hit an exact price point; same factor for every package.
+2. Explicit per-list-per-package prices only — a `price_list_packages` table
+   (`price_list_id`, `package_id`, `amount_minor`, `currency`); no row = control price; no factor.
+3. **Both** — `factor` is the list's default multiplier; a `price_list_packages` row overrides
+   it for a specific package with an exact amount. Per package on list X: explicit row → else
+   control × factor → else control. Control row keeps `factor 1.0000`, needs no rows.
+
+**Recommended:** Option 3
+
+**Selected:** Option 3 — `price_lists.factor` (default multiplier, `1.0000` for control) plus an
+optional `price_list_packages` per-package exact-amount override.
+
+**Status:** Decided
+
+---
+
+### Q1 — Does the control list physically exist?
+
+**Question:** Every pricing group "owns List A · control at factor 1". Is that a real row or
+implicit?
+
+**Options:**
+
+1. Implicit control — `price_lists` holds only experiment lists; no rows = every visitor on
+   control; an assignment with `price_list_id = NULL` means control. Matches the Phase 13 "no
+   row = implicit default" pattern; no backfill; "≥1 enabled list" invariant is automatic.
+2. **Explicit control row** — group creation auto-inserts an undeletable `List A` (`factor
+   1.0000`, `is_control = 1`); assignments always FK a real row; needs a backfill for existing
+   groups + delete/disable guards so control is never removed or disabled.
+3. Explicit, but created lazily with the first experiment list for a group.
+
+**Recommended:** Option 1
+
+**Selected:** Option 2 — explicit control row. Every pricing group has a real `price_lists` row
+with `is_control = 1`, `factor = 1.0000`, `is_enabled = 1`; it is created with the group
+(and backfilled for existing groups), cannot be deleted or disabled, and assignments always FK
+a real `price_list_id` (no nullable control sentinel).
+
+**Status:** Decided → **Revised 2026-09-10**
+
+**Change history:**
+- *2026-09-10 (initial):* Selected **Option 1** (implicit control) — matched the recommendation.
+- *2026-09-10 (revised, user):* Changed to **Option 2** (explicit control row). User: "I
+  previously selected Option 1 by mistake … The control list (List A) must physically exist as a
+  real row in the database with factor = 1.0000 and is_control = 1." No implementation had begun,
+  so only the schema plan and downstream Phase 15 questions are affected.
+
+---
+
 ## Phase 14 — Pricing overrides & resolution engine
 
 ### Q5 — Resolver / DTO / API changes + CRUD surface

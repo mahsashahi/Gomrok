@@ -13,7 +13,7 @@ flowchart TD
     Clients["Clients<br/>clients · client_api_keys · client_endpoints"]
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
     Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
-    Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)"]
+    Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)<br/>price_lists + price_list_packages — A/B (P15)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -568,3 +568,44 @@ dimension priority → highest `id`). An available winner replaces the amount
 with `pricing.combination_unavailable` (no fallback). `GET /api/v1/pricing/resolve` gains
 `method` / `purchase_type` / `interval` query params. `local-dev` seeds a `pro` Stripe+EUR rule
 (€27) and a `pro` US-group yearly-subscription unavailable rule.
+
+## Pricing — A/B price lists (Phase 15)
+
+```mermaid
+erDiagram
+    price_lists {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        int pricing_group_id FK "-> pricing_groups.id (CASCADE)"
+        varchar name "UNIQUE (pricing_group_id, name)"
+        tinyint is_control "exactly one per group; undeletable, never disabled"
+        decimal factor "1.0000 for control; base x factor"
+        tinyint is_enabled "control always 1"
+        datetime created_at
+        datetime updated_at
+    }
+    price_list_packages {
+        int id PK
+        int price_list_id FK "-> price_lists.id (CASCADE)"
+        int package_id FK "-> packages.id (CASCADE)"
+        bigint amount_minor "exact price on this list"
+        char currency_code FK "-> currencies.code (RESTRICT); = group currency"
+        datetime created_at
+        datetime updated_at
+    }
+
+    clients ||--o{ price_lists : "experiments for"
+    pricing_groups ||--o{ price_lists : "A/B within"
+    price_lists ||--o{ price_list_packages : "exact prices"
+    packages ||--o{ price_list_packages : "priced on"
+    currencies ||--o{ price_list_packages : "priced in"
+```
+
+Every pricing group owns one control list (`is_control = 1`, `factor = 1.0000`, always enabled,
+created with the group + backfilled by the migration). A non-control list shifts the resolved
+base price by `factor`, or by an exact `price_list_packages` amount per package.
+`PriceListResolver` runs between the Phase 13 base amount and the Phase 14 `price_rules` step:
+an exact list-package amount → else `base × factor` → else the base unchanged
+(`ResolvedPrice.source = price_list` when the amount moved). **Visitor→list assignment is
+deferred to Phase 24** — until then every resolve uses the control list. `local-dev` seeds a
+control list per group + a disabled `dach` "List B · -10%" with an exact `pro` €21.00.

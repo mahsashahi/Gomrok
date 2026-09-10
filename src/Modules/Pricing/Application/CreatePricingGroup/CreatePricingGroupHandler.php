@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Gomrok\Modules\Pricing\Application\CreatePricingGroup;
 
 use Gomrok\Modules\Clients\Application\ClientDirectory;
+use Gomrok\Modules\Pricing\Application\PriceListAuditSnapshot;
 use Gomrok\Modules\Pricing\Application\PricingAuditSnapshot;
+use Gomrok\Modules\Pricing\Domain\PriceList;
+use Gomrok\Modules\Pricing\Domain\PriceListRepository;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupRepository;
 use Gomrok\Modules\Pricing\Domain\PricingGroupSlug;
@@ -29,6 +32,7 @@ final readonly class CreatePricingGroupHandler
 
     public function __construct(
         private PricingGroupRepository $groups,
+        private PriceListRepository $priceLists,
         private ClientDirectory $clients,
         private ReferenceCatalog $reference,
         private AuditLogWriter $audit,
@@ -101,7 +105,7 @@ final readonly class CreatePricingGroupHandler
             $now,
         );
 
-        $this->transactions->run(function () use ($group, $command): void {
+        $this->transactions->run(function () use ($group, $command, $now): void {
             $this->groups->save($group);
             $groupId = $group->id();
             \assert($groupId !== null);
@@ -111,6 +115,22 @@ final readonly class CreatePricingGroupHandler
                 : AuditEntry::forSystem('pricing_group.created', $command->clientId);
 
             $this->audit->record($entry->withTarget('pricing_group', $groupId)->withChange(null, PricingAuditSnapshot::group($group)));
+
+            // Every pricing group owns a control price list (Phase 15).
+            $control = PriceList::control($command->clientId, $groupId, $now);
+            $this->priceLists->save($control);
+            $controlId = $control->id();
+            \assert($controlId !== null);
+
+            $controlEntry = $command->actorId !== null
+                ? AuditEntry::forAdminUser($command->actorId, $command->clientId, 'price_list.created')
+                : AuditEntry::forSystem('price_list.created', $command->clientId);
+
+            $this->audit->record(
+                $controlEntry->withTarget('price_list', $controlId)
+                    ->withChange(null, PriceListAuditSnapshot::list($control))
+                    ->withContext(['pricing_group_id' => $groupId]),
+            );
         });
 
         $groupId = $group->id();

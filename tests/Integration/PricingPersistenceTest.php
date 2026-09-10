@@ -96,7 +96,8 @@ final class PricingPersistenceTest extends TestCase
         $audit = new RecordingAuditLogWriter();
         $clients = new StubClientDirectory($this->clientId, 'pr-test-client');
 
-        $create = new CreatePricingGroupHandler($groups, $clients, $reference, $audit, $transactions, $clock);
+        $priceLists = new \Gomrok\Modules\Pricing\Infrastructure\PdoPriceListRepository($this->pdo);
+        $create = new CreatePricingGroupHandler($groups, $priceLists, $clients, $reference, $audit, $transactions, $clock);
         $default = $create->handle(new CreatePricingGroupCommand($this->clientId, 'Default', 'EUR', isDefault: true));
         $dach = $create->handle(new CreatePricingGroupCommand($this->clientId, 'DACH', 'EUR', slug: 'dach', priority: 1));
         $us = $create->handle(new CreatePricingGroupCommand($this->clientId, 'US', 'USD', slug: 'us', priority: 2));
@@ -129,6 +130,10 @@ final class PricingPersistenceTest extends TestCase
             $defaults,
             $rates,
             $packages,
+            new \Gomrok\Modules\Pricing\Application\PriceListResolver(
+                $priceLists,
+                new \Gomrok\Modules\Pricing\Infrastructure\PdoPriceListPackageRepository($this->pdo),
+            ),
             new \Gomrok\Modules\Pricing\Application\PriceRuleResolver(new \Gomrok\Modules\Pricing\Infrastructure\PdoPriceRuleRepository($this->pdo)),
             $clock,
         );

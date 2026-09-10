@@ -19,6 +19,7 @@ use Gomrok\Modules\Pricing\Application\SetPricingGroupPackage\SetPricingGroupPac
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
 use Gomrok\Tests\Support\InMemoryDefaultPackagePriceRepository;
+use Gomrok\Tests\Support\InMemoryPriceListRepository;
 use Gomrok\Tests\Support\InMemoryPricingGroupPackageRepository;
 use Gomrok\Tests\Support\InMemoryPricingGroupRepository;
 use Gomrok\Tests\Support\InMemoryReferenceCatalog;
@@ -34,6 +35,7 @@ final class PricingHandlersTest extends TestCase
     private const CLIENT = 7;
 
     private InMemoryPricingGroupRepository $groups;
+    private InMemoryPriceListRepository $priceLists;
     private InMemoryPricingGroupPackageRepository $rows;
     private InMemoryDefaultPackagePriceRepository $defaults;
     private InMemoryClientExchangeRateRepository $rates;
@@ -43,6 +45,7 @@ final class PricingHandlersTest extends TestCase
     protected function setUp(): void
     {
         $this->groups = new InMemoryPricingGroupRepository();
+        $this->priceLists = new InMemoryPriceListRepository();
         $this->rows = new InMemoryPricingGroupPackageRepository();
         $this->defaults = new InMemoryDefaultPackagePriceRepository();
         $this->rates = new InMemoryClientExchangeRateRepository();
@@ -151,6 +154,7 @@ final class PricingHandlersTest extends TestCase
     {
         return new CreatePricingGroupHandler(
             $this->groups,
+            $this->priceLists,
             new StubClientDirectory(self::CLIENT),
             new InMemoryReferenceCatalog(),
             $this->audit,

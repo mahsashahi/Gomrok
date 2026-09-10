@@ -32,7 +32,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 12 | Package purchase capabilities & provider definitions | ☑ | 2026-09-10 10:16 | 2026-09-10 13:16 | 4–6h | ~3h | N/A |
 | 13 | Pricing module: default prices & pricing groups | ☑ | 2026-09-10 13:23 | 2026-09-10 13:58 | 4–6h | ~35m | N/A |
 | 14 | Pricing overrides & resolution engine | ☑ | 2026-09-10 14:04 | 2026-09-10 16:05 | 6–9h | 2h 01m | N/A |
-| 15 | Price lists (A/B) | ☐ | — | — | 3–5h | — | — |
+| 15 | Price lists (A/B) | ☑ | 2026-09-10 14:57 | 2026-09-10 16:04 | 3–5h | 1h 07m | N/A |
 | 16 | Vouchers module: definitions & eligibility | ☐ | — | — | 4–6h | — | — |
 | 17 | Voucher validation, discount calc & redemption lifecycle | ☐ | — | — | 5–8h | — | — |
 | 18 | Decision snapshots | ☐ | — | — | 2–4h | — | — |
@@ -456,17 +456,30 @@ combination resolves to `pricing.combination_unavailable`, never a wrong price.
 
 **Goal:** run price experiments inside a pricing group without breaking consistency for a user.
 
-**Scope:**
-- `price_lists` (`id`, `name`, `enabled`, `factor`) per pricing group; every group implicitly
-  owns `List A · control` at `factor: 1`; at least one list always enabled.
-- Deterministic visitor → list assignment via a stable hash of the user ID; enabled lists split
-  new visitors evenly; disabling a list stops new assignments and moves existing users to the
-  group's primary list on their next visit.
-- Package prices per group per list.
+**Scope (as narrowed — decisions Phase 15 Q1–Q5):**
+- `price_lists` per pricing group (`id`, `client_id`, `pricing_group_id`, `name`, `is_control`,
+  `factor DECIMAL`, `is_enabled`). Every group has a **real control row** (`is_control = 1`,
+  `factor 1.0000`, undeletable / cannot be disabled) — created with the group + backfilled for
+  existing groups (Q1 → Option 2).
+- `price_list_packages` — optional exact per-list-per-package amount that overrides the factor
+  (Q2 → Option 3).
+- Resolver step: after the Phase 13 base amount, before the Phase 14 `price_rules` row — apply
+  the list's explicit package amount, else `base × factor` (Q3 → Option 1).
+- `CreatePriceList` / `EnablePriceList` / `DisablePriceList` / `SetPriceListPackagePrice` audited
+  handlers + `pricing:*` CLI + seeder.
 
-**DB:** `price_lists`, package-price-per-list table.
+**Deferred out of this phase (Phase 15 Q4 + Q5 — user, 2026-09-10):** the
+`price_list_assignments` table, the deterministic visitor→list bucket-assignment / hashing
+service, disable-fallback reassignment, and the `visitor_ref` query params on `/packages` +
+`/pricing/resolve`. **Re-ask Phase 15 Q4 and Q5 (full option lists) at Phase 24 — Payment
+creation flow — before implementing any of it.** Until then the resolver always uses the control
+list.
 
-**Exit:** stable assignment, even split, and disable-fallback tested.
+**DB:** `price_lists`, `price_list_packages`. (`price_list_assignments` deferred to Phase 24.)
+
+**Exit:** control row is auto-created + un-removable; factor math + explicit per-package override
++ precedence vs. Phase 14 `price_rules` tested. *(The original "stable assignment / even split /
+disable-fallback" exit criteria move to Phase 24 with the deferred decision.)*
 
 ## Phase 16 — Vouchers module: definitions & eligibility
 
@@ -600,10 +613,16 @@ prices ignored.
   raw card data.
 - `GET /api/v1/payments/{id}`, `/status`, `POST .../cancel`, `/refund`, `/capture` — each gated
   by provider + client capability.
+- **A/B price-list visitor assignment (deferred from Phase 15):** re-ask Phase 15 Q4 (stateless
+  vs. persisted `price_list_assignments`) and Q5 (management surface + which endpoints persist)
+  with their full option lists, then build the deterministic bucket-assignment service,
+  disable-fallback reassignment, and `visitor_ref` wiring so the resolved price reflects the
+  visitor's list. Exit criteria: stable assignment, even split, disable-fallback.
 
-**DB:** none new.
+**DB:** `price_list_assignments` (if the re-asked Phase 15 Q4 lands on the persisted option).
 
-**Exit:** happy path per provider (SDK mocked), capability rejections, and idempotency tested.
+**Exit:** happy path per provider (SDK mocked), capability rejections, and idempotency tested;
+A/B assignment stable + even + disable-fallback tested.
 
 ## Phase 25 — Webhooks module
 

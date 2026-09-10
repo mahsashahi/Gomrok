@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Gomrok\Tests\Unit\Modules\Pricing\Application;
 
 use DateTimeImmutable;
+use Gomrok\Modules\Pricing\Application\PriceListResolver;
 use Gomrok\Modules\Pricing\Application\PriceResolver;
 use Gomrok\Modules\Pricing\Application\PriceRuleResolver;
 use Gomrok\Modules\Pricing\Application\PriceSource;
 use Gomrok\Modules\Pricing\Application\ResolvedPrice;
 use Gomrok\Modules\Pricing\Domain\ClientExchangeRate;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePrice;
+use Gomrok\Modules\Pricing\Domain\PriceList;
 use Gomrok\Modules\Pricing\Domain\PriceRule;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupPackage;
@@ -22,6 +24,8 @@ use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
 use Gomrok\Tests\Support\InMemoryDefaultPackagePriceRepository;
+use Gomrok\Tests\Support\InMemoryPriceListPackageRepository;
+use Gomrok\Tests\Support\InMemoryPriceListRepository;
 use Gomrok\Tests\Support\InMemoryPriceRuleRepository;
 use Gomrok\Tests\Support\InMemoryPricingGroupPackageRepository;
 use Gomrok\Tests\Support\InMemoryPricingGroupRepository;
@@ -39,6 +43,8 @@ final class PriceResolverTest extends TestCase
     private InMemoryDefaultPackagePriceRepository $defaults;
     private InMemoryClientExchangeRateRepository $rates;
     private InMemoryPriceRuleRepository $priceRules;
+    private InMemoryPriceListRepository $priceLists;
+    private InMemoryPriceListPackageRepository $listPackages;
     private StubPackageDirectory $packages;
     private PriceResolver $resolver;
     private DateTimeImmutable $now;
@@ -51,6 +57,8 @@ final class PriceResolverTest extends TestCase
         $this->defaults = new InMemoryDefaultPackagePriceRepository();
         $this->rates = new InMemoryClientExchangeRateRepository();
         $this->priceRules = new InMemoryPriceRuleRepository();
+        $this->priceLists = new InMemoryPriceListRepository();
+        $this->listPackages = new InMemoryPriceListPackageRepository();
         $this->packages = (new StubPackageDirectory())->add(self::PACKAGE, self::CLIENT, 'pro', 'Pro');
         $this->resolver = new PriceResolver(
             $this->groups,
@@ -58,6 +66,7 @@ final class PriceResolverTest extends TestCase
             $this->defaults,
             $this->rates,
             $this->packages,
+            new PriceListResolver($this->priceLists, $this->listPackages),
             new PriceRuleResolver($this->priceRules),
             new FrozenClock('2026-09-10T12:00:00+00:00'),
         );
@@ -239,6 +248,48 @@ final class PriceResolverTest extends TestCase
         self::assertSame(2000, $this->priceOf($monthly)->amountMinor);
         self::assertTrue($yearly->isErr());
         self::assertSame('pricing.combination_unavailable', $yearly->error()->code);
+    }
+
+    #[Test]
+    public function anAssignedExperimentListShiftsTheBaseBeforePriceRules(): void
+    {
+        $groupId = $this->group('default', priority: 0, countries: [], currency: 'EUR', isDefault: true);
+
+        $control = PriceList::control(self::CLIENT, $groupId, $this->now);
+        $this->priceLists->save($control);
+        $listB = PriceList::experiment(self::CLIENT, $groupId, 'List B', '0.9000', $this->now);
+        $this->priceLists->save($listB);
+        $listBId = $listB->id();
+        \assert($listBId !== null);
+
+        // a card price rule still wins over the experiment for card buyers
+        $this->priceRules->save(PriceRule::create(
+            self::CLIENT,
+            self::PACKAGE,
+            null,
+            null,
+            null,
+            PaymentMethod::Card,
+            null,
+            null,
+            'EUR',
+            true,
+            2500,
+            $this->now,
+        ));
+
+        $onList = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, null, null, null, null, $listBId));
+        self::assertSame(2610, $onList->amountMinor); // 2900 * 0.9
+        self::assertSame(PriceSource::PriceList, $onList->source);
+        self::assertSame($listBId, $onList->priceListId);
+
+        $onControl = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE'));
+        self::assertSame(2900, $onControl->amountMinor);
+
+        $cardOnList = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, PaymentMethod::Card, null, null, null, $listBId));
+        self::assertSame(2500, $cardOnList->amountMinor); // price rule overrides the experiment
+        self::assertSame(PriceSource::DimensionOverride, $cardOnList->source);
+        self::assertSame($listBId, $cardOnList->priceListId); // still stamped
     }
 
     /**
