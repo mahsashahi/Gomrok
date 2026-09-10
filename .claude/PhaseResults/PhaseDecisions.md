@@ -16,6 +16,210 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 12 — Package purchase capabilities & provider definitions
+
+### Q5 — CRUD surface + how `synced → drift` is triggered
+
+**Question:** Which handlers / CLI, and how does editing a package mark its provider definitions
+stale?
+
+**Options:**
+
+1. **Dedicated handlers + CLI + seeder; drift via an explicit sweep inside the editing
+   handlers.** `SetPackagePurchaseCapabilities`, `SetPackageCountryPurchaseCapabilities`,
+   `UpdatePackage` (extended), `LinkPackageProvider`, `MarkPackageProviderSynced`,
+   `MarkPackageProviderNotNeeded`. Editing handlers run `UPDATE … WHERE package_id = ? AND
+   sync_state = 'synced'` → `drift` in the same transaction.
+2. **Drift via a domain event + listener.** Cleaner, but no dispatcher wired yet — first real
+   listener, extra machinery for one effect.
+3. **No automatic drift; a reconcile job detects it later.** Least code, but leaves the state
+   machine half-built vs the exit criterion.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — dedicated handlers + `package:*` CLI + seeder; `synced → drift` swept
+explicitly inside the editing handlers, in-transaction
+
+**Status:** Decided
+
+**Decision Notes:**
+- Use cases (all `Result` + audited `package.*`):
+  - `SetPackagePurchaseCapabilities` — full-replace of `package_purchase_capabilities`
+    (`list<{purchaseType, hasTrial, trialDays, durationMonths}>`); validates trial rules (Q1).
+  - `SetPackageCountryPurchaseCapabilities` — full-replace of the `(package, country)` override
+    rows; every listed type must be in the package's global set.
+  - `UpdatePackage` — extended with `badge` / `highlighted` / `clientPackageId` (+ their clear
+    flags).
+  - `LinkPackageProvider` — create/update a `package_provider_definitions` row
+    (`provider_side_name`, optional `remote_id`); account-ownership checked.
+  - `MarkPackageProviderSynced(remoteId)` / `MarkPackageProviderNotNeeded` — explicit state
+    transitions.
+- **Drift sweep:** a shared private step (`PackageDefinitionDrift::markStale($pdo, $packageId,
+  $now)` or a repo method) called at the end of `UpdatePackage`,
+  `SetPackagePurchaseCapabilities`, `SetPackageCountryPurchaseCapabilities`,
+  `SetPackageAvailability` — sets every `sync_state = 'synced'` definition of that package to
+  `drift`. Audited as part of the parent action (context note), not its own row.
+- Audit actions: `package.capabilities_updated`, `package.country_capabilities_updated`,
+  `package.provider_linked`, `package.provider_synced`, `package.provider_not_needed`
+  (+ existing `package.updated` / `package.availability_updated`).
+- CLI: `bin/{SetPackageCapabilities,SetPackageCountryCapabilities,LinkPackageProvider}.php`
+  (`composer package:set-capabilities` / `:set-country-capabilities` / `:link-provider`);
+  `bin/ListPackages.php` extended to show capability + definition counts.
+- `PackagesSeeder`: `pro` gains `subscription` (7-day trial, 1-month duration) + `one_time_payment`;
+  `starter` gains `one_time_payment`; a `not_needed` definition example if a Ziraat account
+  exists.
+
+### Q4 — How does purchase-type resolution surface, and what does `ResolvedPackage` gain?
+
+**Question:** Phase 11's `ResolvedPackage` has no purchase types. How is the Phase 12 data
+exposed?
+
+**Options:**
+
+1. **Extend `ResolvedPackage` + a dedicated `PackagePurchaseCapabilityResolver`.** Standalone
+   resolver (`for(packageId, ?country)` → country-effective set + per-type trial/duration);
+   `PackageCatalog::resolve()` calls it and fills `ResolvedPackage.purchaseTypes` / `badge` /
+   `highlighted` / `clientPackageId`. Package with no caps ⇒ dropped from the list.
+2. **Only the resolver, `ResolvedPackage` unchanged.** Callers make a second call.
+3. **Fold inline into `PackageCatalog::resolve()`.** No separate class; gating not unit-testable
+   in isolation, payment flow can't reuse.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — new `PackagePurchaseCapabilityResolver` + `ResolvedPackage` gains
+`purchaseTypes` (list of `{type, hasTrial, trialDays, durationMonths}`) + `badge` /
+`highlighted` / `clientPackageId`; `price` and `GET /api/v1/packages` stay in Phase 13
+
+**Status:** Decided
+
+**Decision Notes:**
+- `PackagePurchaseCapabilityResolver::for(int packageId, ?string country): PackageCapabilitySet`
+  — global `package_purchase_capabilities`, replaced by `package_country_purchase_capabilities`
+  rows if any exist for that country. Returns `list<ResolvedPurchaseCapability>`
+  (`purchaseType`, `hasTrial`, `trialDays`, `durationMonths`).
+- `PackageCatalog::resolve()` now: drops packages whose country-effective capability set is
+  empty (fail closed); fills `ResolvedPackage.purchaseTypes` + `badge` + `highlighted` +
+  `clientPackageId`. Still no `price`.
+- The market/provider ∩ (provider group + provider-type declaration) is **not** applied here —
+  that's the payment-creation flow (Phase 17), which calls the same resolver then intersects.
+- `ResolvedPurchaseCapability` and `PackageCapabilitySet` are new Application DTOs.
+
+### Q3 — `package_provider_definitions` — shape and sync-state model
+
+**Question:** Where a package exists on the provider side. Table shape + lifecycle?
+
+**Options:**
+
+1. **One row per `(package, provider account)`, lazily created, 4-state enum.**
+   `sync_state` ∈ `not_created` / `synced` / `drift` / `not_needed`; `remote_id` nullable; row
+   appears on first link/sync. API creation stubbed → Phases 21–23.
+2. **Eager grid** — a `not_created` row per `(package, provider account in availability)`,
+   auto-maintained. Complete but churny.
+3. **Simpler `remote_id NULL` + `is_synced BOOL`** — loses `drift` and `not_needed`, both named
+   in scope.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `package_provider_definitions`, one row per linked `(package, provider
+account)`, lazily created, `sync_state` enum with 4 states; manual `remote_id` accepted now,
+provider-API creation deferred
+
+**Status:** Decided
+
+**Decision Notes:**
+- `package_provider_definitions (id, package_id → packages.id CASCADE, provider_account_id →
+  provider_accounts.id CASCADE, provider_side_name VARCHAR(150) NULL, remote_id VARCHAR(191)
+  NULL, sync_state VARCHAR(20) NOT NULL DEFAULT 'not_created', last_synced_at DATETIME NULL,
+  last_error VARCHAR(255) NULL, created_at, updated_at)`. `UNIQUE (package_id,
+  provider_account_id)`, `INDEX (provider_account_id)`, `INDEX (sync_state)`.
+- App-enforced: the provider account belongs to the package's client.
+- `PackageProviderSyncState` enum: `NotCreated` (no remote yet), `Synced` (`remote_id` set,
+  believed current), `Drift` (local package changed since last sync — needs re-push), `NotNeeded`
+  (provider has no product model, e.g. Ziraat redirect / one-time).
+- Phase 12 transitions: `LinkPackageProvider` sets `provider_side_name` + optional `remote_id`
+  (→ `synced` if id given, else `not_created`); `MarkPackageProviderSynced(remote_id)`;
+  `MarkPackageProviderNotNeeded`; a package edit (`UpdatePackage` / capability change) flips any
+  `synced` definition to `drift` (domain event or explicit sweep — decided in Q5).
+- Provider-API `createRemoteProduct()` is **not** implemented — a stub raising
+  `not_implemented`; wired per adapter in Phases 21–23.
+
+### Q2 — Country-specific restrictions on a package's purchase types
+
+**Question:** `CLAUDE.md` requires per-package + per-country purchase-type restrictions (Pro is
+subscription-capable globally but one-time-only in Turkey). How?
+
+**Options:**
+
+1. **`package_country_purchase_capabilities` override table.** `(package_id, country_code,
+   purchase_type)`; rows present for `(package, country)` ⇒ that replaces the global set for
+   that country; absent ⇒ inherit `package_purchase_capabilities`. Same semantics as
+   provider-group country coverage.
+2. **No table — rely on the provider group.** Effective set = package ∩ group ∩ provider
+   declaration. But the group is market-wide, can't restrict one package's types in a country.
+3. **Denylist table** — lists purchase types removed for a country. Concise for "all except X",
+   reads worse for "subscription-only".
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `package_country_purchase_capabilities` allowlist override table
+(rows present ⇒ replace global set for that country; absent ⇒ inherit)
+
+**Status:** Decided
+
+**Decision Notes:**
+- `package_country_purchase_capabilities (id, package_id → packages.id CASCADE, country_code
+  CHAR(2) → countries.code RESTRICT, purchase_type VARCHAR(20), created_at)`. `UNIQUE
+  (package_id, country_code, purchase_type)`, `INDEX (country_code)`.
+- Resolution order (payment flow, Phase 17): package global caps → replaced by the
+  `(package, country)` override rows if any exist → ∩ provider-group purchase types (market,
+  Phase 10) → ∩ provider-type declaration (Phase 8). **Reject unsupported, never downgrade.**
+- A country override may only list purchase types the package supports globally (validated) —
+  it narrows, never widens.
+- `PackagePurchaseCapabilityResolver::for(packageId, ?country)` returns the country-effective
+  set (global ∩/replaced by override); the market/provider ∩ is the payment flow's job.
+
+### Q1 — Where do the purchase types and the Phase-11-deferred fields live?
+
+**Question:** Phase 12 adds: which purchase types a package supports; trial config (`hasTrial`,
+`trialDays`); `durationMonths`; and the display fields `badge` / `highlighted` /
+`clientPackageId`. How are these split across tables?
+
+**Options:**
+
+1. **Join table for purchase types (config on the row) + display columns on `packages`.**
+   `package_purchase_capabilities (package_id, purchase_type, has_trial, trial_days,
+   duration_months, ...)` — one row per supported purchase type, carrying the config that only
+   makes sense for *that* type (trial ⇒ subscription/recurring). `badge` VARCHAR NULL,
+   `highlighted` BOOL, `client_package_id` VARCHAR NULL added to `packages`.
+2. **Everything on `packages`.** Purchase types as a set column or a bare `(package_id,
+   purchase_type)` table; `has_trial` / `trial_days` / `duration_months` / `badge` /
+   `highlighted` / `client_package_id` all columns on `packages` (~6 new columns).
+3. **A separate 1:1 `package_settings` table** for every extra field, `packages` stays lean.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `package_purchase_capabilities` join table with per-row trial/duration
+config; `badge` / `highlighted` / `client_package_id` as additive columns on `packages`
+
+**Status:** Decided
+
+**Decision Notes:**
+- `package_purchase_capabilities (id, package_id → packages.id CASCADE, purchase_type VARCHAR(20)
+  [`PurchaseType` value], has_trial TINYINT(1) default 0, trial_days SMALLINT UNSIGNED NULL,
+  duration_months SMALLINT UNSIGNED NULL, created_at, updated_at)`. `UNIQUE (package_id,
+  purchase_type)`, `INDEX (purchase_type)`.
+- Domain guards: `has_trial = 1` ⇒ `trial_days` required and `purchase_type ∈ {subscription,
+  recurring_payment}`; `has_trial = 0` ⇒ `trial_days` NULL. `duration_months` allowed on any
+  type (entitlement length per purchase); NULL = open-ended / provider-defined.
+- Additive migration on `packages`: `badge VARCHAR(40) NULL`, `highlighted TINYINT(1) NOT NULL
+  DEFAULT 0`, `client_package_id VARCHAR(64) NULL` (the client's own identifier for
+  reconciliation; not unique-enforced by Gomrok).
+- Empty `package_purchase_capabilities` set for a package = **not sellable** (fail closed) —
+  `CreatePackage` still needs no capabilities, but the catalogue/ payment flow treats a package
+  with none as unavailable. (Confirmed against Q4.)
+
+---
+
 ## Phase 11 — Packages module: catalog & availability
 
 ### Q5 — Use-case decomposition + CRUD surface

@@ -12,18 +12,20 @@ use Gomrok\Modules\Providers\Domain\PaymentMethod;
 
 /**
  * Resolves a client's catalogue for a market context (country + currency +
- * optional method): the active packages available there, each with its
- * availability narrowed to that context. The payment-creation flow (Phase 17)
- * and the `GET /api/v1/packages` endpoint (Phase 13) consume this.
+ * optional method): the active, sellable packages available there, each with
+ * its availability narrowed to that context and its country-effective purchase
+ * capabilities (Phase 12). The payment-creation flow (Phase 17) and the
+ * `GET /api/v1/packages` endpoint (Phase 13) consume this.
  *
- * Phase 11 carries the catalogue identity + market-narrowed providers / methods.
- * `price` (Phase 13) and `purchaseTypes` (Phase 12) are not resolved yet.
+ * A package with **no** country-effective purchase capability is dropped
+ * (Phase 12 Q1 — fail closed). `price` is still Phase 13.
  */
 final readonly class PackageCatalog
 {
     public function __construct(
         private PackageRepository $packages,
         private ProviderAccountDirectory $providerAccounts,
+        private PackagePurchaseCapabilityResolver $capabilities,
     ) {
     }
 
@@ -52,14 +54,23 @@ final readonly class PackageCatalog
                 continue;
             }
 
+            $capabilitySet = $this->capabilities->for($package, $country);
+            if ($capabilitySet->isEmpty()) {
+                continue;
+            }
+
             $resolved[] = new ResolvedPackage(
                 $this->idOf($package),
                 $package->code()->value,
                 $package->name(),
                 $package->description(),
                 $package->metadata(),
+                $package->badge(),
+                $package->highlighted(),
+                $package->clientPackageId(),
                 $this->narrowProviderAccounts($package, $clientAccounts, $activeAccountIds),
                 array_map(static fn (PaymentMethod $m): string => $m->value, $package->methods()),
+                $capabilitySet->capabilities,
             );
         }
 

@@ -111,14 +111,22 @@ resolves the group, filters the accounts by mode / status / served country / pur
 # Package catalogue (Phase 11)
 composer package:create -- --client=televika --code=pro --name="Pro" [--description="..."]
 composer package:set-availability -- --client=televika --package=pro --country=DE --currency=EUR [--method=card] [--provider-account=stripe-live]
-composer package:update -- --client=televika --package=pro [--name="Pro Plus"] [--disable | --enable]
+composer package:update -- --client=televika --package=pro [--name="Pro Plus"] [--badge="Best value"] [--highlight | --unhighlight] [--client-package-id=X] [--disable | --enable]
 composer package:list -- --client=televika
+
+# Package purchase capabilities & provider definitions (Phase 12)
+composer package:set-capabilities -- --client=televika --package=pro --capability=one_time_payment --capability=subscription [--trial-days=14] [--duration-months=1]
+composer package:set-country-capabilities -- --client=televika --package=pro --override=TR:one_time_payment --override=DE:one_time_payment,subscription
+composer package:link-provider -- --client=televika --package=pro --account=stripe-live [--name="Pro (Stripe)"] [--remote-id=prod_ABC] [--not-needed]
 ```
 
-`code` is unique **per client**. A new package is available everywhere until restricted — each of
-country / currency / method / provider is fail-open (empty = all). `status=disabled` hides it.
-`PackageCatalog::resolve()` returns the market-filtered list (no price / purchase types yet);
-`GET /api/v1/packages` lands in Phase 13.
+`code` is unique **per client**. Availability (country / currency / method / provider) is
+**fail-open** (empty = all). **Purchase types are fail-closed** — a package with no
+`package:set-capabilities` row is not sellable and never appears in the catalogue. A
+per-country `--override` *replaces* the global purchase-type set for that country. `status=disabled`
+hides a package. Editing a package flips its `synced` provider definitions to `drift`.
+`PackageCatalog::resolve()` returns the market-filtered list with purchase capabilities (no price
+yet); `GET /api/v1/packages` lands in Phase 13.
 
 Provider secrets are encrypted with `APP_ENCRYPTION_KEY` — set it before creating accounts
 (`php -r 'echo base64_encode(random_bytes(32));'`). Secrets are printed once at most, never by

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gomrok\Modules\Packages\Application\SetPackageAvailability;
 
 use Gomrok\Modules\Packages\Application\PackageAuditSnapshot;
+use Gomrok\Modules\Packages\Domain\PackageProviderDefinitionRepository;
 use Gomrok\Modules\Packages\Domain\PackageRepository;
 use Gomrok\Modules\Providers\Application\ProviderAccountDirectory;
 use Gomrok\Modules\Providers\Domain\PaymentMethod;
@@ -27,6 +28,7 @@ final readonly class SetPackageAvailabilityHandler
         private PackageRepository $packages,
         private ReferenceCatalog $reference,
         private ProviderAccountDirectory $providerAccounts,
+        private PackageProviderDefinitionRepository $definitions,
         private AuditLogWriter $audit,
         private Transactions $transactions,
         private ClockInterface $clock,
@@ -77,17 +79,19 @@ final readonly class SetPackageAvailabilityHandler
         }
 
         $before = PackageAuditSnapshot::of($package);
+        $now = $this->clock->now();
         $package->setAvailability(
             $command->countries,
             $command->currencies,
             $methods,
             $command->providerAccountIds,
-            $this->clock->now(),
+            $now,
         );
 
         $clientId = $package->clientId();
-        $this->transactions->run(function () use ($package, $before, $clientId, $command): void {
+        $this->transactions->run(function () use ($package, $before, $clientId, $command, $now): void {
             $this->packages->save($package);
+            $stale = $this->definitions->markStaleForPackage($command->packageId, $now);
 
             $entry = $command->actorId !== null
                 ? AuditEntry::forAdminUser($command->actorId, $clientId, 'package.availability_updated')
@@ -96,7 +100,8 @@ final readonly class SetPackageAvailabilityHandler
             $this->audit->record(
                 $entry
                     ->withTarget('package', $command->packageId)
-                    ->withChange($before, PackageAuditSnapshot::of($package)),
+                    ->withChange($before, PackageAuditSnapshot::of($package))
+                    ->withContext(['provider_definitions_drifted' => $stale]),
             );
         });
 

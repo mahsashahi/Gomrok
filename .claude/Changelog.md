@@ -7,6 +7,58 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-10 — Phase 12: Package purchase capabilities & provider definitions
+
+**Summary.** What a package can be sold *as* (purchase types + trial/duration, per-country
+overrides) and where it exists on the provider side (`package_provider_definitions` with a
+4-state sync machine). Decisions (`PhaseResults/PhaseDecisions.md` Phase 12 Q1–Q5): join table
+with per-row trial/duration + display columns on `packages` · country override table that
+replaces the global set · lazily-created definitions with `not_created`/`synced`/`drift`/`not_needed`
+· dedicated `PackagePurchaseCapabilityResolver` + extended `ResolvedPackage` · in-handler drift
+sweep. **Schema confirmed by the user.**
+
+**Files created**
+- Migrations `20260910130001-04` → `Create{PackagePurchaseCapabilities,PackageCountryPurchaseCapabilities,PackageProviderDefinitions}Table`, `AddDisplayFieldsToPackages`.
+- `src/Modules/Packages/Domain/*` — `PackagePurchaseCapability`, `PackageCountryPurchaseCapability`,
+  `PackageProviderDefinition` (aggregate), `PackageProviderSyncState`, `PackageProviderDefinitionRepository`.
+- `src/Modules/Packages/Application/*` — `PackagePurchaseCapabilityResolver`, `PackageCapabilitySet`,
+  `ResolvedPurchaseCapability`, `PackageProviderDefinitionDirectory` (+ `Summary`),
+  `PackageProviderDefinitionAuditSnapshot`; use cases `SetPackagePurchaseCapabilities`
+  (+ `PurchaseCapabilityInput`), `SetPackageCountryPurchaseCapabilities`, `LinkPackageProvider`,
+  `ChangePackageProviderSyncState`.
+- `src/Modules/Packages/Infrastructure/*` — `PdoPackageProviderDefinitionRepository`,
+  `PdoPackageProviderDefinitionDirectory`.
+- CLI: `bin/{SetPackageCapabilities,SetPackageCountryCapabilities,LinkPackageProvider}.php`.
+- Tests: `PackagePurchaseCapabilityTest`, `PackageProviderDefinitionTest`,
+  `PackageCapabilityHandlersTest`, `InMemoryPackageProviderDefinitionRepository`;
+  `PackagesPersistenceTest` gained a second test.
+- `.claude/PhaseResults/Phase12Result.md`.
+
+**Files changed**
+- `src/Modules/Packages/Domain/Package.php` — `badge` / `highlighted` / `clientPackageId` +
+  global & per-country purchase capabilities, `effectiveCapabilities()` / `isSellable()`.
+- `PdoPackageRepository` / `PdoPackageDirectory` / `PackageSummary` / `ResolvedPackage` /
+  `PackageCatalog` / `PackageAuditSnapshot` — extended for the new fields; `PackageCatalog` drops
+  non-sellable packages and injects the resolver.
+- `UpdatePackage{Command,Handler}` / `SetPackageAvailabilityHandler` — display fields + drift
+  sweep (`PackageProviderDefinitionRepository` dependency).
+- `composer.json` / `.lock` — `package:set-capabilities` / `:set-country-capabilities` /
+  `:link-provider` scripts. `bin/{UpdatePackage,ListPackages}.php` extended. `PackagesSeeder` —
+  capabilities.
+- `tests/Integration/MigrationRoundTripTest.php`; Phase 11 package tests updated for the new
+  constructors.
+- DB docs (`database-design.md` → 30 tables, `database-diagram.md` + `.html` 10/10 mermaid,
+  `db_explain.md`); `Architecture.md` (§8 Packages, §9 pipeline); `Phases.md` (row 12 → ☑);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D15).
+
+**Reason.** Phase 12 of the 30-phase plan.
+
+**Migration notes.** 3 new tables + an additive `ADD COLUMN` on `packages` (nullable / defaulted,
+no backfill). Cross-client integrity on `package_provider_definitions` is app-enforced.
+
+**Breaking changes.** None.
+
 ## 2026-09-10 — Replace provider-shaped fake seed credentials
 
 **Summary.** GitHub secret scanning flagged the `sk_test_…` / `whsec_…` fixture strings in the

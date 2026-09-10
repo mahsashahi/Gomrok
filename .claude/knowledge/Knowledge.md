@@ -211,6 +211,34 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
   (`PaymentMethod`), and provider-account id (must be in
   `ProviderAccountDirectory::forClient(package.clientId)` — cross-client guard, app-enforced).
 
+## Package capabilities & provider definitions (Phase 12)
+
+- **Purchase capabilities are fail *closed*** — `package_purchase_capabilities` empty = the
+  package is **not sellable** and `PackageCatalog::resolve()` drops it. This is the opposite of
+  the Phase 11 availability dimensions (fail open). `Package::isSellable()` = active AND ≥1
+  global capability.
+- Trial config lives on the capability **row** (per purchase type), not on `packages`. Domain
+  guard: `has_trial` ⇒ `trial_days` set AND type ∈ {subscription, recurring_payment};
+  `PackagePurchaseCapability::of()` throws, `::validate()` returns a `DomainError` for handlers.
+- `package_country_purchase_capabilities` **replaces** (not intersects) the global set for a
+  country. `Package::effectiveCapabilities(?country)`: no override rows for that country → global
+  set; else global ∩ overridden types. The market/provider ∩ (provider group + provider-type
+  declaration) is the **payment flow's** job (Phase 17), not the resolver's.
+- `PackagePurchaseCapabilityResolver` is a **concrete** Application class (like `ProviderRouter`
+  / `PackageCatalog`). `PackageCatalog` now takes it as a 3rd constructor arg.
+- `package_provider_definitions` `sync_state`: `not_created` → `synced` (manual `remote_id`) →
+  `drift` (local edit) → `not_needed` (opt out). The **drift sweep** is an explicit
+  `markStaleForPackage()` repo call inside `UpdatePackage` / `SetPackageAvailability` /
+  `SetPackagePurchaseCapabilities` / `SetPackageCountryPurchaseCapabilities` handlers — **not**
+  `ChangePackageStatus` (disabling doesn't change the product shape). No event bus (Q5).
+- Provider-API product creation (`createRemoteProduct`) is **not** implemented — Phases 21–23
+  wire it per adapter. Phase 12 only stores state + accepts a manual id.
+- `packages` gained `badge` / `highlighted` / `client_package_id` via additive migration
+  `20260910130004` — `client_package_id` is the client's own reconciliation id, **not**
+  unique-enforced by Gomrok.
+- Editing constructors changed: `UpdatePackageHandler` and `SetPackageAvailabilityHandler` now
+  take `PackageProviderDefinitionRepository` — update any test that news them up directly.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

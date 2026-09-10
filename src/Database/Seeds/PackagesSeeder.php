@@ -58,7 +58,37 @@ final class PackagesSeeder extends AbstractSeed
         $this->replaceChildren($pdo, 'package_countries', 'country_code', $pro, ['DE'], $now);
         $this->replaceChildren($pdo, 'package_currencies', 'currency_code', $pro, ['EUR'], $now);
 
+        // Purchase capabilities (Phase 12): starter = one-time; pro = one-time + subscription (7-day trial, 1-month).
+        $this->replaceCapabilities($pdo, $starter, [['one_time_payment', 0, null, 1]], $now);
+        $this->replaceCapabilities($pdo, $pro, [
+            ['one_time_payment', 0, null, 1],
+            ['subscription', 1, 7, 1],
+        ], $now);
+
         $this->output->writeln('<info>PackagesSeeder: local-dev packages ready (starter, pro).</info>');
+    }
+
+    /**
+     * @param list<array{0: string, 1: int, 2: int|null, 3: int|null}> $capabilities [type, has_trial, trial_days, duration_months]
+     */
+    private function replaceCapabilities(PDO $pdo, int $packageId, array $capabilities, string $now): void
+    {
+        $pdo->prepare('DELETE FROM package_purchase_capabilities WHERE package_id = :id')->execute(['id' => $packageId]);
+        $insert = $pdo->prepare(
+            'INSERT INTO package_purchase_capabilities
+                (package_id, purchase_type, has_trial, trial_days, duration_months, created_at, updated_at)
+             VALUES (:id, :type, :has_trial, :trial_days, :duration_months, :now, :now)',
+        );
+        foreach ($capabilities as [$type, $hasTrial, $trialDays, $durationMonths]) {
+            $insert->execute([
+                'id' => $packageId,
+                'type' => $type,
+                'has_trial' => $hasTrial,
+                'trial_days' => $trialDays,
+                'duration_months' => $durationMonths,
+                'now' => $now,
+            ]);
+        }
     }
 
     private function upsertPackage(PDO $pdo, int $clientId, string $code, string $name, string $description, string $now): int

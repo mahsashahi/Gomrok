@@ -12,7 +12,7 @@ flowchart TD
     Xc["Cross-cutting<br/>idempotency_keys · audit_logs · error_logs"]
     Clients["Clients<br/>clients · client_api_keys · client_endpoints"]
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
-    Packages["Packages<br/>packages + country/currency/method/provider availability (P11)"]
+    Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -361,6 +361,9 @@ erDiagram
         text description "nullable"
         varchar status "active | disabled"
         json metadata "nullable, free-form"
+        varchar badge "nullable (P12)"
+        tinyint highlighted "P12"
+        varchar client_package_id "nullable (P12)"
         datetime created_at
         datetime updated_at
     }
@@ -397,12 +400,55 @@ erDiagram
     packages ||--o{ package_payment_methods : "sold via"
     packages ||--o{ package_provider_accounts : "bought through"
     provider_accounts ||--o{ package_provider_accounts : "sells"
+    packages ||--o{ package_purchase_capabilities : "sold as"
+    packages ||--o{ package_country_purchase_capabilities : "restricted in"
+    countries ||--o{ package_country_purchase_capabilities : "restricts"
+    packages ||--o{ package_provider_definitions : "defined on"
+    provider_accounts ||--o{ package_provider_definitions : "hosts"
+```
+
+```mermaid
+erDiagram
+    package_purchase_capabilities {
+        int id PK
+        int package_id FK "-> packages.id (CASCADE)"
+        varchar purchase_type "PurchaseType enum"
+        tinyint has_trial
+        smallint trial_days "nullable"
+        smallint duration_months "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+    package_country_purchase_capabilities {
+        int id PK
+        int package_id FK "-> packages.id (CASCADE)"
+        char country_code FK "-> countries.code (RESTRICT)"
+        varchar purchase_type "PurchaseType enum"
+        datetime created_at
+    }
+    package_provider_definitions {
+        int id PK
+        int package_id FK "-> packages.id (CASCADE)"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        varchar provider_side_name "nullable"
+        varchar remote_id "nullable, indexed"
+        varchar sync_state "not_created | synced | drift | not_needed"
+        datetime last_synced_at "nullable"
+        varchar last_error "nullable"
+        datetime created_at
+        datetime updated_at
+    }
 ```
 
 Client-owned catalogue (one `packages` table with `client_id`, `code` unique per client — no
 global catalogue, no `client_packages` junction). Each of the four availability dimensions is
 **fail open**: an empty set = available everywhere for that dimension (Phase 11 Q2); rows
-restrict. `PackageCatalog::resolve(client, country, currency, ?method)` returns the active,
-market-matching packages with provider accounts narrowed to the client's active set. **No price
-(Phase 13), no purchase types (Phase 12)** yet. `local-dev` gets seeded `starter` (unrestricted)
-+ `pro` (DE + EUR) packages (`APP_ENV ∈ {local, testing}` only).
+restrict. A package's **purchase types** (Phase 12) are stored in `package_purchase_capabilities`
+(fail **closed** — no rows = not sellable) with per-type trial / duration; a
+`package_country_purchase_capabilities` override **replaces** the global set for one country.
+`PackageCatalog::resolve(client, country, currency, ?method)` returns the active, market-matching
+**sellable** packages with provider accounts narrowed to the client's active set and the
+country-effective purchase capabilities. `package_provider_definitions` tracks where a package
+exists on each provider account (`sync_state` 4-state machine; editing a package flips `synced` →
+`drift`). **No price yet — Phase 13.** `local-dev` seeds `starter` (one-time) + `pro`
+(one-time + subscription, 7-day trial) (`APP_ENV ∈ {local, testing}` only).

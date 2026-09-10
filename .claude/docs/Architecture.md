@@ -299,9 +299,24 @@ availability join tables (`package_countries` / `_currencies` / `_payment_method
 `ChangePackageStatus`, `SetPackageAvailability` (full-replace, audited `package.*`).
 
 `PackageCatalog::resolve(clientId, country, currency, ?method)` → `list<ResolvedPackage>`: the
-client's active packages whose dimensions all match, each with its provider accounts narrowed to
-the client's active set. **No `price` (Phase 13), no `purchaseTypes` (Phase 12)** yet;
-`GET /api/v1/packages` is mounted in Phase 13. `PackageDirectory` is the raw read port.
+client's active, **sellable** packages whose dimensions all match, each with its provider
+accounts narrowed to the client's active set and its country-effective purchase capabilities.
+**No `price` (Phase 13)** yet; `GET /api/v1/packages` is mounted in Phase 13. `PackageDirectory`
+is the raw read port.
+
+**Purchase capabilities (Phase 12).** `package_purchase_capabilities` (the purchase types a
+package supports + per-type trial / `durationMonths`) is **fail closed** — a package with none is
+not sellable. `package_country_purchase_capabilities` **replaces** the global set for one
+country. `PackagePurchaseCapabilityResolver::for(package, ?country)` returns the country-effective
+set; the payment-creation flow (Phase 17) then intersects it with the provider group (Phase 10)
+and the provider-type declaration (Phase 8) — reject, never downgrade. `packages` also gained
+`badge` / `highlighted` / `client_package_id`.
+
+**Provider definitions (Phase 12).** `package_provider_definitions` — one row per linked
+`(package, provider account)` with a `sync_state` machine (`not_created` → `synced` → `drift` /
+`not_needed`). `LinkPackageProvider` accepts a manual `remote_id` now; provider-API product
+creation lands with each adapter (Phases 21–23). Editing a package flips its `synced` definitions
+to `drift` in-transaction.
 
 ## 9. Resolution pipelines (sketch)
 
@@ -310,14 +325,15 @@ Order is deterministic and will be documented precisely in the Pricing/Vouchers/
 ```
 PACKAGE LIST
   client + country + currency + method (+ purchase type, user)
-    → PackageCatalog::resolve  [Packages module — implemented Phase 11]
-        active packages of the client, kept if every availability dimension matches
-        (country / currency / method — empty set = matches anything)
-        → per package: id, code, name, description, metadata,
-          provider accounts narrowed to the client's active set, available methods
+    → PackageCatalog::resolve  [Packages module — implemented Phase 11–12]
+        active + sellable packages of the client, kept if every availability dimension matches
+        (country / currency / method — empty set = matches anything) and the
+        country-effective purchase-capability set is non-empty
+        → per package: id, code, name, description, metadata, badge, highlighted, clientPackageId,
+          provider accounts narrowed to the client's active set, available methods,
+          country-effective purchase capabilities (type + trial + durationMonths)
     → pricing group match (→ default fallback group)          [Phase 13]
     → price list assignment (stable hash of user id)          [Phase 13]
-    → purchase types + trial/duration/badge per package       [Phase 12]
 
 PRICE
   1. client + package

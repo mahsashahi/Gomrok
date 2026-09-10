@@ -18,6 +18,7 @@ final readonly class PdoPackageDirectory implements PackageDirectory
 {
     private const BASE = <<<'SQL'
         SELECT p.id, p.client_id, p.code, p.name, p.description, p.status, p.metadata,
+               p.badge, p.highlighted, p.client_package_id,
                (SELECT GROUP_CONCAT(c.country_code ORDER BY c.country_code)
                   FROM package_countries c WHERE c.package_id = p.id) AS countries,
                (SELECT GROUP_CONCAT(cu.currency_code ORDER BY cu.currency_code)
@@ -25,7 +26,9 @@ final readonly class PdoPackageDirectory implements PackageDirectory
                (SELECT GROUP_CONCAT(m.payment_method ORDER BY m.payment_method)
                   FROM package_payment_methods m WHERE m.package_id = p.id) AS methods,
                (SELECT GROUP_CONCAT(pa.provider_account_id ORDER BY pa.provider_account_id)
-                  FROM package_provider_accounts pa WHERE pa.package_id = p.id) AS provider_account_ids
+                  FROM package_provider_accounts pa WHERE pa.package_id = p.id) AS provider_account_ids,
+               (SELECT GROUP_CONCAT(pc.purchase_type ORDER BY pc.purchase_type)
+                  FROM package_purchase_capabilities pc WHERE pc.package_id = p.id) AS purchase_types
           FROM packages p
         SQL;
 
@@ -87,10 +90,14 @@ final readonly class PdoPackageDirectory implements PackageDirectory
             Row::nullableStr($row['description'] ?? null),
             Row::str($row['status'] ?? ''),
             $this->decodeMetadata(Row::nullableStr($row['metadata'] ?? null)),
+            Row::nullableStr($row['badge'] ?? null),
+            Row::bool($row['highlighted'] ?? null),
+            Row::nullableStr($row['client_package_id'] ?? null),
             $this->splitStrings(Row::nullableStr($row['countries'] ?? null)),
             $this->splitStrings(Row::nullableStr($row['currencies'] ?? null)),
             $this->splitStrings(Row::nullableStr($row['methods'] ?? null)),
             $this->splitInts(Row::nullableStr($row['provider_account_ids'] ?? null)),
+            $this->splitStrings(Row::nullableStr($row['purchase_types'] ?? null)),
         );
     }
 

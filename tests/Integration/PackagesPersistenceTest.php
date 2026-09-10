@@ -8,10 +8,18 @@ use Gomrok\Config\Settings;
 use Gomrok\Modules\Packages\Application\CreatePackage\CreatePackageCommand;
 use Gomrok\Modules\Packages\Application\CreatePackage\CreatePackageHandler;
 use Gomrok\Modules\Packages\Application\CreatePackage\CreatePackageResult;
+use Gomrok\Modules\Packages\Application\LinkPackageProvider\LinkPackageProviderCommand;
+use Gomrok\Modules\Packages\Application\LinkPackageProvider\LinkPackageProviderHandler;
 use Gomrok\Modules\Packages\Application\PackageCatalog;
+use Gomrok\Modules\Packages\Application\PackagePurchaseCapabilityResolver;
 use Gomrok\Modules\Packages\Application\ResolvedPackage;
 use Gomrok\Modules\Packages\Application\SetPackageAvailability\SetPackageAvailabilityCommand;
 use Gomrok\Modules\Packages\Application\SetPackageAvailability\SetPackageAvailabilityHandler;
+use Gomrok\Modules\Packages\Application\SetPackagePurchaseCapabilities\PurchaseCapabilityInput;
+use Gomrok\Modules\Packages\Application\SetPackagePurchaseCapabilities\SetPackagePurchaseCapabilitiesCommand;
+use Gomrok\Modules\Packages\Application\SetPackagePurchaseCapabilities\SetPackagePurchaseCapabilitiesHandler;
+use Gomrok\Modules\Packages\Domain\PackageProviderSyncState;
+use Gomrok\Modules\Packages\Infrastructure\PdoPackageProviderDefinitionRepository;
 use Gomrok\Modules\Packages\Infrastructure\PdoPackageRepository;
 use Gomrok\Modules\Providers\Infrastructure\PdoProviderAccountDirectory;
 use Gomrok\Shared\Infrastructure\Persistence\PdoReferenceCatalog;
@@ -96,7 +104,21 @@ final class PackagesPersistenceTest extends TestCase
         $proPayload = $pro->value();
         self::assertInstanceOf(CreatePackageResult::class, $proPayload);
 
-        $setAvailability = new SetPackageAvailabilityHandler($repo, $reference, $directory, $audit, $transactions, $clock);
+        $definitions = new PdoPackageProviderDefinitionRepository($this->pdo);
+
+        $setCapabilities = new SetPackagePurchaseCapabilitiesHandler($repo, $definitions, $audit, $transactions, $clock);
+        foreach (['starter', 'pro'] as $code) {
+            $found = $repo->findByClientAndCode($this->clientId, $code);
+            self::assertNotNull($found);
+            $id = $found->id();
+            self::assertNotNull($id);
+            self::assertTrue($setCapabilities->handle(new SetPackagePurchaseCapabilitiesCommand(
+                $id,
+                [new PurchaseCapabilityInput('one_time_payment')],
+            ))->isOk());
+        }
+
+        $setAvailability = new SetPackageAvailabilityHandler($repo, $reference, $directory, $definitions, $audit, $transactions, $clock);
         self::assertTrue($setAvailability->handle(new SetPackageAvailabilityCommand(
             $proPayload->packageId,
             countries: ['DE'],
@@ -111,9 +133,10 @@ final class PackagesPersistenceTest extends TestCase
         self::assertSame(['EUR'], $stored->currencyCodes());
         self::assertSame([$this->stripeAccountId], $stored->providerAccountIds());
         self::assertSame(['tier' => 2], $stored->metadata());
+        self::assertCount(1, $stored->purchaseCapabilities());
 
         // catalogue resolution
-        $catalog = new PackageCatalog($repo, $directory);
+        $catalog = new PackageCatalog($repo, $directory, new PackagePurchaseCapabilityResolver($repo));
 
         $de = $catalog->resolve($this->clientId, 'DE', 'EUR');
         $deCodes = array_map(static fn (ResolvedPackage $p): string => $p->code, $de);
@@ -122,5 +145,46 @@ final class PackagesPersistenceTest extends TestCase
 
         $fr = $catalog->resolve($this->clientId, 'FR', 'EUR');
         self::assertSame(['starter'], array_map(static fn (ResolvedPackage $p): string => $p->code, $fr));
+    }
+
+    #[Test]
+    public function providerDefinitionRoundTripsAndTheDriftSweepWorks(): void
+    {
+        $repo = new PdoPackageRepository($this->pdo);
+        $definitions = new PdoPackageProviderDefinitionRepository($this->pdo);
+        $transactions = new TransactionRunner($this->pdo);
+        $clock = new SystemClock();
+        $directory = new PdoProviderAccountDirectory($this->pdo);
+        $audit = new RecordingAuditLogWriter();
+        $clientDirectory = new StubClientDirectory($this->clientId, 'pkg-test-client');
+
+        $create = new CreatePackageHandler($repo, $clientDirectory, $audit, $transactions, $clock);
+        $created = $create->handle(new CreatePackageCommand($this->clientId, 'pro', 'Pro'));
+        self::assertTrue($created->isOk());
+        $payload = $created->value();
+        self::assertInstanceOf(CreatePackageResult::class, $payload);
+        $packageId = $payload->packageId;
+
+        (new SetPackagePurchaseCapabilitiesHandler($repo, $definitions, $audit, $transactions, $clock))
+            ->handle(new SetPackagePurchaseCapabilitiesCommand($packageId, [new PurchaseCapabilityInput('one_time_payment')]));
+
+        $link = new LinkPackageProviderHandler($repo, $definitions, $directory, $audit, $transactions, $clock);
+        self::assertTrue($link->handle(new LinkPackageProviderCommand($packageId, $this->stripeAccountId, 'Pro (Stripe)', 'prod_TEST'))->isOk());
+
+        $stored = $definitions->findByPackageAndAccount($packageId, $this->stripeAccountId);
+        self::assertNotNull($stored);
+        self::assertSame(PackageProviderSyncState::Synced, $stored->syncState());
+        self::assertSame('prod_TEST', $stored->remoteId());
+
+        // editing the package drifts the synced definition
+        (new SetPackagePurchaseCapabilitiesHandler($repo, $definitions, $audit, $transactions, $clock))
+            ->handle(new SetPackagePurchaseCapabilitiesCommand($packageId, [
+                new PurchaseCapabilityInput('one_time_payment'),
+                new PurchaseCapabilityInput('subscription'),
+            ]));
+
+        $afterEdit = $definitions->findByPackageAndAccount($packageId, $this->stripeAccountId);
+        self::assertNotNull($afterEdit);
+        self::assertSame(PackageProviderSyncState::Drift, $afterEdit->syncState());
     }
 }

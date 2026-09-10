@@ -48,9 +48,15 @@ $describe = static function (string $label, array $values): string {
     return $parts === [] ? "{$label}=all" : "{$label}=" . implode('/', $parts);
 };
 
+$purchaseTypes = static function (array $types): string {
+    $parts = array_map(static fn (mixed $t): string => is_scalar($t) ? (string) $t : '', array_values($types));
+
+    return $parts === [] ? 'purchase=none(not sellable)' : 'purchase=' . implode('/', $parts);
+};
+
 foreach ($rows as $package) {
     fwrite(STDOUT, sprintf(
-        "%-20s %-8s %-10s  %s  %s  %s  %s\n",
+        "%-20s %-8s %-10s  %s  %s  %s  %s  %s%s\n",
         $package->code,
         $package->status,
         '#' . $package->id,
@@ -58,6 +64,8 @@ foreach ($rows as $package) {
         $describe('currencies', $package->currencies),
         $describe('methods', $package->methods),
         $describe('accounts', $package->providerAccountIds),
+        $purchaseTypes($package->purchaseTypes),
+        $package->highlighted ? '  [highlighted]' : '',
     ));
 }
 

@@ -319,3 +319,41 @@ table, like `provider_group_methods`); `provider_account_id` FKs to `provider_ac
 `SetPackageAvailability` handler additionally checks the account belongs to the package's client.
 `PackageCatalog::resolve()` narrows a package's provider-account set to the client's **active**
 accounts before returning it.
+
+## Packages — capabilities & provider definitions (Phase 12)
+
+### `package_purchase_capabilities`
+
+What a package can be **sold as** — a subset of `one_time_payment` / `recurring_payment` /
+`auto_charge` / `subscription`, with per-type config. Unlike availability, this is **fail
+closed**: a package with zero rows is not sellable and `PackageCatalog::resolve()` drops it.
+
+- **Rows set:** by `bin/SetPackageCapabilities.php` (→ `SetPackagePurchaseCapabilities`) —
+  full replace.
+- **`has_trial` / `trial_days`** — a trial is domain-valid only for `subscription` /
+  `recurring_payment`; `has_trial = 0` forces `trial_days` NULL.
+- **`duration_months`** — entitlement length per purchase (NULL = open-ended / provider-defined).
+
+### `package_country_purchase_capabilities`
+
+Per-country override. When any row exists for `(package, country)` the listed types **replace**
+the package's global set for that country; no rows ⇒ inherit. A row's type must be in the global
+set — an override narrows, never widens. Set by `bin/SetPackageCountryCapabilities.php`
+(→ `SetPackageCountryPurchaseCapabilities`). The full payment-flow resolution (Phase 17) is:
+package global caps → country override → ∩ provider-group purchase types → ∩ provider-type
+declaration.
+
+### `package_provider_definitions`
+
+Where a package exists on one provider account's side (a Stripe Product, PayPal plan, or
+nothing). One row per linked `(package, provider account)`, created lazily by
+`bin/LinkPackageProvider.php` (→ `LinkPackageProvider`).
+
+- **`sync_state`** — `not_created` (no remote yet) → `synced` (`remote_id` set, current) →
+  `drift` (local package edited since) → or `not_needed` (provider has no product model, e.g.
+  Ziraat redirect). Transitions: `LinkPackageProvider` / `ChangePackageProviderSyncState`
+  (`markSynced` / `markNotNeeded`); the **drift sweep** in the package-editing handlers flips
+  every `synced` row of that package to `drift` in the same transaction.
+- **`remote_id`** — provider product/plan id, **indexed** for reverse lookup from a provider
+  webhook (Phase 25). Accepted manually now; provider-API creation lands per adapter (21–23).
+- **App-enforced:** the provider account belongs to the package's client.

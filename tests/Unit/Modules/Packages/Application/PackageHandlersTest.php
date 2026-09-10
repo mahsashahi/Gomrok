@@ -14,6 +14,7 @@ use Gomrok\Modules\Packages\Application\UpdatePackage\UpdatePackageCommand;
 use Gomrok\Modules\Packages\Application\UpdatePackage\UpdatePackageHandler;
 use Gomrok\Shared\Domain\ErrorType;
 use Gomrok\Tests\Support\FrozenClock;
+use Gomrok\Tests\Support\InMemoryPackageProviderDefinitionRepository;
 use Gomrok\Tests\Support\InMemoryPackageRepository;
 use Gomrok\Tests\Support\InMemoryReferenceCatalog;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
@@ -28,12 +29,14 @@ final class PackageHandlersTest extends TestCase
     private const CLIENT = 7;
 
     private InMemoryPackageRepository $packages;
+    private InMemoryPackageProviderDefinitionRepository $definitions;
     private RecordingAuditLogWriter $audit;
     private FrozenClock $clock;
 
     protected function setUp(): void
     {
         $this->packages = new InMemoryPackageRepository();
+        $this->definitions = new InMemoryPackageProviderDefinitionRepository();
         $this->audit = new RecordingAuditLogWriter();
         $this->clock = new FrozenClock('2026-09-10T12:00:00+00:00');
     }
@@ -74,6 +77,7 @@ final class PackageHandlersTest extends TestCase
             $this->packages,
             new InMemoryReferenceCatalog(),
             $accounts,
+            $this->definitions,
             $this->audit,
             new SynchronousTransactions(),
             $this->clock,
@@ -98,7 +102,7 @@ final class PackageHandlersTest extends TestCase
     public function updateRejectsABlankNameButLeavesOmittedFields(): void
     {
         $packageId = $this->create('pro');
-        $handler = new UpdatePackageHandler($this->packages, $this->audit, new SynchronousTransactions(), $this->clock);
+        $handler = new UpdatePackageHandler($this->packages, $this->definitions, $this->audit, new SynchronousTransactions(), $this->clock);
 
         self::assertSame('package.name_required', $handler->handle(new UpdatePackageCommand($packageId, name: '  '))->error()->code);
         self::assertTrue($handler->handle(new UpdatePackageCommand($packageId, description: 'a plan'))->isOk());

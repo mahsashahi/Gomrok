@@ -6,22 +6,26 @@ namespace Gomrok\Modules\Packages\Domain;
 
 use DateTimeImmutable;
 use Gomrok\Modules\Providers\Domain\PaymentMethod;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
 
 /**
- * A client's catalogue entry (Phase 11). Holds the catalogue identity plus the
- * four availability dimensions (country / currency / payment method / provider
- * account). An **empty** dimension means "available everywhere for that
- * dimension" (Phase 11 Q2). `id` is null until the repository persists it.
- * Purchase capabilities, pricing, trial config etc. are added by later phases.
+ * A client's catalogue entry. Holds the catalogue identity, the four
+ * availability dimensions (Phase 11 — empty = available everywhere), the
+ * supported purchase types with trial/duration config and their per-country
+ * overrides (Phase 12), and the display fields `badge` / `highlighted` /
+ * `clientPackageId`. `id` is null until the repository persists it. Pricing is
+ * Phase 13.
  */
 final class Package
 {
     /**
-     * @param array<string, mixed>|null $metadata
-     * @param list<string>              $countryCodes  ISO alpha-2, upper-case
-     * @param list<string>              $currencyCodes ISO 4217, upper-case
-     * @param list<PaymentMethod>       $methods
-     * @param list<int>                 $providerAccountIds
+     * @param array<string, mixed>|null              $metadata
+     * @param list<string>                           $countryCodes  ISO alpha-2, upper-case
+     * @param list<string>                           $currencyCodes ISO 4217, upper-case
+     * @param list<PaymentMethod>                    $methods
+     * @param list<int>                              $providerAccountIds
+     * @param list<PackagePurchaseCapability>        $purchaseCapabilities
+     * @param list<PackageCountryPurchaseCapability> $countryPurchaseCapabilities
      */
     private function __construct(
         private ?int $id,
@@ -31,10 +35,15 @@ final class Package
         private ?string $description,
         private PackageStatus $status,
         private ?array $metadata,
+        private ?string $badge,
+        private bool $highlighted,
+        private ?string $clientPackageId,
         private array $countryCodes,
         private array $currencyCodes,
         private array $methods,
         private array $providerAccountIds,
+        private array $purchaseCapabilities,
+        private array $countryPurchaseCapabilities,
         private readonly DateTimeImmutable $createdAt,
         private ?DateTimeImmutable $updatedAt,
     ) {
@@ -59,6 +68,11 @@ final class Package
             self::normaliseDescription($description),
             PackageStatus::Active,
             $metadata,
+            null,
+            false,
+            null,
+            [],
+            [],
             [],
             [],
             [],
@@ -69,11 +83,13 @@ final class Package
     }
 
     /**
-     * @param array<string, mixed>|null $metadata
-     * @param list<string>              $countryCodes
-     * @param list<string>              $currencyCodes
-     * @param list<PaymentMethod>       $methods
-     * @param list<int>                 $providerAccountIds
+     * @param array<string, mixed>|null              $metadata
+     * @param list<string>                           $countryCodes
+     * @param list<string>                           $currencyCodes
+     * @param list<PaymentMethod>                    $methods
+     * @param list<int>                              $providerAccountIds
+     * @param list<PackagePurchaseCapability>        $purchaseCapabilities
+     * @param list<PackageCountryPurchaseCapability> $countryPurchaseCapabilities
      */
     public static function fromStorage(
         int $id,
@@ -83,10 +99,15 @@ final class Package
         ?string $description,
         PackageStatus $status,
         ?array $metadata,
+        ?string $badge,
+        bool $highlighted,
+        ?string $clientPackageId,
         array $countryCodes,
         array $currencyCodes,
         array $methods,
         array $providerAccountIds,
+        array $purchaseCapabilities,
+        array $countryPurchaseCapabilities,
         DateTimeImmutable $createdAt,
         ?DateTimeImmutable $updatedAt,
     ): self {
@@ -98,10 +119,15 @@ final class Package
             $description,
             $status,
             $metadata,
+            $badge,
+            $highlighted,
+            $clientPackageId,
             $countryCodes,
             $currencyCodes,
             $methods,
             $providerAccountIds,
+            $purchaseCapabilities,
+            $countryPurchaseCapabilities,
             $createdAt,
             $updatedAt,
         );
@@ -131,6 +157,104 @@ final class Package
             $this->metadata = $metadata;
         }
         $this->updatedAt = $now;
+    }
+
+    public function updateDisplay(
+        ?string $badge,
+        ?bool $highlighted,
+        ?string $clientPackageId,
+        bool $clearBadge,
+        bool $clearClientPackageId,
+        DateTimeImmutable $now,
+    ): void {
+        if ($clearBadge) {
+            $this->badge = null;
+        } elseif ($badge !== null && trim($badge) !== '') {
+            $this->badge = trim($badge);
+        }
+        if ($highlighted !== null) {
+            $this->highlighted = $highlighted;
+        }
+        if ($clearClientPackageId) {
+            $this->clientPackageId = null;
+        } elseif ($clientPackageId !== null && trim($clientPackageId) !== '') {
+            $this->clientPackageId = trim($clientPackageId);
+        }
+        $this->updatedAt = $now;
+    }
+
+    /**
+     * @param list<PackagePurchaseCapability> $capabilities
+     */
+    public function setPurchaseCapabilities(array $capabilities, DateTimeImmutable $now): void
+    {
+        $seen = [];
+        foreach ($capabilities as $capability) {
+            $seen[$capability->purchaseType->value] = $capability;
+        }
+        $this->purchaseCapabilities = array_values($seen);
+        $this->updatedAt = $now;
+    }
+
+    /**
+     * @param list<PackageCountryPurchaseCapability> $overrides
+     */
+    public function setCountryPurchaseCapabilities(array $overrides, DateTimeImmutable $now): void
+    {
+        $seen = [];
+        foreach ($overrides as $override) {
+            $seen[$override->countryCode . ':' . $override->purchaseType->value] = $override;
+        }
+        $this->countryPurchaseCapabilities = array_values($seen);
+        $this->updatedAt = $now;
+    }
+
+    /**
+     * The purchase types this package can be sold as in a given country: the
+     * global set, replaced by the country override when any rows exist for that
+     * country. The market / provider intersection is the payment flow's job.
+     *
+     * @return list<PackagePurchaseCapability>
+     */
+    public function effectiveCapabilities(?string $countryCode): array
+    {
+        if ($countryCode === null) {
+            return $this->purchaseCapabilities;
+        }
+
+        $country = strtoupper(trim($countryCode));
+        $overriddenTypes = [];
+        foreach ($this->countryPurchaseCapabilities as $override) {
+            if ($override->countryCode === $country) {
+                $overriddenTypes[$override->purchaseType->value] = true;
+            }
+        }
+
+        if ($overriddenTypes === []) {
+            return $this->purchaseCapabilities;
+        }
+
+        return array_values(array_filter(
+            $this->purchaseCapabilities,
+            static fn (PackagePurchaseCapability $c): bool => isset($overriddenTypes[$c->purchaseType->value]),
+        ));
+    }
+
+    public function supportsPurchaseTypeGlobally(PurchaseType $purchaseType): bool
+    {
+        foreach ($this->purchaseCapabilities as $capability) {
+            if ($capability->purchaseType === $purchaseType) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** A package with no global purchase capability cannot be sold. */
+    public function isSellable(): bool
+    {
+        return $this->isActive() && $this->purchaseCapabilities !== [];
     }
 
     /**
@@ -241,6 +365,37 @@ final class Package
     public function metadata(): ?array
     {
         return $this->metadata;
+    }
+
+    public function badge(): ?string
+    {
+        return $this->badge;
+    }
+
+    public function highlighted(): bool
+    {
+        return $this->highlighted;
+    }
+
+    public function clientPackageId(): ?string
+    {
+        return $this->clientPackageId;
+    }
+
+    /**
+     * @return list<PackagePurchaseCapability>
+     */
+    public function purchaseCapabilities(): array
+    {
+        return $this->purchaseCapabilities;
+    }
+
+    /**
+     * @return list<PackageCountryPurchaseCapability>
+     */
+    public function countryPurchaseCapabilities(): array
+    {
+        return $this->countryPurchaseCapabilities;
     }
 
     /**

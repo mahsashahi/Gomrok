@@ -6,8 +6,10 @@ namespace Gomrok\Modules\Packages\Application;
 
 /**
  * Read-only view of a package for other modules, the CLI and (Phase 27) the
- * admin panel. Carries the full availability sets and the raw metadata; no
- * market resolution is applied — see {@see ResolvedPackage} for that.
+ * admin panel. Carries the full availability sets, the global purchase types
+ * (not country-resolved — see {@see PackagePurchaseCapabilityResolver}), the
+ * display fields and the raw metadata. No market resolution is applied — see
+ * {@see ResolvedPackage} for that.
  */
 final readonly class PackageSummary
 {
@@ -17,6 +19,7 @@ final readonly class PackageSummary
      * @param list<string>              $currencies
      * @param list<string>              $methods
      * @param list<int>                 $providerAccountIds
+     * @param list<string>              $purchaseTypes global set, `PurchaseType` values
      */
     public function __construct(
         public int $id,
@@ -26,10 +29,14 @@ final readonly class PackageSummary
         public ?string $description,
         public string $status,
         public ?array $metadata,
+        public ?string $badge,
+        public bool $highlighted,
+        public ?string $clientPackageId,
         public array $countries,
         public array $currencies,
         public array $methods,
         public array $providerAccountIds,
+        public array $purchaseTypes,
     ) {
     }
 

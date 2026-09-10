@@ -50,6 +50,9 @@ final class MigrationRoundTripTest extends TestCase
         'package_currencies',
         'package_payment_methods',
         'package_provider_accounts',
+        'package_purchase_capabilities',
+        'package_country_purchase_capabilities',
+        'package_provider_definitions',
     ];
 
     private PDO $pdo;

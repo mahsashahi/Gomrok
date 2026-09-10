@@ -19,9 +19,13 @@ use Gomrok\Shared\Domain\Result;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-$opts = getopt('', ['client:', 'package:', 'name::', 'description::', 'clear-description', 'disable', 'enable']);
+$opts = getopt('', [
+    'client:', 'package:', 'name::', 'description::', 'clear-description',
+    'badge::', 'clear-badge', 'highlight', 'unhighlight',
+    'client-package-id::', 'clear-client-package-id', 'disable', 'enable',
+]);
 if ($opts === false || !isset($opts['client'], $opts['package'])) {
-    fwrite(STDERR, "usage: php bin/UpdatePackage.php --client=<slug|id> --package=<code> [--name=<name>] [--description=<text> | --clear-description] [--disable | --enable]\n");
+    fwrite(STDERR, "usage: php bin/UpdatePackage.php --client=<slug|id> --package=<code> [--name=<name>] [--description=<text> | --clear-description] [--badge=<text> | --clear-badge] [--highlight | --unhighlight] [--client-package-id=<id> | --clear-client-package-id] [--disable | --enable]\n");
     exit(2);
 }
 
@@ -51,13 +55,28 @@ if ($package === null) {
     exit(1);
 }
 
+$highlighted = null;
+if (array_key_exists('highlight', $opts)) {
+    $highlighted = true;
+} elseif (array_key_exists('unhighlight', $opts)) {
+    $highlighted = false;
+}
+
 $updates = new UpdatePackageCommand(
     packageId: $package->id,
     name: ($n = $asString($opts['name'] ?? null)) !== '' ? $n : null,
     description: ($d = $asString($opts['description'] ?? null)) !== '' ? $d : null,
     clearDescription: array_key_exists('clear-description', $opts),
+    badge: ($b = $asString($opts['badge'] ?? null)) !== '' ? $b : null,
+    highlighted: $highlighted,
+    clientPackageId: ($c = $asString($opts['client-package-id'] ?? null)) !== '' ? $c : null,
+    clearBadge: array_key_exists('clear-badge', $opts),
+    clearClientPackageId: array_key_exists('clear-client-package-id', $opts),
 );
-if ($updates->name !== null || $updates->description !== null || $updates->clearDescription) {
+$touchesUpdate = $updates->name !== null || $updates->description !== null || $updates->clearDescription
+    || $updates->badge !== null || $updates->highlighted !== null || $updates->clientPackageId !== null
+    || $updates->clearBadge || $updates->clearClientPackageId;
+if ($touchesUpdate) {
     $handler = $container->get(UpdatePackageHandler::class);
     assert($handler instanceof UpdatePackageHandler);
     $result = $handler->handle($updates);

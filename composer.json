@@ -85,6 +85,9 @@
         "package:create": "php bin/CreatePackage.php",
         "package:update": "php bin/UpdatePackage.php",
         "package:set-availability": "php bin/SetPackageAvailability.php",
+        "package:set-capabilities": "php bin/SetPackageCapabilities.php",
+        "package:set-country-capabilities": "php bin/SetPackageCountryCapabilities.php",
+        "package:link-provider": "php bin/LinkPackageProvider.php",
         "package:list": "php bin/ListPackages.php",
         "ci": [
             "@cs",
@@ -126,7 +129,10 @@
         "package:create": "Add a package to a client's catalogue (--client --code --name [--description])",
         "package:update": "Edit a package's name / description / status (--client --package ...)",
         "package:set-availability": "Set a package's country / currency / method / provider availability (--client --package ...)",
-        "package:list": "List a client's packages with availability counts (--client=<slug|id>)",
+        "package:set-capabilities": "Set a package's global purchase-type set (--client --package --capability=<type> ...)",
+        "package:set-country-capabilities": "Set a package's per-country purchase-type overrides (--client --package --override=CC:type ...)",
+        "package:link-provider": "Link a package to a provider account on the provider side (--client --package --account ...)",
+        "package:list": "List a client's packages with availability + purchase-type counts (--client=<slug|id>)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }

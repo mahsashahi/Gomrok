@@ -35,9 +35,10 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Providers — accounts (Phase 9) | `provider_accounts`, `provider_account_endpoints`, `provider_account_countries`, `provider_account_methods` — **4** |
 | Providers — routing (Phase 10) | `provider_groups`, `provider_group_countries`, `provider_group_accounts`, `provider_group_purchase_types`, `provider_group_methods` — **5** |
 | Packages — catalog & availability (Phase 11) | `packages`, `package_countries`, `package_currencies`, `package_payment_methods`, `package_provider_accounts` — **5** |
-| — | (more business tables land per module from Phase 12) |
+| Packages — capabilities & provider defs (Phase 12) | `package_purchase_capabilities`, `package_country_purchase_capabilities`, `package_provider_definitions` — **3** (+ `badge` / `highlighted` / `client_package_id` columns on `packages`) |
+| — | (more business tables land per module from Phase 13) |
 
-**Total: 27 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 30 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -514,6 +515,9 @@ All five tables are client-scoped through `packages.client_id`.
 | `description` | TEXT | yes | |
 | `status` | VARCHAR(20) | no | `active` / `disabled` (`PackageStatus`), default `active` |
 | `metadata` | JSON | yes | free-form client attributes; validated as an object at the use-case boundary |
+| `badge` | VARCHAR(40) | yes | *(Phase 12)* short display label |
+| `highlighted` | TINYINT(1) | no | *(Phase 12)* default `0` |
+| `client_package_id` | VARCHAR(64) | yes | *(Phase 12)* the client's own id for this package; **not** unique-enforced by Gomrok |
 | `created_at` / `updated_at` | DATETIME | no / yes | |
 
 Indexes: `UNIQUE (client_id, code)`, `(client_id, status)`. `status = disabled` is the per-client
@@ -538,9 +542,74 @@ Phases 12–13.
 ### Resolution (`PackageCatalog::resolve`)
 
 For `(clientId, country, currency, ?method)`: active packages of the client kept only if each
-dimension matches (`rows == [] → match`, else `requested ∈ rows`). Returns `ResolvedPackage`
-(id, code, name, description, metadata, `availableProviderAccountIds` = the package's set ∩ the
-client's active accounts, `availableMethods`). No price, no purchase types this phase.
+dimension matches (`rows == [] → match`, else `requested ∈ rows`) **and** the country-effective
+purchase-capability set (Phase 12) is non-empty. Returns `ResolvedPackage` (id, code, name,
+description, metadata, badge, highlighted, clientPackageId, `availableProviderAccountIds` = the
+package's set ∩ the client's active accounts, `availableMethods`, `purchaseCapabilities`). Still
+no `price` — Phase 13.
+
+---
+
+## Packages — capabilities & provider definitions (Phase 12)
+
+### `package_purchase_capabilities` (Q1)
+
+The purchase types a package supports, with per-type config. An **empty** set makes the package
+not sellable (fail closed — the catalogue drops it).
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `purchase_type` | VARCHAR(20) | no | `PurchaseType` value, app-enforced |
+| `has_trial` | TINYINT(1) | no | default `0` |
+| `trial_days` | SMALLINT UNSIGNED | yes | required when `has_trial = 1`; domain-enforced only for `subscription` / `recurring_payment` |
+| `duration_months` | SMALLINT UNSIGNED | yes | entitlement length per purchase; NULL = open-ended |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (package_id, purchase_type)`, `INDEX (purchase_type)`.
+
+### `package_country_purchase_capabilities` (Q2)
+
+Per-country override of the purchase-type set. Rows present for `(package, country)` **replace**
+the global set for that country; absent ⇒ inherit. A listed type must be in the package's global
+set (validated).
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `country_code` | CHAR(2) | no | FK → `countries(code)` RESTRICT |
+| `purchase_type` | VARCHAR(20) | no | |
+| `created_at` | DATETIME | no | |
+
+`UNIQUE (package_id, country_code, purchase_type)`, `INDEX (country_code)`.
+
+### `package_provider_definitions` (Q3)
+
+Where a package exists on one provider account's side. One row per linked `(package, provider
+account)`, created lazily.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
+| `provider_side_name` | VARCHAR(150) | yes | product / plan name to use on the provider |
+| `remote_id` | VARCHAR(191) | yes | provider product/plan id; NULL for `not_created` / `not_needed` |
+| `sync_state` | VARCHAR(20) | no | `not_created` / `synced` / `drift` / `not_needed` (`PackageProviderSyncState`), default `not_created` |
+| `last_synced_at` | DATETIME | yes | |
+| `last_error` | VARCHAR(255) | yes | last sync failure message (no secrets) |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (package_id, provider_account_id)`, `INDEX (provider_account_id)`, `INDEX (sync_state)`,
+`INDEX (remote_id)` (reverse lookup for Phase 25 webhooks). **App-enforced:** the provider
+account belongs to the package's client.
+
+**Drift sweep (Q5):** editing a package (`UpdatePackage` / `SetPackageAvailability` /
+`SetPackagePurchaseCapabilities` / `SetPackageCountryPurchaseCapabilities`) runs
+`UPDATE … SET sync_state = 'drift' WHERE package_id = ? AND sync_state = 'synced'` in the same
+transaction. Provider-API product creation is **not** implemented — Phases 21–23.
 
 ---
 
@@ -584,7 +653,11 @@ client's active accounts, `availableMethods`). No price, no purchase types this 
 | `src/Database/Migrations/20260910120003_create_package_currencies_table.php` | `Gomrok\Database\Migrations\CreatePackageCurrenciesTable` |
 | `src/Database/Migrations/20260910120004_create_package_payment_methods_table.php` | `Gomrok\Database\Migrations\CreatePackagePaymentMethodsTable` |
 | `src/Database/Migrations/20260910120005_create_package_provider_accounts_table.php` | `Gomrok\Database\Migrations\CreatePackageProviderAccountsTable` |
-| `src/Database/Seeds/PackagesSeeder.php` | `Gomrok\Database\Seeds\PackagesSeeder` (env-gated: `local-dev` gets `starter` + `pro` packages) |
+| `src/Database/Seeds/PackagesSeeder.php` | `Gomrok\Database\Seeds\PackagesSeeder` (env-gated: `local-dev` gets `starter` + `pro` packages, with purchase capabilities) |
+| `src/Database/Migrations/20260910130001_create_package_purchase_capabilities_table.php` | `Gomrok\Database\Migrations\CreatePackagePurchaseCapabilitiesTable` |
+| `src/Database/Migrations/20260910130002_create_package_country_purchase_capabilities_table.php` | `Gomrok\Database\Migrations\CreatePackageCountryPurchaseCapabilitiesTable` |
+| `src/Database/Migrations/20260910130003_create_package_provider_definitions_table.php` | `Gomrok\Database\Migrations\CreatePackageProviderDefinitionsTable` |
+| `src/Database/Migrations/20260910130004_add_display_fields_to_packages.php` | `Gomrok\Database\Migrations\AddDisplayFieldsToPackages` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

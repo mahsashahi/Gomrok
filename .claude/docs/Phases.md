@@ -29,7 +29,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 9 | Provider accounts (per client) | ☑ | 2026-09-09 19:21 | 2026-09-09 20:16 | 4–6h | 55m | N/A |
 | 10 | Country provider configuration & routing resolution | ☑ | 2026-09-09 20:25 | 2026-09-09 23:37 | 5–8h | ~3h 10m | N/A |
 | 11 | Packages module: catalog & availability | ☑ | 2026-09-09 23:51 | 2026-09-10 00:43 | 4–6h | ~52m | N/A |
-| 12 | Package purchase capabilities & provider definitions | ☐ | — | — | 4–6h | — | — |
+| 12 | Package purchase capabilities & provider definitions | ☑ | 2026-09-10 10:16 | 2026-09-10 13:16 | 4–6h | ~3h | N/A |
 | 13 | Pricing module: default prices & pricing groups | ☐ | — | — | 4–6h | — | — |
 | 14 | Pricing overrides & resolution engine | ☐ | — | — | 6–9h | — | — |
 | 15 | Price lists (A/B) | ☐ | — | — | 3–5h | — | — |
@@ -383,17 +383,27 @@ resolved-list output (`PackageCatalogTest` + captured `CatalogEvidence` output).
 
 **Goal:** what a package can be sold *as*, and where it exists on the provider side.
 
-**Scope:**
-- `package_purchase_capabilities` (one_time / recurring / auto_charge / subscription); country
-  restrictions on a package's purchase types; trial config (`hasTrial`, `trialDays`),
-  `durationMonths`, `badge`, `highlighted`, `clientPackageId`.
-- Package-provider definitions per package per provider account: provider-side name, remote ID,
-  sync state (`synced` / `not_created` / `drift` / `not_needed`); create via provider API where
-  supported, or accept a manually-entered remote ID.
+**Scope (as built):**
+- `package_purchase_capabilities` (`PurchaseType` value + `has_trial` / `trial_days` /
+  `duration_months` per row, Q1 — **fail closed**: no rows = not sellable);
+  `package_country_purchase_capabilities` (per-country override that **replaces** the global set,
+  Q2). `badge` / `highlighted` / `client_package_id` added to `packages` (additive migration).
+- `PackagePurchaseCapabilityResolver::for(package, ?country)` → country-effective set; the
+  market/provider ∩ is the payment flow's job (Phase 17). `ResolvedPackage` / `PackageCatalog`
+  extended; a package with no country-effective caps is dropped from the catalogue.
+- `package_provider_definitions` (one row per `(package, provider account)`, lazily created,
+  `sync_state` 4-state machine, Q3). Manual `remote_id` accepted; provider-API creation deferred
+  to Phases 21–23. Editing a package flips `synced` definitions → `drift` in-transaction (Q5).
+- Use cases `SetPackagePurchaseCapabilities` / `SetPackageCountryPurchaseCapabilities` /
+  `LinkPackageProvider` / `ChangePackageProviderSyncState`; `UpdatePackage` extended.
+  `composer package:*` CLI + `PackagesSeeder`.
 
-**DB:** purchase-capability tables, package-provider-definition table.
+**DB:** 3 new tables + `ALTER packages` (3 cols). Total 30 tables.
 
-**Exit:** purchase-type gating and provider-definition state transitions tested.
+**Exit:** ☑ purchase-type gating (global + country override, fail-closed drop) —
+`PackagePurchaseCapabilityTest` / `PackageCatalogTest` / `PackageCapabilityHandlersTest`;
+provider-definition state transitions (`not_created → synced → drift → not_needed` + edit sweep)
+— `PackageProviderDefinitionTest` / `PackageCapabilityHandlersTest` + captured `CapabilityEvidence`.
 
 ## Phase 13 — Pricing module: default prices & pricing groups
 
