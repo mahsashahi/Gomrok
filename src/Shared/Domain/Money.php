@@ -48,6 +48,15 @@ final readonly class Money implements Stringable
         return $this->money->getMinorAmount()->toInt();
     }
 
+    /**
+     * The amount as a plain decimal string in major units, e.g. `"12.34"` — no
+     * currency code, no locale formatting. Use {@see format()} for display.
+     */
+    public function amount(): string
+    {
+        return (string) $this->money->getAmount();
+    }
+
     public function plus(self $addend): self
     {
         return new self($this->money->plus($addend->money));

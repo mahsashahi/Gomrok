@@ -89,6 +89,11 @@
         "package:set-country-capabilities": "php bin/SetPackageCountryCapabilities.php",
         "package:link-provider": "php bin/LinkPackageProvider.php",
         "package:list": "php bin/ListPackages.php",
+        "pricing:create-group": "php bin/CreatePricingGroup.php",
+        "pricing:set-default-price": "php bin/SetDefaultPackagePrice.php",
+        "pricing:set-rate": "php bin/SetClientExchangeRate.php",
+        "pricing:set-group-package": "php bin/SetPricingGroupPackage.php",
+        "pricing:list": "php bin/ListPricing.php",
         "ci": [
             "@cs",
             "@stan",
@@ -133,6 +138,11 @@
         "package:set-country-capabilities": "Set a package's per-country purchase-type overrides (--client --package --override=CC:type ...)",
         "package:link-provider": "Link a package to a provider account on the provider side (--client --package --account ...)",
         "package:list": "List a client's packages with availability + purchase-type counts (--client=<slug|id>)",
+        "pricing:create-group": "Define a pricing group (--client --name --currency [--slug --priority --device --default])",
+        "pricing:set-default-price": "Set a package's baseline price (--client --package --amount-minor --currency)",
+        "pricing:set-rate": "Set a client FX rate (--client --base --quote --rate [--from])",
+        "pricing:set-group-package": "Set a package's price/display in a pricing group (--client --group --package --status ...)",
+        "pricing:list": "List a client's pricing groups (--client=<slug|id>)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }

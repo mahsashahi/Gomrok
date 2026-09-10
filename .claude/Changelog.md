@@ -7,6 +7,51 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-10 — Phase 13: Pricing module — default prices & pricing groups
+
+**Summary.** The baseline of Gomrok pricing: priority-ordered pricing groups, one baseline price
+per package, client-configured FX, per-group-per-package rows, a `PriceResolver` /
+`PriceCatalog`, and the first two client-facing catalogue endpoints. Decisions
+(`PhaseResults/PhaseDecisions.md` Phase 13 Q1–Q5): priority-ordered overlapping pricing groups
+(distinct from Phase 10 provider groups) · single baseline + `client_exchange_rates` for
+cross-currency · one `(group, package)` row, no row = implicit default · dedicated
+`PriceResolver`/`PriceCatalog` + `ResolvedPrice`, `GET /api/v1/packages` mounts now · one
+audited handler per operation + `pricing:*` CLI + seeder. **Schema confirmed by the user.**
+
+**Files created**
+- Migrations `20260910140001-05` → `Create{PricingGroups,PricingGroupCountries,DefaultPackagePrices,ClientExchangeRates,PricingGroupPackages}Table`; `PricingSeeder`.
+- New **Pricing module** (`src/Modules/Pricing/`, registered in `ContainerFactory`): domain
+  (`PricingGroup`, `PricingGroupPackage`, `DefaultPackagePrice`, `ClientExchangeRate`, enums,
+  4 repository ports); application (`PriceResolver`, `PriceCatalog`, `ResolvedPrice` /
+  `ResolvedCatalogPackage` / `PriceSource`, `PricingGroupDirectory` + `Summary`,
+  `PricingAuditSnapshot`, 7 use-case folders); infrastructure (5 `Pdo*` adapters, `definitions.php`).
+- HTTP: `src/Http/Api/PackagesAction.php` (`GET /api/v1/packages`),
+  `src/Http/Api/PricingResolveAction.php` (`GET /api/v1/pricing/resolve`); routes wired.
+- CLI: `bin/{CreatePricingGroup,SetDefaultPackagePrice,SetClientExchangeRate,SetPricingGroupPackage,ListPricing}.php`.
+- Tests: `PriceResolverTest`, `PricingGroupTest`, `PricingHandlersTest`, `PriceCatalogTest`,
+  `PackagesApiTest`, `PricingPersistenceTest`; support doubles
+  `InMemory{PricingGroup,PricingGroupPackage,DefaultPackagePrice,ClientExchangeRate}Repository`,
+  `StubPackageDirectory`.
+- `Shared\Domain\Money::amount()` — decimal-string accessor.
+- `.claude/PhaseResults/Phase13Result.md`.
+
+**Files changed**
+- `src/Bootstrap/ContainerFactory.php`, `src/Config/routes.php`.
+- `composer.json` / `composer.lock` — `pricing:*` scripts + descriptions.
+- `tests/Integration/MigrationRoundTripTest.php` — 5 new tables.
+- DB docs (`database-design.md` → 35 tables, `database-diagram.md` + `.html` 11/11 mermaid,
+  `db_explain.md`); `Architecture.md` (§8 Pricing, §9 pipeline); `Phases.md` (row 13 → ☑);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D16).
+
+**Reason.** Phase 13 of the 30-phase plan.
+
+**Migration notes.** 5 new tables, all additive; no existing-table changes; no backfill.
+`priority` uniqueness / one-default / override-currency-match are app-enforced.
+
+**Breaking changes.** None. (`GET /api/v1/pricing/resolve` deviates from CLAUDE.md's suggested
+`POST` — it is a pure read; documented in Phase 13 Q4.)
+
 ## 2026-09-10 — Phase 12: Package purchase capabilities & provider definitions
 
 **Summary.** What a package can be sold *as* (purchase types + trial/duration, per-country

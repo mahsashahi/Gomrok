@@ -16,6 +16,215 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 13 — Pricing module: default prices & pricing groups
+
+### Q5 — CRUD surface
+
+**Question:** How are pricing groups, default prices, exchange rates and group-package rows
+managed?
+
+**Options:**
+
+1. **Dedicated handlers + `pricing:*` CLI + seeder.** `CreatePricingGroup`,
+   `SetPricingGroupCountries`, `ReorderPricingGroups`, `ChangePricingGroupStatus`,
+   `SetDefaultPackagePrice`, `SetClientExchangeRate`, `SetPricingGroupPackage`. ~7 handlers,
+   each audited.
+2. **Fewer, fatter handlers** — one `ConfigurePricingGroup` doing everything. Awkward partial
+   edits.
+3. **CLI only, no handlers.** Bypasses `Result` / audit / validation. Rejected.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — one audited handler per operation + `pricing:*` CLI + `PricingSeeder`
+
+**Status:** Decided
+
+**Decision Notes:**
+- Handlers (all `Result` + audited `pricing.*`): `CreatePricingGroup` (client + slug + name +
+  currency + `device_type` + `is_default`; validates one default per client, priority appended
+  or forced-last for default), `SetPricingGroupCountries` (full replace; default group rejects
+  countries), `ReorderPricingGroups` (ordered slug list → `priority` 1..n; the `is_default`
+  group is always last regardless of position passed), `ChangePricingGroupStatus`
+  (disable/enable), `SetDefaultPackagePrice` (package + amount + currency; upsert),
+  `SetClientExchangeRate` (base + quote + rate + effective_from; upsert on the unique key),
+  `SetPricingGroupPackage` (group + package + status + amount/currency + name/badge/highlight
+  overrides + display_order; validates override-currency = group currency).
+- Audit actions: `pricing_group.created` / `.countries_updated` / `.reordered` / `.disabled` /
+  `.enabled`, `default_package_price.set`, `client_exchange_rate.set`, `pricing_group_package.set`.
+- CLI: `bin/{CreatePricingGroup,SetPricingGroupCountries,ReorderPricingGroups,SetDefaultPackagePrice,SetClientExchangeRate,SetPricingGroupPackage,ListPricing}.php`
+  (`composer pricing:*`). `ListPricing` shows groups (priority, currency, countries) + a
+  package × group price matrix.
+- `PricingSeeder` (env-gated `local`/`testing`): `local-dev` gets an `is_default` `EUR` group
+  (no countries) + a `dach` group (DE/AT/CH, EUR, priority 1) + baseline prices for `starter`
+  (€9.00) and `pro` (€29.00) + an `EUR→USD` rate (1.08) + a `pro` override in `dach` (€24.00).
+- New `Money` helpers if needed (`Shared\Domain\Money` already wraps brick/money); rounding via
+  brick's `RoundingMode::HALF_UP`.
+
+### Q4 — Does the packages API mount now?
+
+**Question:** `GET /api/v1/packages` was deferred through Phases 11–12 "until price exists".
+Price exists after this phase.
+
+**Options:**
+
+1. **Mount `GET /api/v1/packages` + `POST /api/v1/pricing/resolve` now,** with the Phase 13
+   resolved price. Phases 14–15 refine the number / add a `priceList` field without changing the
+   shape.
+2. **Wait until Phase 15** (after A/B price lists). Three more phases with no packages API.
+3. **Mount behind a `?preview` flag.** Confusing contract.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — mount `GET /api/v1/packages` and `POST /api/v1/pricing/resolve` this
+phase with the Phase 13 resolved price
+
+**Status:** Decided
+
+**Decision Notes:**
+- `PriceResolver::resolve(int clientId, int packageId, string country, string currency, ?string
+  deviceType): Result<ResolvedPrice>` — group match (Q1) → group-package row (Q3) → baseline /
+  convert (Q2) / override. `currency` is the request/market currency; if it differs from the
+  resolved group currency the resolver errors (`pricing.currency_mismatch`) — the caller passes
+  the group currency it already resolved, or omits and takes the group's.
+- `PriceCatalog::resolve(int clientId, string country, string currency, ?PaymentMethod method,
+  ?string deviceType): list<ResolvedCatalogPackage>` — wraps `PackageCatalog::resolve()` (Phase
+  11/12) and attaches each package's `ResolvedPrice`; drops packages priced-`disabled` in the
+  resolved group.
+- **HTTP (client-authenticated, Phase 7 middleware):**
+  - `GET /api/v1/packages?country=DE[&method=card][&device=ios]` → resolved catalogue. Currency
+    is the matched pricing group's.
+  - `GET /api/v1/pricing/resolve?package=<code>&country=DE[&device=ios]` → one `ResolvedPrice`.
+    (CLAUDE.md suggests `POST`; kept as `GET` — it is a pure read with no side effects, and the
+    `/api/v1` write-idempotency middleware would otherwise demand an `Idempotency-Key`.)
+  - Thin actions in `src/Http/Api`; no price is trusted from the client.
+- Response `ResolvedPrice`: `amountMinor`, `amountDecimal` (string), `currency`, `source`
+  (`baseline` / `converted` / `group_override`), `pricingGroup` (slug), and the effective
+  `name` / `badge` / `highlighted`.
+
+### Q3 — The `pricing_group_packages` row
+
+**Question:** Per `(pricing group, package)`: `status` + optional display overrides + display
+order. What does the row carry and what does each `status` mean?
+
+**Options:**
+
+1. **One row per (group, package): `status` + amount + display overrides + `display_order`;
+   no row = `status=default`.** `status=default` → baseline (converted if needed); `override` →
+   this row's `amount_minor`/`currency_code`; `disabled` → not sold in this group. Package with
+   no row defaults in at the end.
+2. **Explicit rows required; no row = not in the group** (fail closed). Predictable list, but a
+   row per package per group including the default group.
+3. **Split price row + display-override row.** Over-normalised 1:1.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — single `(pricing_group_id, package_id)` row with `status`
+(`default`/`override`/`disabled`) + nullable amount/display overrides + `display_order`; a
+package with no row is implicitly `default`
+
+**Status:** Decided
+
+**Decision Notes:**
+- `pricing_group_packages (id, pricing_group_id → CASCADE, package_id → packages.id CASCADE,
+  status VARCHAR(20) [default|override|disabled] DEFAULT 'default', amount_minor BIGINT UNSIGNED
+  NULL, currency_code CHAR(3) NULL → currencies.code RESTRICT, name_override VARCHAR(150) NULL,
+  badge_override VARCHAR(40) NULL, highlighted_override TINYINT(1) NULL, display_order SMALLINT
+  UNSIGNED NOT NULL DEFAULT 0, created_at, updated_at)`. `UNIQUE (pricing_group_id, package_id)`,
+  `INDEX (pricing_group_id, display_order)`.
+- Domain guards: `status=override` ⇒ `amount_minor` + `currency_code` set and `currency_code` =
+  the group's currency; `status ≠ override` ⇒ both NULL. `highlighted_override` NULL = inherit
+  `packages.highlighted`.
+- Resolution list for a group: explicit rows ordered by `display_order` then `package_id`, then
+  packages with no row (implicit `default`) ordered by `packages.code`, all filtered to
+  `status ≠ disabled` and to the package being active + sellable (Phase 12).
+- `ResolvedPrice` carries: `amount_minor`, `currency_code`, `source` (`baseline` / `converted` /
+  `group_override`), the effective `name` / `badge` / `highlighted` after overrides.
+
+### Q2 — Baseline prices and cross-currency
+
+**Question:** `default_package_prices` is the per-package baseline; a pricing group has its own
+currency. What happens when they differ?
+
+**Options:**
+
+1. **Single baseline per package + client-configured exchange rates.**
+   `default_package_prices (package_id, amount_minor, currency_code)` (one row) +
+   `client_exchange_rates (client_id, base_currency, quote_currency, rate, effective_from)`. A
+   `status=default` group-package in a different currency converts via the client's rate.
+   Deterministic, no external service.
+2. **Per-(package, currency) baselines, no FX.** One `default_package_prices` row per currency;
+   the client hand-prices every package in every currency.
+3. **Single baseline + force an explicit override on any currency mismatch.** Simplest schema,
+   but a "sell everything in USD" group means hand-pricing every package and future packages
+   silently break the group.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — single `default_package_prices` row per package + a
+`client_exchange_rates` table; `status=default` cross-currency resolution converts via the
+client's configured rate, `status=override` rows bypass it
+
+**Status:** Decided
+
+**Decision Notes:**
+- `default_package_prices (id, package_id → packages.id CASCADE [UNIQUE], amount_minor BIGINT
+  UNSIGNED, currency_code CHAR(3) → currencies.code RESTRICT, created_at, updated_at)`. One row
+  per package; `amount_minor` in the currency's minor unit (`Shared\Domain\Money` / brick).
+- `client_exchange_rates (id, client_id → clients.id CASCADE, base_currency CHAR(3), quote_currency
+  CHAR(3), rate DECIMAL(18,8), effective_from DATETIME, created_at)`, `UNIQUE (client_id,
+  base_currency, quote_currency, effective_from)`. The most recent row with `effective_from <= now`
+  wins. Both currency codes FK `currencies.code` RESTRICT.
+- `PriceResolver` conversion: `quote_minor = round(base_minor * rate * 10^(quoteScale - baseScale))`
+  to the quote currency's minor unit (half-up). No rate for the pair + `status=default` +
+  currency mismatch → hard error `pricing.no_exchange_rate`.
+- `status=override` group-package rows carry their own `amount_minor` + `currency_code` (must
+  match the group currency) — never converted.
+- BIGINT allowed for money per the keys-only "no BIGINT" rule.
+
+### Q1 — How do pricing groups match a buyer?
+
+**Question:** The exit criterion says "a `Global iOS` group ordered before `DACH` wins for a
+German iOS buyer" — so a country can be in several groups and order matters. How is matching
+modelled?
+
+**Options:**
+
+1. **Priority-ordered, overlapping country membership, optional `device_type`, `is_default`
+   pinned last.** `pricing_groups (client_id, slug, name, priority, device_type NULL, currency,
+   is_default, status)` + `pricing_group_countries`. Resolution: walk the client's `active`
+   groups by ascending `priority`; the first whose country set contains the buyer's country
+   **and** whose `device_type` matches (or is NULL) wins; else the `is_default` group (priority
+   forced last, no country rows). Matches the exit criterion exactly.
+2. **Exclusive membership, like provider groups (Phase 10).** A country sits in ≤1 non-default
+   group; no priority. Simpler, but cannot express "Global iOS before DACH" for a German iOS
+   buyer — contradicts the exit criterion.
+3. **Hybrid** — exclusive by country but a separate device-type layer on top.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — priority-ordered, overlapping country membership, optional `device_type`
+filter, `is_default` group pinned last and non-reorderable
+
+**Status:** Decided
+
+**Decision Notes:**
+- `pricing_groups (id, client_id → clients.id CASCADE, slug, name, priority SMALLINT UNSIGNED,
+  device_type VARCHAR(10) NULL [web|ios|android], currency_code CHAR(3) → currencies.code
+  RESTRICT, is_default TINYINT(1), status VARCHAR(20) [active|disabled], created_at, updated_at)`.
+  `UNIQUE (client_id, slug)`; app-enforced `UNIQUE (client_id, priority)` and one `is_default = 1`
+  per client.
+- `pricing_group_countries (id, pricing_group_id → CASCADE, country_code CHAR(2) → countries.code
+  RESTRICT, created_at)`, `UNIQUE (pricing_group_id, country_code)`. The default group has none.
+- Resolution (`PriceResolver`): the client's active groups sorted `priority ASC` (default forced
+  last regardless of stored priority); first whose `pricing_group_countries` contains the
+  request country **and** `device_type` matches (NULL = any) wins; else the `is_default` group;
+  else a hard error (client has no default pricing group).
+- Distinct from Phase 10 provider groups (which are exclusive-by-country routing) — pricing
+  groups deliberately overlap so a "Global iOS" overlay can shadow a regional group for one
+  device.
+
+---
+
 ## Phase 12 — Package purchase capabilities & provider definitions
 
 ### Q5 — CRUD surface + how `synced → drift` is triggered

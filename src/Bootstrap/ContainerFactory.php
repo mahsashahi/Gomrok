@@ -23,6 +23,7 @@ final class ContainerFactory
         'src/Modules/Clients/Infrastructure/definitions.php',
         'src/Modules/Providers/Infrastructure/definitions.php',
         'src/Modules/Packages/Infrastructure/definitions.php',
+        'src/Modules/Pricing/Infrastructure/definitions.php',
     ];
 
     public static function create(): ContainerInterface

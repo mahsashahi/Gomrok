@@ -125,8 +125,30 @@ composer package:link-provider -- --client=televika --package=pro --account=stri
 `package:set-capabilities` row is not sellable and never appears in the catalogue. A
 per-country `--override` *replaces* the global purchase-type set for that country. `status=disabled`
 hides a package. Editing a package flips its `synced` provider definitions to `drift`.
-`PackageCatalog::resolve()` returns the market-filtered list with purchase capabilities (no price
-yet); `GET /api/v1/packages` lands in Phase 13.
+
+```bash
+# Pricing (Phase 13 — baseline)
+composer pricing:create-group -- --client=televika --name="DACH" --currency=EUR [--slug=dach --priority=1 --device=ios --default]
+composer pricing:set-default-price -- --client=televika --package=pro --amount-minor=2900 --currency=EUR
+composer pricing:set-rate -- --client=televika --base=EUR --quote=USD --rate=1.08 [--from="2026-01-01T00:00:00Z"]
+composer pricing:set-group-package -- --client=televika --group=dach --package=pro --status=override --amount-minor=2400 --currency=EUR [--name="Pro (DACH)" --order=1]
+composer pricing:list -- --client=televika
+```
+
+Pricing groups are **priority-ordered and overlapping** — lowest `priority` wins, `is_default`
+(created with `--default`, no countries) is always last. A `status=default` group in a currency
+different from the package's baseline converts via the client FX rate; `status=override` carries
+its own amount in the group currency; `status=disabled` hides the package in that group.
+
+```bash
+# Client-facing catalogue (Phase 13)
+curl -s '.../api/v1/packages?country=DE&device=ios' -H 'Authorization: Bearer gk_...'
+curl -s '.../api/v1/pricing/resolve?package=pro&country=DE' -H 'Authorization: Bearer gk_...'
+```
+
+`GET /api/v1/packages` returns the availability + purchase capabilities + **resolved price** per
+package. `GET /api/v1/pricing/resolve` returns one price. Gomrok never trusts a client-supplied
+price. (Phase 14 refines the number with override dimensions; Phase 15 adds A/B lists.)
 
 Provider secrets are encrypted with `APP_ENCRYPTION_KEY` — set it before creating accounts
 (`php -r 'echo base64_encode(random_bytes(32));'`). Secrets are printed once at most, never by

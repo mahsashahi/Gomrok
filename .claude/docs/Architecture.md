@@ -318,6 +318,27 @@ and the provider-type declaration (Phase 8) — reject, never downgrade. `packag
 creation lands with each adapter (Phases 21–23). Editing a package flips its `synced` definitions
 to `drift` in-transaction.
 
+### Pricing (Phase 13 — baseline)
+
+`Modules/Pricing`. The baseline of the pricing pipeline; Phase 14 layers dimension overrides,
+15 the A/B factor, 16–17 vouchers, 18 tax/fee.
+
+- **`pricing_groups`** — priority-ordered country grouping *for pricing* (separate from Phase 10
+  provider groups). A country may be in several groups; the lowest `priority` wins, so a
+  "Global iOS" overlay can shadow a regional group for one device. `is_default` is the fallback
+  (no countries, resolved last, can't be disabled). One `currency_code` per group.
+- **`default_package_prices`** — one baseline per package. **`client_exchange_rates`** —
+  client-configured, effective-dated FX; used only for a `status=default` cross-currency resolve.
+- **`pricing_group_packages`** — per `(group, package)`: `status` `default` / `override` /
+  `disabled` + `amount`/`currency` (override) + `name`/`badge`/`highlighted` overrides +
+  `display_order`. No row = implicit `default`.
+- **`PriceResolver`** — group match → row → baseline / convert / override → `ResolvedPrice`
+  (`source` = `baseline` / `converted` / `group_override`). **`PriceCatalog`** wraps
+  `PackageCatalog` and attaches a price to each package.
+- **HTTP:** `GET /api/v1/packages?country=…` (resolved catalogue) and
+  `GET /api/v1/pricing/resolve?package=…&country=…` (one price) — client-authenticated; mounted
+  this phase. Gomrok never trusts a client-supplied price.
+
 ## 9. Resolution pipelines (sketch)
 
 Order is deterministic and will be documented precisely in the Pricing/Vouchers/Providers phases.
@@ -332,8 +353,12 @@ PACKAGE LIST
         → per package: id, code, name, description, metadata, badge, highlighted, clientPackageId,
           provider accounts narrowed to the client's active set, available methods,
           country-effective purchase capabilities (type + trial + durationMonths)
-    → pricing group match (→ default fallback group)          [Phase 13]
-    → price list assignment (stable hash of user id)          [Phase 13]
+    → PriceResolver / PriceCatalog  [Pricing module — implemented Phase 13]
+        pricing group match (priority, device, is_default last)
+        → (group, package) row: status default / override / disabled
+        → baseline / convert via client_exchange_rates / group override
+        → ResolvedPrice (amount, currency, source, effective name/badge/highlighted)
+    → price list assignment (stable hash of user id)          [Phase 15]
 
 PRICE
   1. client + package

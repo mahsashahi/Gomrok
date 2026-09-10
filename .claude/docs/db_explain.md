@@ -357,3 +357,49 @@ nothing). One row per linked `(package, provider account)`, created lazily by
 - **`remote_id`** — provider product/plan id, **indexed** for reverse lookup from a provider
   webhook (Phase 25). Accepted manually now; provider-API creation lands per adapter (21–23).
 - **App-enforced:** the provider account belongs to the package's client.
+
+## Pricing — groups & default prices (Phase 13)
+
+The baseline of pricing. Phase 14 layers dimension overrides, Phase 15 A/B lists. All
+client-scoped.
+
+### `pricing_groups`
+
+A client's country grouping **for pricing** — separate from Phase 10 provider groups (routing).
+Priority-ordered; a country can be in several groups and the lowest `priority` wins (so a
+"Global iOS" overlay can shadow a regional group for one device). `is_default` is the fallback:
+no `pricing_group_countries` rows, resolved last regardless of stored priority, and **cannot be
+disabled**.
+
+- **Rows added:** `bin/CreatePricingGroup.php` (→ `CreatePricingGroup`); order set by
+  `ReorderPricingGroups` (priority 1..n, default always last).
+- **`currency_code`** — one per group. `status=default` packages in a different baseline
+  currency are converted (see `client_exchange_rates`).
+- **App-enforced:** `priority` unique per client; one `is_default` per client.
+
+### `pricing_group_countries`
+
+The markets a non-default group covers. **Overlap across a client's groups is allowed** — unlike
+`provider_group_countries` (Phase 10), which is exclusive.
+
+### `default_package_prices`
+
+One baseline row per package (`UNIQUE (package_id)`). `amount_minor` in the currency's minor
+unit. Set by `bin/SetDefaultPackagePrice.php`. A package with no row → `pricing.no_default_price`
+when a `status=default` group tries to price it.
+
+### `client_exchange_rates`
+
+Client-configured, **effective-dated** FX. `1 base_currency = rate quote_currency`. The most
+recent row with `effective_from <= now` for the pair wins. Used **only** for a `status=default`
+cross-currency resolve; `status=override` rows carry their own amount and are never converted.
+No rate for a needed pair → `pricing.no_exchange_rate`. Set by `bin/SetClientExchangeRate.php`.
+
+### `pricing_group_packages`
+
+Per `(pricing group, package)`. **No row = implicit `status=default`.** `status=override` carries
+`amount_minor` + `currency_code` (must equal the group currency — domain-enforced);
+`status=disabled` hides the package in that group. `name_override` / `badge_override` /
+`highlighted_override` refine the display; `display_order` is the customer-facing position. Set
+by `bin/SetPricingGroupPackage.php`. `PriceResolver` reads all of this and returns a
+`ResolvedPrice` with `source` = `baseline` / `converted` / `group_override`.

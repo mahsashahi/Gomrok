@@ -13,6 +13,7 @@ flowchart TD
     Clients["Clients<br/>clients · client_api_keys · client_endpoints"]
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
     Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
+    Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -20,6 +21,8 @@ flowchart TD
     Clients --> Xc
     Clients --> Packages
     Providers --> Packages
+    Clients --> Pricing
+    Packages --> Pricing
     Clients --> Payments
     Providers --> Payments
     Packages --> Payments
@@ -32,8 +35,8 @@ flowchart TD
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages done;
-    class Pricing,Vouchers,Payments,Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing done;
+    class Vouchers,Payments,Subscriptions,Webhooks,Notifications,Admin todo;
 ```
 
 Green = tables exist. Grey = designed in that module's phase.
@@ -452,3 +455,77 @@ country-effective purchase capabilities. `package_provider_definitions` tracks w
 exists on each provider account (`sync_state` 4-state machine; editing a package flips `synced` →
 `drift`). **No price yet — Phase 13.** `local-dev` seeds `starter` (one-time) + `pro`
 (one-time + subscription, 7-day trial) (`APP_ENV ∈ {local, testing}` only).
+
+## Pricing — groups & default prices (Phase 13)
+
+```mermaid
+erDiagram
+    pricing_groups {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        varchar slug "UNIQUE (client_id, slug)"
+        varchar name
+        smallint priority "ascending = checked first; default last"
+        varchar device_type "web | ios | android | NULL"
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        tinyint is_default "fallback, no countries"
+        varchar status "active | disabled"
+        datetime created_at
+        datetime updated_at
+    }
+    pricing_group_countries {
+        int id PK
+        int pricing_group_id FK "-> pricing_groups.id (CASCADE)"
+        char country_code FK "-> countries.code (RESTRICT); overlap allowed"
+        datetime created_at
+    }
+    default_package_prices {
+        int id PK
+        int package_id FK "-> packages.id (CASCADE), UNIQUE"
+        bigint amount_minor
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        datetime created_at
+        datetime updated_at
+    }
+    client_exchange_rates {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        char base_currency FK "-> currencies.code (RESTRICT)"
+        char quote_currency FK "-> currencies.code (RESTRICT)"
+        decimal rate "1 base = rate quote"
+        datetime effective_from
+        datetime created_at
+    }
+    pricing_group_packages {
+        int id PK
+        int pricing_group_id FK "-> pricing_groups.id (CASCADE)"
+        int package_id FK "-> packages.id (CASCADE)"
+        varchar status "default | override | disabled"
+        bigint amount_minor "override only, nullable"
+        char currency_code FK "-> currencies.code, override only, = group currency"
+        varchar name_override "nullable"
+        varchar badge_override "nullable"
+        tinyint highlighted_override "nullable"
+        smallint display_order
+        datetime created_at
+        datetime updated_at
+    }
+
+    clients ||--o{ pricing_groups : "prices via"
+    currencies ||--o{ pricing_groups : "settles in"
+    pricing_groups ||--o{ pricing_group_countries : "covers"
+    countries ||--o{ pricing_group_countries : "grouped by"
+    packages ||--o| default_package_prices : "baseline"
+    clients ||--o{ client_exchange_rates : "converts with"
+    pricing_groups ||--o{ pricing_group_packages : "prices"
+    packages ||--o{ pricing_group_packages : "priced in"
+```
+
+Priority-ordered country grouping (overlap allowed — lowest `priority` wins; `is_default` last).
+`default_package_prices` is the one baseline per package; a `status=default` group-package in a
+different currency converts via `client_exchange_rates` (the latest effective row).
+`status=override` carries its own amount in the group currency; `status=disabled` hides the
+package in that group; no row = implicit `default`. `PriceResolver` / `PriceCatalog` produce a
+`ResolvedPrice` (`baseline` / `converted` / `group_override`); `GET /api/v1/packages` and
+`GET /api/v1/pricing/resolve` mount this phase. `local-dev` seeds `default` (EUR) / `dach`
+(DE/AT/CH, EUR, `pro` overridden €24) / `us` (USD, converted) groups + an EUR→USD rate.

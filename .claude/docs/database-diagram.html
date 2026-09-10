@@ -33,7 +33,8 @@ flowchart TD
     Xc["Cross-cutting&lt;br/&gt;idempotency_keys · audit_logs · error_logs"]
     Clients["Clients&lt;br/&gt;clients · client_api_keys · client_endpoints"]
     Providers["Providers&lt;br/&gt;capabilities + purchase types (P8)&lt;br/&gt;provider_accounts + endpoints/countries/methods (P9)&lt;br/&gt;provider_groups + routing (P10)"]
-    Packages["Packages&lt;br/&gt;packages + country/currency/method/provider availability (P11)"]
+    Packages["Packages&lt;br/&gt;availability (P11)&lt;br/&gt;purchase capabilities + provider definitions (P12)"]
+    Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + exchange rates + group-package rows (P13)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
@@ -41,6 +42,8 @@ flowchart TD
     Clients --&gt; Xc
     Clients --&gt; Packages
     Providers --&gt; Packages
+    Clients --&gt; Pricing
+    Packages --&gt; Pricing
     Clients --&gt; Payments
     Providers --&gt; Payments
     Packages --&gt; Payments
@@ -52,8 +55,8 @@ flowchart TD
     Admin -.-&gt; Payments
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages done;
-    class Pricing,Vouchers,Payments,Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing done;
+    class Vouchers,Payments,Subscriptions,Webhooks,Notifications,Admin todo;
 </pre>
 
 <h2>Reference data (Phase 4)</h2>
@@ -411,6 +414,69 @@ erDiagram
     countries ||--o{ package_country_purchase_capabilities : "restricts"
     packages ||--o{ package_provider_definitions : "defined on"
     provider_accounts ||--o{ package_provider_definitions : "hosts"
+</pre>
+
+<h2>Pricing — groups &amp; default prices (Phase 13)</h2>
+<pre class="mermaid">
+erDiagram
+    pricing_groups {
+        int id PK
+        int client_id FK
+        varchar slug
+        varchar name
+        smallint priority
+        varchar device_type
+        char currency_code FK
+        tinyint is_default
+        varchar status
+        datetime created_at
+        datetime updated_at
+    }
+    pricing_group_countries {
+        int id PK
+        int pricing_group_id FK
+        char country_code FK
+        datetime created_at
+    }
+    default_package_prices {
+        int id PK
+        int package_id FK
+        bigint amount_minor
+        char currency_code FK
+        datetime created_at
+        datetime updated_at
+    }
+    client_exchange_rates {
+        int id PK
+        int client_id FK
+        char base_currency FK
+        char quote_currency FK
+        decimal rate
+        datetime effective_from
+        datetime created_at
+    }
+    pricing_group_packages {
+        int id PK
+        int pricing_group_id FK
+        int package_id FK
+        varchar status
+        bigint amount_minor
+        char currency_code FK
+        varchar name_override
+        varchar badge_override
+        tinyint highlighted_override
+        smallint display_order
+        datetime created_at
+        datetime updated_at
+    }
+    clients ||--o{ pricing_groups : "prices via"
+    currencies ||--o{ pricing_groups : "settles in"
+    pricing_groups ||--o{ pricing_group_countries : "covers"
+    countries ||--o{ pricing_group_countries : "grouped by"
+    packages ||--o| default_package_prices : "baseline"
+    clients ||--o{ client_exchange_rates : "converts with"
+    pricing_groups ||--o{ pricing_group_packages : "prices"
+    packages ||--o{ pricing_group_packages : "priced in"
 </pre>
 </div>
 

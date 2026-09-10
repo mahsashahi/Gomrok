@@ -36,9 +36,10 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Providers — routing (Phase 10) | `provider_groups`, `provider_group_countries`, `provider_group_accounts`, `provider_group_purchase_types`, `provider_group_methods` — **5** |
 | Packages — catalog & availability (Phase 11) | `packages`, `package_countries`, `package_currencies`, `package_payment_methods`, `package_provider_accounts` — **5** |
 | Packages — capabilities & provider defs (Phase 12) | `package_purchase_capabilities`, `package_country_purchase_capabilities`, `package_provider_definitions` — **3** (+ `badge` / `highlighted` / `client_package_id` columns on `packages`) |
-| — | (more business tables land per module from Phase 13) |
+| Pricing — groups & default prices (Phase 13) | `pricing_groups`, `pricing_group_countries`, `default_package_prices`, `client_exchange_rates`, `pricing_group_packages` — **5** |
+| — | (more business tables land per module from Phase 14) |
 
-**Total: 30 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 35 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -613,6 +614,85 @@ transaction. Provider-API product creation is **not** implemented — Phases 21�
 
 ---
 
+## Pricing — groups & default prices (Phase 13)
+
+The **baseline** of pricing — Phase 14 layers dimension overrides, Phase 15 A/B lists, 16–17
+vouchers. All client-scoped.
+
+### `pricing_groups` (Q1)
+
+Priority-ordered country grouping for pricing. A country may be in several groups; the lowest
+`priority` wins. `is_default` is the fallback (no country rows, resolved last regardless of
+stored priority). One currency per group. Distinct from Phase 10 provider groups (exclusive
+routing) — pricing groups deliberately overlap.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `slug` | VARCHAR(64) | no | |
+| `name` | VARCHAR(150) | no | |
+| `priority` | SMALLINT UNSIGNED | no | ascending = checked first |
+| `device_type` | VARCHAR(10) | yes | `web` / `ios` / `android`; NULL = any |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT |
+| `is_default` | BOOLEAN | no | default `false` |
+| `status` | VARCHAR(20) | no | `active` / `disabled` (`PricingGroupStatus`), default `active` |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (client_id, slug)`; `INDEX (client_id, status, priority)`. **App-enforced:** `priority`
+unique per client; exactly one `is_default` per client; the default group can't be disabled.
+
+### `pricing_group_countries` (Q1)
+
+`id`, `pricing_group_id` FK CASCADE, `country_code CHAR(2)` FK → `countries(code)` RESTRICT,
+`created_at`. `UNIQUE (pricing_group_id, country_code)`. **Overlap across groups is allowed.**
+
+### `default_package_prices` (Q2)
+
+The one baseline price per package. `id`, `package_id` FK CASCADE **`UNIQUE`**,
+`amount_minor BIGINT UNSIGNED`, `currency_code CHAR(3)` FK → `currencies(code)` RESTRICT,
+`created_at` / `updated_at`.
+
+### `client_exchange_rates` (Q2)
+
+Client-configured, effective-dated FX. `id`, `client_id` FK CASCADE, `base_currency` /
+`quote_currency CHAR(3)` FK → `currencies(code)` RESTRICT, `rate DECIMAL(18,8)`,
+`effective_from DATETIME`, `created_at`. `UNIQUE (client_id, base_currency, quote_currency,
+effective_from)`. The most recent row with `effective_from <= now` for a pair wins; used only
+for a `status=default` cross-currency resolve.
+
+### `pricing_group_packages` (Q3)
+
+Per `(pricing group, package)`. **No row = implicit `status=default`.**
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `pricing_group_id` | INT UNSIGNED | no | FK → `pricing_groups(id)` CASCADE |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `status` | VARCHAR(20) | no | `default` / `override` / `disabled` (`PricingRowStatus`), default `default` |
+| `amount_minor` | BIGINT UNSIGNED | yes | set iff `status=override` |
+| `currency_code` | CHAR(3) | yes | set iff `status=override`; FK → `currencies(code)` RESTRICT; = group currency |
+| `name_override` / `badge_override` | VARCHAR | yes | |
+| `highlighted_override` | TINYINT(1) | yes | NULL = inherit `packages.highlighted` |
+| `display_order` | SMALLINT UNSIGNED | no | default `0` |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (pricing_group_id, package_id)`; `INDEX (pricing_group_id, display_order)`;
+`INDEX (package_id)`. **Domain guards:** `override` ⇒ amount + currency set, currency = group
+currency; else both NULL.
+
+### Resolution (`PriceResolver` / `PriceCatalog`)
+
+Pricing group by `priority` (default last, device filter) → `(group, package)` row (or implicit
+default). `disabled` → package unavailable in that group. `override` → the row's amount
+(`source = group_override`). `default` → `default_package_prices`: same currency → `baseline`,
+else convert via the client's rate → `converted` (or `pricing.no_exchange_rate`). Effective
+`name` / `badge` / `highlighted` after overrides. `GET /api/v1/packages` +
+`GET /api/v1/pricing/resolve` mount this phase.
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -658,6 +738,12 @@ transaction. Provider-API product creation is **not** implemented — Phases 21�
 | `src/Database/Migrations/20260910130002_create_package_country_purchase_capabilities_table.php` | `Gomrok\Database\Migrations\CreatePackageCountryPurchaseCapabilitiesTable` |
 | `src/Database/Migrations/20260910130003_create_package_provider_definitions_table.php` | `Gomrok\Database\Migrations\CreatePackageProviderDefinitionsTable` |
 | `src/Database/Migrations/20260910130004_add_display_fields_to_packages.php` | `Gomrok\Database\Migrations\AddDisplayFieldsToPackages` |
+| `src/Database/Migrations/20260910140001_create_pricing_groups_table.php` | `Gomrok\Database\Migrations\CreatePricingGroupsTable` |
+| `src/Database/Migrations/20260910140002_create_pricing_group_countries_table.php` | `Gomrok\Database\Migrations\CreatePricingGroupCountriesTable` |
+| `src/Database/Migrations/20260910140003_create_default_package_prices_table.php` | `Gomrok\Database\Migrations\CreateDefaultPackagePricesTable` |
+| `src/Database/Migrations/20260910140004_create_client_exchange_rates_table.php` | `Gomrok\Database\Migrations\CreateClientExchangeRatesTable` |
+| `src/Database/Migrations/20260910140005_create_pricing_group_packages_table.php` | `Gomrok\Database\Migrations\CreatePricingGroupPackagesTable` |
+| `src/Database/Seeds/PricingSeeder.php` | `Gomrok\Database\Seeds\PricingSeeder` (env-gated: `local-dev` gets default/dach/us groups + baselines + EUR→USD rate) |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

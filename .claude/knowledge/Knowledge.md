@@ -239,6 +239,33 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
 - Editing constructors changed: `UpdatePackageHandler` and `SetPackageAvailabilityHandler` now
   take `PackageProviderDefinitionRepository` — update any test that news them up directly.
 
+## Pricing (Phase 13 — baseline)
+
+- **Pricing groups ≠ provider groups.** Provider groups (Phase 10) are *exclusive* by country
+  (routing). Pricing groups are **priority-ordered and overlapping** — a country can be in
+  several; the lowest `priority` wins, and `is_default` is forced last. This lets a "Global iOS"
+  overlay shadow a regional group for one device (the exit criterion).
+- `priority` unique per client, one `is_default` per client, the default group can't be disabled
+  — all **app-enforced** (no partial unique in MySQL).
+- `default_package_prices` = **one** baseline row per package (`UNIQUE (package_id)`).
+  Cross-currency: a `status=default` group in a different currency converts via
+  `client_exchange_rates` (client-configured, **effective-dated** — the latest row with
+  `effective_from <= now`). `status=override` rows carry their own amount and are never
+  converted. No rate → `pricing.no_exchange_rate`.
+- Conversion goes through `Shared\Domain\Money::convertTo($currency, $rateString)` (brick,
+  HALF_EVEN); `Money` never fetches rates. Added `Money::amount()` (decimal string).
+- `pricing_group_packages`: **no row = implicit `status=default`**. `override` ⇒ amount +
+  currency, currency = group currency (`PricingGroupPackage::validate`). BIGINT `amount_minor`
+  is allowed (keys-only "no BIGINT" rule).
+- `PriceResolver` is concrete (like `ProviderRouter` / `PackageCatalog`). `resolveGroup()` +
+  `priceForGroup(group, packageId, code, name, badge, highlighted)` are public so `PriceCatalog`
+  can resolve the group once. `ResolvedPrice.source` ∈ `baseline` / `converted` / `group_override`.
+- **`GET /api/v1/pricing/resolve` is a `GET`, not `POST`** (CLAUDE.md suggests POST). It's a pure
+  read; the `/api/v1` write-idempotency middleware would demand an `Idempotency-Key` on any
+  POST. Same reasoning will apply to `vouchers/validate`.
+- `GET /api/v1/packages` is finally mounted (deferred through Phases 11–12). Response shape is
+  stable — Phase 14 overrides / Phase 15 A/B change the *number*, not the structure.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

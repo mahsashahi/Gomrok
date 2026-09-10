@@ -30,7 +30,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 10 | Country provider configuration & routing resolution | ☑ | 2026-09-09 20:25 | 2026-09-09 23:37 | 5–8h | ~3h 10m | N/A |
 | 11 | Packages module: catalog & availability | ☑ | 2026-09-09 23:51 | 2026-09-10 00:43 | 4–6h | ~52m | N/A |
 | 12 | Package purchase capabilities & provider definitions | ☑ | 2026-09-10 10:16 | 2026-09-10 13:16 | 4–6h | ~3h | N/A |
-| 13 | Pricing module: default prices & pricing groups | ☐ | — | — | 4–6h | — | — |
+| 13 | Pricing module: default prices & pricing groups | ☑ | 2026-09-10 13:23 | 2026-09-10 13:58 | 4–6h | ~35m | N/A |
 | 14 | Pricing overrides & resolution engine | ☐ | — | — | 6–9h | — | — |
 | 15 | Price lists (A/B) | ☐ | — | — | 3–5h | — | — |
 | 16 | Vouchers module: definitions & eligibility | ☐ | — | — | 4–6h | — | — |
@@ -409,16 +409,22 @@ provider-definition state transitions (`not_created → synced → drift → not
 
 **Goal:** baseline prices and country grouping.
 
-**Scope:**
-- `pricing_groups` (member countries, one currency, enabled providers, exactly one `isDefault`
-  fallback pinned last and never reorderable); `default_package_prices`.
-- Group-package rows: `status` = override / default / disabled, name / badge / highlight
-  overrides, customer-facing display order (array order).
+**Scope (as built):**
+- `pricing_groups` (priority-ordered, **overlapping** country membership, optional `device_type`,
+  one currency, one `is_default` fallback pinned last — Q1) + `pricing_group_countries`.
+- `default_package_prices` (one baseline per package) + `client_exchange_rates` (client-configured
+  effective-dated FX — Q2). `status=default` cross-currency resolves convert via the client rate.
+- `pricing_group_packages` (per pair: `status` default/override/disabled + amount/currency +
+  name/badge/highlight overrides + `display_order`; no row = implicit default — Q3).
+- `PriceResolver` / `PriceCatalog` → `ResolvedPrice` (`source` baseline/converted/group_override).
+- `GET /api/v1/packages` + `GET /api/v1/pricing/resolve` mounted (Q4 — `GET` not `POST` so the
+  write-idempotency middleware doesn't demand a key). `pricing:*` CLI + `PricingSeeder` (Q5).
 
-**DB:** `pricing_groups`, `default_package_prices`, group-package rows.
+**DB:** `pricing_groups` + 4 more (**5**). Total 35 tables.
 
-**Exit:** group matching (a `Global iOS` group ordered before `DACH` wins for a German iOS
-buyer), fallback group, and default-currency conversion display tested.
+**Exit:** ☑ priority group match (`Global iOS` ordered before `DACH` wins for a German iOS buyer),
+fallback group, cross-currency conversion (29.00 EUR → 31.32 USD @ 1.08) — `PriceResolverTest` +
+`PricingPersistenceTest` + captured `PricingEvidence`.
 
 ## Phase 14 — Pricing overrides & resolution engine
 
