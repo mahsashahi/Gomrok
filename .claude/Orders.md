@@ -4,10 +4,10 @@
 date, source, status, and the related phase — the "why" behind the build.
 
 **Relationship to other files.** The detailed phase-by-phase decision Q&A lives in
-`.claude/PhaseDecisions.md` (options, recommendation, selection). This file is the higher-level
+`.claude/PhaseResults/PhaseDecisions.md` (options, recommendation, selection). This file is the higher-level
 index: one row per requirement/decision, pointing at where it is specified. Do not duplicate the
 full text — link to `CLAUDE.md`, `.claude/Rule.md`, `.claude/docs/Architecture.md`, or
-`.claude/PhaseDecisions.md`.
+`.claude/PhaseResults/PhaseDecisions.md`.
 
 ## How to use
 
@@ -25,16 +25,20 @@ full text — link to `CLAUDE.md`, `.claude/Rule.md`, `.claude/docs/Architecture
 
 | # | Decision | Date | Source | Status | Phase | Reference |
 |---|---|---|---|---|---|---|
-| D1 | Module-based hexagonal, per-module layers | 2026-09-06 | Phase 1 Q1 | accepted | 1 | `.claude/PhaseDecisions.md` |
-| D2 | Direct interface calls + in-process domain events | 2026-09-06 | Phase 1 Q2 | accepted | 1 | `.claude/PhaseDecisions.md` |
-| D3 | ~~BIGINT PK + public ULID~~ → **plain `INT AUTO_INCREMENT` IDs, no ULID/UUID/typed-ID classes** | 2026-09-06 → **changed 2026-09-08** | Phase 1 Q3 (user) | superseded → accepted | 1 / 3 | `.claude/PhaseDecisions.md`, `Architecture.md` §6 |
-| D4 | Money via brick/money wrapped in a `Money` VO | 2026-09-06 | Phase 1 Q4 | accepted | 1 | `.claude/PhaseDecisions.md` |
-| D5 | Provider adapters: core port + optional capability interfaces | 2026-09-06 | Phase 1 Q5 | accepted | 1 | `.claude/PhaseDecisions.md` |
-| D6 | Docker Compose · PHP 8.4 · Phinx · PHPUnit 11 · PHPStan max | 2026-09-06 | Phase 2 Q1–Q5 | implemented | 2 | `.claude/PhaseDecisions.md` |
-| D7 | `src/Bootstrap/` + `src/Http/` kept as app-level dirs | 2026-09-06 | Phase 2 Q6 | implemented | 2 | `.claude/PhaseDecisions.md` |
-| D8 | Idempotency = lock + entity mapping (no stored response bodies); audit = full before/after row snapshots; error log = explicit writer only; idempotency TTL 24h + purge job; migration CI via GitHub Actions | 2026-09-08 | Phase 5 Q1–Q5 | implemented | 5 | `.claude/PhaseDecisions.md`, `Architecture.md` §11 |
-| D9 | API key = prefixed token + `sha256(secret)` looked up by public `key_id`; client settings = typed columns + `client_endpoints` table; required immutable `slug`; soft reversible client disable (keys untouched); onboarding via CLI + `APP_ENV`-gated dev seeder | 2026-09-08 | Phase 6 Q1–Q5 | implemented | 6 | `.claude/PhaseDecisions.md` |
-| D10 | Auth = `Authorization: Bearer` only; authenticated client in a `ClientContext` holder + request attributes; `last_used_at` written throttled (≤1/key/5min); `401` for any credential fault + `403 client_disabled`, generic bodies; `Idempotency-Key` required on `/api/v1` writes; failed/successful auth logged to `client_auth_attempts`; **no rate limiting yet** | 2026-09-08 | Phase 7 Q1–Q5 | implemented | 7 | `.claude/PhaseDecisions.md`, `Architecture.md` §11 |
+| D1 | Module-based hexagonal, per-module layers | 2026-09-06 | Phase 1 Q1 | accepted | 1 | `.claude/PhaseResults/PhaseDecisions.md` |
+| D2 | Direct interface calls + in-process domain events | 2026-09-06 | Phase 1 Q2 | accepted | 1 | `.claude/PhaseResults/PhaseDecisions.md` |
+| D3 | ~~BIGINT PK + public ULID~~ → **plain `INT AUTO_INCREMENT` IDs, no ULID/UUID/typed-ID classes** | 2026-09-06 → **changed 2026-09-08** | Phase 1 Q3 (user) | superseded → accepted | 1 / 3 | `.claude/PhaseResults/PhaseDecisions.md`, `Architecture.md` §6 |
+| D4 | Money via brick/money wrapped in a `Money` VO | 2026-09-06 | Phase 1 Q4 | accepted | 1 | `.claude/PhaseResults/PhaseDecisions.md` |
+| D5 | Provider adapters: core port + optional capability interfaces | 2026-09-06 | Phase 1 Q5 | accepted | 1 | `.claude/PhaseResults/PhaseDecisions.md` |
+| D6 | Docker Compose · PHP 8.4 · Phinx · PHPUnit 11 · PHPStan max | 2026-09-06 | Phase 2 Q1–Q5 | implemented | 2 | `.claude/PhaseResults/PhaseDecisions.md` |
+| D7 | `src/Bootstrap/` + `src/Http/` kept as app-level dirs | 2026-09-06 | Phase 2 Q6 | implemented | 2 | `.claude/PhaseResults/PhaseDecisions.md` |
+| D8 | Idempotency = lock + entity mapping (no stored response bodies); audit = full before/after row snapshots; error log = explicit writer only; idempotency TTL 24h + purge job; migration CI via GitHub Actions | 2026-09-08 | Phase 5 Q1–Q5 | implemented | 5 | `.claude/PhaseResults/PhaseDecisions.md`, `Architecture.md` §11 |
+| D9 | API key = prefixed token + `sha256(secret)` looked up by public `key_id`; client settings = typed columns + `client_endpoints` table; required immutable `slug`; soft reversible client disable (keys untouched); onboarding via CLI + `APP_ENV`-gated dev seeder | 2026-09-08 | Phase 6 Q1–Q5 | implemented | 6 | `.claude/PhaseResults/PhaseDecisions.md` |
+| D10 | Auth = `Authorization: Bearer` only; authenticated client in a `ClientContext` holder + request attributes; `last_used_at` written throttled (≤1/key/5min); `401` for any credential fault + `403 client_disabled`, generic bodies; `Idempotency-Key` required on `/api/v1` writes; failed/successful auth logged to `client_auth_attempts`; **no rate limiting yet** | 2026-09-08 | Phase 7 Q1–Q5 | implemented | 7 | `.claude/PhaseResults/PhaseDecisions.md`, `Architecture.md` §11 |
+| D11 | `Capability` enum (source of truth) + seeded `provider_capabilities` mirror; **separate `PurchaseType` enum** (not capability flags); per-type declarations in `provider_type_capabilities` / `provider_type_purchase_types` join tables; payment methods = code-only enum + in-code `MethodCapabilityRules`, no method tables yet; seed **stripe + paypal** only | 2026-09-09 | Phase 8 Q1–Q5 | implemented | 8 | `.claude/PhaseResults/PhaseDecisions.md`, `Architecture.md` §8 |
+| D12 | Provider secret keys encrypted at rest via a `SecretCipher` port (`SodiumSecretCipher` / libsodium, key from `APP_ENCRYPTION_KEY`); `provider_accounts.mode` (live/test) matched to the API key prefix; `provider_account_endpoints` table (token + encrypted signing secret) for webhook/callback config; account carries `provider_account_countries` + `provider_account_methods` only, capabilities inherited from the type; CLI + env-gated dev seeder | 2026-09-09 | Phase 9 Q1–Q5 | implemented | 9 | `.claude/PhaseResults/PhaseDecisions.md`, `Architecture.md` §8/§11 |
+| D13 | Country→provider routing = **provider groups only** (no `country_provider_configs` tables); group-level `provider_group_purchase_types` / `_methods` enablement, intersected at resolve time with each account's provider-type declaration; `ProviderRouter` returns an ordered candidate list + `RoutingDecision` snapshot VO (`toArray`/`fromArray`), **no routing table this phase** (persisted with the payment in Phase 17); Ziraat + Mollie type declarations seeded; unsupported combinations rejected, never downgraded | 2026-09-09 | Phase 10 Q1–Q5 | implemented | 10 | `.claude/PhaseResults/PhaseDecisions.md`, `Architecture.md` §8 |
+| D14 | Package availability = **four dedicated join tables** (`package_countries` / `_currencies` / `_payment_methods` / `_provider_accounts`), each **fail open** (empty set = available everywhere for that dimension); lean `packages` table (`code` unique per client, `metadata` JSON — Phase 12 adds trial/badge/purchase-caps additively); `PackageCatalog::resolve()` internal port only, **`GET /api/v1/packages` deferred to Phase 13**; `SetPackageAvailability` full-replace handler + `composer package:*` CLI + env-gated seeder | 2026-09-10 | Phase 11 Q1–Q5 | implemented | 11 | `.claude/PhaseResults/PhaseDecisions.md`, `Architecture.md` §8 |
 
 ## Workflow & process rules
 
@@ -42,6 +46,6 @@ full text — link to `CLAUDE.md`, `.claude/Rule.md`, `.claude/docs/Architecture
 |---|---|---|---|---|---|
 | P1 | PascalCase file/dir naming | 2026-09-06 | user | accepted | `.claude/Rule.md` §3.1 |
 | P2 | All docs under `.claude/` | 2026-09-07 | user | accepted | `.claude/Rule.md` §3.3 |
-| P3 | One-at-a-time decision questions → `PhaseDecisions.md` | 2026-09-06 | user | accepted | `.claude/Rule.md` §4.2 |
+| P3 | One-at-a-time decision questions → `PhaseResults/PhaseDecisions.md` | 2026-09-06 | user | accepted | `.claude/Rule.md` §4.2 |
 | P4 | Per-phase result file in `.claude/PhaseResults/` | 2026-09-06 | user | accepted | `.claude/Rule.md` §4.1 |
-| P5 | `LastAiAnswer.md` single-slot response log | 2026-09-06 | user | accepted | `.claude/Rule.md` §1 |
+| P5 | `last_ai_answer.md` single-slot response log (renamed from `LastAiAnswer.md` 2026-09-09) | 2026-09-06 | user | accepted | `.claude/Rule.md` §1 |

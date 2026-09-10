@@ -1,4 +1,4 @@
-        د# Phases.md — Gomrok implementation plan
+# Phases.md — Gomrok implementation plan
 
 ## Status & execution tracking
 
@@ -25,10 +25,10 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 5 | Migration workflow & cross-cutting tables | ☑ | 2026-09-08 13:35 | 2026-09-08 15:04 | 2–4h | 1h 29m | N/A |
 | 6 | Clients module: domain & persistence | ☑ | 2026-09-08 15:14 | 2026-09-08 16:33 | 3–5h | 1h 19m | N/A |
 | 7 | Client API authentication & scoping | ☑ | 2026-09-08 16:56 | 2026-09-08 17:49 | 3–5h | 53m | N/A |
-| 8 | Providers module: types & capability model | ☐ | — | — | 4–6h | — | — |
-| 9 | Provider accounts (per client) | ☐ | — | — | 4–6h | — | — |
-| 10 | Country provider configuration & routing resolution | ☐ | — | — | 5–8h | — | — |
-| 11 | Packages module: catalog & availability | ☐ | — | — | 4–6h | — | — |
+| 8 | Providers module: types & capability model | ☑ | 2026-09-09 17:11 | 2026-09-09 17:53 | 4–6h | 42m | N/A |
+| 9 | Provider accounts (per client) | ☑ | 2026-09-09 19:21 | 2026-09-09 20:16 | 4–6h | 55m | N/A |
+| 10 | Country provider configuration & routing resolution | ☑ | 2026-09-09 20:25 | 2026-09-09 23:37 | 5–8h | ~3h 10m | N/A |
+| 11 | Packages module: catalog & availability | ☑ | 2026-09-09 23:51 | 2026-09-10 00:43 | 4–6h | ~52m | N/A |
 | 12 | Package purchase capabilities & provider definitions | ☐ | — | — | 4–6h | — | — |
 | 13 | Pricing module: default prices & pricing groups | ☐ | — | — | 4–6h | — | — |
 | 14 | Pricing overrides & resolution engine | ☐ | — | — | 6–9h | — | — |
@@ -64,7 +64,7 @@ changing an existing phase's scope, requires explicit confirmation from the user
 Every phase, without exception:
 
 1. **Before any code:** explain the phase, then ask the phase's decision questions **one at a
-   time** — Q1, wait for the answer, record it in `.claude/PhaseDecisions.md`, then Q2, … (*Interactive
+   time** — Q1, wait for the answer, record it in `.claude/PhaseResults/PhaseDecisions.md`, then Q2, … (*Interactive
    Phase Rule* / `.claude/Rule.md` §4.2). Show phase #, `QN of M`, options + explanations + a
    recommendation; never auto-select it. Don't start a decision-dependent part until its
    questions are answered. Never re-ask an already-answered question.
@@ -90,7 +90,7 @@ Every phase, without exception:
    phase changes earlier code, document that in the later phase's file. See
    `.claude/PhaseResults/Readme.md`.
 8. **Decision check:** before marking the phase complete, verify all decision questions were
-   asked, all are answered, `.claude/PhaseDecisions.md` matches the user's selections, and the
+   asked, all are answered, `.claude/PhaseResults/PhaseDecisions.md` matches the user's selections, and the
    implementation follows them. If implementation diverges from a recorded decision, stop and
    ask. (`.claude/Rule.md` §4.2)
 
@@ -204,7 +204,7 @@ match what was created.
 **DB:** `idempotency_keys`, `audit_logs`, `error_logs` (schema confirmed by the user). `client_id`
 columns carry no FK yet — Phase 6 adds them.
 
-**Decisions:** `PhaseDecisions.md` Phase 5 Q1–Q5.
+**Decisions:** `PhaseResults/PhaseDecisions.md` Phase 5 Q1–Q5.
 
 **Exit:** ☑ code + docs complete, `composer ci` green (63 unit tests), PHPStan `max` clean, CI
 workflow authored. Migration up/down + writer integration tests self-skip locally (no Docker);
@@ -233,7 +233,7 @@ First `src/Modules/<Name>/` module — sets the `Domain` / `Application` / `Infr
   (`composer client:*`). `ClientsSeeder` — one `local-dev` client + fixed dev key, gated to
   `APP_ENV ∈ {local, testing}`.
 
-**Decisions:** `PhaseDecisions.md` Phase 6 Q1–Q5 (SHA-256 + `key_id` lookup · typed columns +
+**Decisions:** `PhaseResults/PhaseDecisions.md` Phase 6 Q1–Q5 (SHA-256 + `key_id` lookup · typed columns +
 `client_endpoints` · required immutable `slug` · soft reversible disable, keys untouched · CLI +
 env-gated dev seeder).
 
@@ -261,7 +261,7 @@ Gomrok's first real API surface — `/api/v1` group + `GET /api/v1/me`. `/health
 - `ClientApiKeyRepository::touchLastUsed()`; `AppFactory::create()` takes an optional container
   for functional tests.
 
-**Decisions:** `PhaseDecisions.md` Phase 7 Q1–Q5 (Bearer only · `ClientContext` holder + attrs ·
+**Decisions:** `PhaseResults/PhaseDecisions.md` Phase 7 Q1–Q5 (Bearer only · `ClientContext` holder + attrs ·
 throttled `last_used_at` · 401/403 generic bodies · Idempotency-Key required on writes,
 failed-attempt logging, no rate limiting yet).
 
@@ -276,66 +276,108 @@ to its own concern.
 
 **Goal:** model what each provider *can* do before wiring any SDK.
 
-**Scope:**
-- The **provider-capability catalogue** (deferred here from Phase 4 Q4): a PHP enum and/or a
-  `provider_capabilities` reference table for the ~20 flags in `Architecture.md` §8.
-- The capability structure per type, and payment-method-level capability nuance (e.g. a provider
-  may do recurring card but not recurring PayPal).
-- Capability resolution service: type capabilities → account overrides → client/country
-  enable-disable.
+Second `src/Modules/` module (`Providers`). Models capability, not integration — no SDKs.
 
-**DB:** `provider_types` already exists (Phase 4). New: the capability catalogue + per-type /
-per-method capability tables.
+**Scope (done):**
+- `Capability` enum (19 flags) + seeded `provider_capabilities` mirror table (Q1). Separate
+  `PurchaseType` enum — one_time_payment / recurring_payment / auto_charge / subscription — kept
+  distinct from capabilities (Q2).
+- `provider_type_capabilities` + `provider_type_purchase_types` join tables (Q3), seeded for
+  **stripe + paypal** (Q5); ziraat/mollie deferred to their adapter phases.
+- `PaymentMethod` enum + `MethodCapabilityRules` in-code placeholder (Q4 — no method tables yet).
+- `ProviderTypeDeclaration` VO + `ProviderCapabilities` VO + `ProviderTypeDeclarations` port
+  (`PdoProviderTypeDeclarations`). `ProviderCapabilityResolver` (type declaration − method
+  exclusions; account/client-country narrowing seams for Phases 9–10). Published `ProviderCatalog`
+  + `ProviderTypeSummary`.
 
-**Exit:** capability-resolution matrix tested (Stripe vs Ziraat; Mollie card vs PayPal).
+**Decisions:** `PhaseResults/PhaseDecisions.md` Phase 8 Q1–Q5.
+
+**DB:** `provider_capabilities`, `provider_type_capabilities`, `provider_type_purchase_types`
+(schema confirmed). `provider_types` unchanged. Payment-method tables deferred to Phase 9/12.
+
+**Exit:** ☑ capability-resolution matrix tested — Stripe (full) vs Ziraat (charge-only) and
+Mollie card vs Mollie PayPal, via `ProviderCapabilityResolverTest` (Ziraat/Mollie as in-code
+fixtures since only stripe/paypal are persisted). 141 unit tests; persistence + round-trip
+integration tests self-skip locally, run in CI.
 
 ## Phase 9 — Provider accounts (per client)
 
 **Goal:** a client can connect one or more accounts per provider type.
 
-**Scope:**
-- `provider_accounts`: client-scoped slug id, `providerType`, `name`, `mode` (Live/Test),
-  `countries`, `methods`, `capabilities`, public key, secret key (via secure secret storage),
-  per-account webhook config, per-account callback keys.
-- CRUD use cases (still no admin UI — fixtures / CLI). Secrets are never returned in plaintext.
+Extends the `Providers` module.
 
-**DB:** `provider_accounts`, provider webhook config, callback config.
+**Scope (done):**
+- `provider_accounts` (client-scoped slug, provider type, `mode` live/test, status, public key,
+  `SecretCipher`-encrypted secret + `secret_last_four`), `provider_account_endpoints`
+  (webhook / callback / return — token + encrypted signing secret, Q3), `provider_account_countries`
+  + `provider_account_methods` (Q4). Account-level capability narrowing inherited from the type.
+- `Shared\Application\SecretCipher` port + `SodiumSecretCipher` (libsodium, key from
+  `APP_ENCRYPTION_KEY` — Q1).
+- `ProviderAccount` aggregate + `ProviderAccountRepository`; `ProviderAccountDirectory` (published
+  read, no secrets) + `ProviderAccountSummary`; `ProviderAccountCredentials` (the decrypt path,
+  adapters only).
+- Use cases: `CreateProviderAccount`, `SetProviderAccountMarkets`, `RotateProviderAccountSecret`,
+  `AddProviderAccountEndpoint`, `ChangeProviderAccountStatus` (disable/enable) — `Result` +
+  audit; secret rotation / endpoint changes are sensitive audited actions.
+- CLI: `bin/{CreateProviderAccount,RotateProviderAccountSecret,AddProviderAccountEndpoint,ListProviderAccounts}.php`
+  (`composer provider-account:*`). `ProviderAccountsSeeder` — env-gated `local-dev` test Stripe
+  account + webhook endpoint.
 
-**Exit:** multiple accounts of one type per client; secret round-trip and masking tested.
+**Decisions:** `PhaseResults/PhaseDecisions.md` Phase 9 Q1–Q5.
+
+**DB:** 4 tables (schema confirmed). Non-schema: `APP_ENCRYPTION_KEY` added to `Settings` /
+`.env.example` / CI. Payment-method tables still deferred (Q4).
+
+**Exit:** ☑ multiple accounts of one type per client, secret encrypt/decrypt round-trip, and
+`secret_last_four` masking tested — 157 unit tests; persistence + round-trip integration tests
+self-skip locally, run in CI.
 
 ## Phase 10 — Country provider configuration & routing resolution
 
 **Goal:** deterministic "which provider for this purchase" with no silent downgrades.
 
-**Scope:**
-- `country_provider_configs`, `country_provider_priorities`, `country_payment_methods`,
-  `country_purchase_capabilities`; plus the design's **Provider Groups** (named country groups,
-  optional device-type filter, ordered provider-account priority list), falling back to the
-  client default order when a group has no override.
-- Provider resolution engine: client default → country/group override → filter by package /
-  currency / method / purchase type / declared capability → pick the configured default or the
-  next allowed account in priority order.
-- Reject unsupported combinations explicitly (a Turkey subscription request must fail, not become
-  a one-time Ziraat payment).
+**Scope (as built — Q1 chose provider groups as the *single* mechanism; no
+`country_provider_configs` / `_priorities` / `country_payment_methods` /
+`country_purchase_capabilities` tables):**
+- `provider_groups` (named country group + optional `device_type` + optional `currency_code` +
+  `is_default` fallback) with child tables `provider_group_countries` / `_accounts` (ordered
+  `priority`) / `_purchase_types` / `_methods`.
+- `ProviderRouter` resolution engine: resolve group for country/device → intersect the group's
+  purchase-type set with each account's provider-type declaration → filter by mode / status /
+  served country / method → ordered candidate list, chosen = first. Returns an in-memory
+  `RoutingDecision` VO (candidates + rejection reasons) with a `toArray()` / `fromArray()`
+  snapshot contract; **no routing-decision table this phase** (Q4).
+- Unsupported combinations rejected explicitly (`provider_routing.*` `DomainError`s) — never
+  downgraded.
+- Ziraat + Mollie provider-type capability declarations seeded (Q5); env-gated
+  `ProviderGroupsSeeder` wires the `local-dev` demo.
 
-**DB:** country provider config + priority + method + purchase-capability tables; provider groups.
+**DB:** `provider_groups` + 4 child tables (**5**). Total 22 tables.
 
-**Exit:** Turkey/Ziraat one-time-only, Germany Mollie card+PayPal, NL PayPal-only, and
-subscription-in-Turkey rejection all tested.
+**Exit:** ☑ Turkey/Ziraat one-time-only, Germany Mollie card+PayPal, NL PayPal-only, and
+subscription-in-Turkey rejection — all covered by `ProviderRouterTest` + captured
+`RoutingEvidence` output.
 
 ## Phase 11 — Packages module: catalog & availability
 
 **Goal:** the client-owned package catalogue.
 
-**Scope:**
-- `packages` (client-scoped, `UNIQUE (client_id, code)`, `status` = active/disabled),
-  availability by country / currency / payment method / provider.
-- `Package` aggregate + repository + `CreatePackage` / `UpdatePackage` / `DisablePackage`.
-- Resolved-list query for a given client + market context.
+**Scope (as built):**
+- `packages` (client-scoped, `UNIQUE (client_id, code)`, `status` = active/disabled, `metadata`
+  JSON) + 4 dedicated availability join tables (`package_countries` / `_currencies` /
+  `_payment_methods` / `_provider_accounts`, Q1). Each dimension **fails open** — empty = every
+  value (Q2).
+- `Package` aggregate + `PackageRepository` + `PdoPackageRepository`; use cases `CreatePackage`,
+  `UpdatePackage`, `ChangePackageStatus`, `SetPackageAvailability` (full-replace, audited).
+- `PackageCatalog::resolve(client, country, currency, ?method)` → `list<ResolvedPackage>`
+  (no price / purchase types yet — Phases 13 / 12). `PackageDirectory` read port.
+- CLI `composer package:*` + env-gated `PackagesSeeder`. **`GET /api/v1/packages` deferred to
+  Phase 13** (Q3) — mounted once price + purchase types exist.
 
-**DB:** `packages`, package availability tables.
+**DB:** `packages` + 4 availability tables (**5**). Total 27 tables.
 
-**Exit:** per-client code uniqueness, availability filtering, and resolved-list output tested.
+**Exit:** ☑ per-client code uniqueness (`PackageHandlersTest`), availability filtering + narrowed
+resolved-list output (`PackageCatalogTest` + captured `CatalogEvidence` output).
 
 ## Phase 12 — Package purchase capabilities & provider definitions
 

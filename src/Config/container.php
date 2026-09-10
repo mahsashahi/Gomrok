@@ -12,9 +12,11 @@ use Gomrok\Shared\Application\Audit\AuditLogWriter;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogWriter;
 use Gomrok\Shared\Application\Idempotency\IdempotencyStore;
 use Gomrok\Shared\Application\ReferenceCatalog;
+use Gomrok\Shared\Application\SecretCipher;
 use Gomrok\Shared\Application\TokenGenerator;
 use Gomrok\Shared\Application\Transactions;
 use Gomrok\Shared\Http\IdempotencyMiddleware;
+use Gomrok\Shared\Infrastructure\Crypto\SodiumSecretCipher;
 use Gomrok\Shared\Infrastructure\Logging\LoggerFactory;
 use Gomrok\Shared\Infrastructure\Persistence\PdoAuditLogWriter;
 use Gomrok\Shared\Infrastructure\Persistence\PdoErrorLogWriter;
@@ -69,6 +71,11 @@ return [
     TokenGenerator::class => get(RandomTokenGenerator::class),
     ReferenceCatalog::class => get(PdoReferenceCatalog::class),
     Transactions::class => get(TransactionRunner::class),
+
+    // Secret encryption (Phase 9) — lazy: only fails if actually resolved with no key.
+    SecretCipher::class => factory(
+        static fn (Settings $settings): SecretCipher => SodiumSecretCipher::fromBase64Key($settings->encryptionKeyBase64),
+    ),
 
     LoggerInterface::class => factory(
         static fn (LoggerFactory $loggerFactory): LoggerInterface => $loggerFactory->create(),

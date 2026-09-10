@@ -1,0 +1,69 @@
+[
+  {
+    "type": "stripe",
+    "purchase_types": ["one_time_payment", "recurring_payment", "auto_charge", "subscription"],
+    "capabilities": [
+      "hosted_checkout",
+      "embedded_payment_form",
+      "card_tokenization",
+      "authorization",
+      "capture",
+      "cancel",
+      "refund",
+      "partial_refund",
+      "subscription_cancel",
+      "subscription_pause",
+      "subscription_resume",
+      "customer_portal",
+      "billing_portal",
+      "invoice",
+      "three_d_secure",
+      "webhook",
+      "return_url"
+    ]
+  },
+  {
+    "type": "paypal",
+    "purchase_types": ["one_time_payment", "recurring_payment", "subscription"],
+    "capabilities": [
+      "hosted_checkout",
+      "redirect_payment",
+      "authorization",
+      "capture",
+      "cancel",
+      "refund",
+      "partial_refund",
+      "subscription_cancel",
+      "webhook",
+      "return_url"
+    ]
+  },
+  {
+    "type": "mollie",
+    "purchase_types": ["one_time_payment", "recurring_payment", "subscription"],
+    "capabilities": [
+      "hosted_checkout",
+      "redirect_payment",
+      "three_d_secure",
+      "refund",
+      "partial_refund",
+      "subscription_cancel",
+      "customer_portal",
+      "webhook",
+      "return_url",
+      "manual_status_polling"
+    ]
+  },
+  {
+    "type": "ziraat",
+    "purchase_types": ["one_time_payment"],
+    "capabilities": [
+      "hosted_checkout",
+      "redirect_payment",
+      "three_d_secure",
+      "webhook",
+      "return_url",
+      "manual_status_polling"
+    ]
+  }
+]

@@ -10,14 +10,14 @@ A map of the files worth knowing about. Keep in sync when files are added / move
 | `CLAUDE.md` (project root) | Entry-point instructions / detailed project spec. |
 | `.claude/Rule.md` | Consolidated standing-rules catalogue. |
 | `.claude/Changelog.md` | Chronological change log (newest first). |
-| `.claude/PhaseDecisions.md` | Every phase decision question, options, and selection. |
+| `.claude/PhaseResults/PhaseDecisions.md` | Every phase decision question, options, recommendation, and selection — append-only, chronological (moved here from `.claude/` root 2026-09-08). |
 | `.claude/FileIndex.md` | This file. |
 | `.claude/docs/Architecture.md` | Phase-1 architecture baseline. |
 | `.claude/docs/Phases.md` | 30-phase plan + Status & execution tracking table (at the top). |
 | `.claude/docs/Commands.md` | Everyday commands. |
-| `.claude/docs/LastAiAnswer.md` | Single-slot buffer: most recent substantive answer. |
+| `.claude/docs/last_ai_answer.md` | Single-slot buffer: most recent substantive answer. |
 | `.claude/docs/ClaudeOld.md` | Superseded spec archive — do not follow. |
-| `.claude/Orders.md` | Requirements & decisions register (index over `PhaseDecisions.md`). |
+| `.claude/Orders.md` | Requirements & decisions register (index over `PhaseResults/PhaseDecisions.md`). |
 | `.claude/struct.md` | The user's target `.claude/` structure spec (do not edit). |
 | `.claude/PhaseResults/PhaseNNResult.md` `+ {Readme,Template}.md` | Per-phase records + convention/template. |
 | `.claude/knowledge/Knowledge.md` | Durable domain knowledge / gotchas. |
@@ -46,18 +46,23 @@ A map of the files worth knowing about. Keep in sync when files are added / move
 | `src/Http/HealthAction.php` | `GET /health` — public, no auth, no I/O. |
 | `src/Http/Api/MeAction.php` | `GET /api/v1/me` — echoes the authenticated client (Phase 7). |
 | `src/Database/Migrations/` | Namespaced Phinx migrations (`Gomrok\Database\Migrations\`, timestamped files). Phase 4: currencies, countries, provider_types. Phase 5: idempotency_keys, audit_logs, error_logs. |
-| `src/Database/Seeds/` | Phinx seeders + `data/countries.json`. `ClientsSeeder` (env-gated dev client). |
+| `src/Database/Seeds/` | Phinx seeders + `data/*.json`. `ClientsSeeder` + `ProviderAccountsSeeder` + `ProviderGroupsSeeder` + `PackagesSeeder` (env-gated dev fixtures), `ProviderCapabilitiesSeeder` (from the `Capability` enum), `ProviderTypeDeclarationsSeeder` (stripe + paypal + mollie + ziraat). |
 | `.claude/docs/database-design.md` etc. | The schema docs (design / diagram / +`.html` / `db_explain`) + root `mkdocs.yml`. Kebab-case (`Rule.md` §3.1 exception). |
 | `src/Modules/Clients/` | **Clients module**: `Domain/` (`Client` aggregate, `ClientApiKey`, `ClientEndpoint`, `ClientSlug`, `ApiKeyToken`, `AuthFailureReason`, repository ports, `Events/`), `Application/` (8 use-case handlers, `ClientDirectory` / `ClientSnapshot`, `Authenticate/` — `ApiKeyAuthenticator` + `AuthAttempt` + `AuthAttemptLog`), `Infrastructure/` (`Pdo*` adapters incl. `PdoAuthAttemptLog`, `RandomApiKeyGenerator`, `definitions.php`). |
-| `src/Modules/<Name>/` | Further business modules (per phase from Phase 8 on). |
+| `src/Modules/Providers/` | **Providers module**. Capabilities (Phase 8): `Capability`/`CapabilityGroup`/`PurchaseType`/`PaymentMethod` enums, `ProviderCapabilities`/`ProviderTypeDeclaration` VOs, `ProviderCapabilityResolver`, `ProviderCatalog`, `MethodCapabilityRules`. Accounts (Phase 9): `ProviderAccount` aggregate + `ProviderAccountEndpoint`, `ProviderAccountSlug`/`EncryptedSecret` VOs, `ProviderAccountMode`/`ProviderAccountStatus`/`EndpointKind` enums, `ProviderAccountRepository`, `ProviderAccountDirectory` + `ProviderAccountSummary`, `ProviderAccountCredentials` (decrypt path), 5 use-case handlers, `Pdo*` adapters. Routing (Phase 10): `ProviderGroup` aggregate + `ProviderGroupAccount`, `ProviderGroupSlug`/`ProviderGroupStatus`/`DeviceType`, `ProviderGroupRepository` + `PdoProviderGroupRepository`; `Application/Routing/` — `ProviderRouter`, `RoutingRequest`, `RoutingDecision` (+ `toArray`/`fromArray`), `RoutedAccount`/`RejectedAccount`/`RejectionReason`; use cases `CreateProviderGroup`/`ConfigureProviderGroup`/`SetProviderGroupAccounts`/`ChangeProviderGroupStatus`. |
+| `src/Modules/Packages/` | **Packages module** (Phase 11). `Domain/` (`Package` aggregate, `PackageCode`, `PackageStatus`, `PackageRepository`), `Application/` (`PackageCatalog` + `ResolvedPackage`, `PackageDirectory` + `PackageSummary`, `PackageAuditSnapshot`, use cases `CreatePackage`/`UpdatePackage`/`ChangePackageStatus`/`SetPackageAvailability`), `Infrastructure/` (`PdoPackageRepository`, `PdoPackageDirectory`, `definitions.php`). Four fail-open availability join tables; `GET /api/v1/packages` deferred to Phase 13. |
+| `src/Modules/<Name>/` | Further business modules (per phase from Phase 9 on). |
 | `src/Shared/Domain/` | `Money` (brick/money), `Currency`, `CountryCode`, `Result` + `DomainError` + `ErrorType`, `DomainEvent` marker. IDs are plain `int` — no ID types. |
-| `src/Shared/Application/` | Cross-module ports: `TokenGenerator`, `ReferenceCatalog`, `Transactions`; `Idempotency/` (`IdempotencyStore` …), `Audit/` (`AuditLogWriter`, `AuditEntry`, `AuditActor`), `ErrorLog/` (`ErrorLogWriter`, `ErrorLogEntry`, `ErrorLogLevel`). |
-| `src/Shared/Infrastructure/` | `SystemClock` (PSR-20), `CorrelationId`, `SecretRedactor`, `RandomTokenGenerator`, `Logging/` (Monolog JSON), `Persistence/` — `TransactionRunner`, `Row`, `Pdo{IdempotencyStore,AuditLogWriter,ErrorLogWriter,ReferenceCatalog}`, `NullErrorLogWriter`. |
+| `src/Shared/Application/` | Cross-module ports: `TokenGenerator`, `ReferenceCatalog`, `Transactions`, `SecretCipher` (+ `SecretDecryptionFailed`); `Idempotency/` (`IdempotencyStore` …), `Audit/` (`AuditLogWriter`, `AuditEntry`, `AuditActor`), `ErrorLog/` (`ErrorLogWriter`, `ErrorLogEntry`, `ErrorLogLevel`). |
+| `src/Shared/Infrastructure/` | `SystemClock` (PSR-20), `CorrelationId`, `SecretRedactor`, `RandomTokenGenerator`, `Crypto/SodiumSecretCipher`, `Logging/` (Monolog JSON), `Persistence/` — `TransactionRunner`, `Row`, `Pdo{IdempotencyStore,AuditLogWriter,ErrorLogWriter,ReferenceCatalog}`, `NullErrorLogWriter`. |
 | `src/Shared/Http/` | `Action` base, `JsonResponder` (+ RFC-7807 `problem()`), `JsonErrorHandler`, `CorrelationIdMiddleware`, `IdempotencyMiddleware` (+ `IdempotencyContext`, `IdempotentReplayResolver`), `AuthenticationMiddleware` (+ `ClientAuthenticator` port, `AuthResult`, `AuthenticatedClient`, `AuthRequestMeta`, `ClientContext`). |
-| `tests/Support/` | `FrozenClock`, `InMemoryIdempotencyStore`, `SynchronousTransactions`, `InMemoryClient{,ApiKey}Repository`, `InMemoryClientDirectory`, `FixedTokenGenerator`, `InMemoryReferenceCatalog`, `RecordingAuditLogWriter`, `StubClientAuthenticator`, `RecordingAuthAttemptLog`. |
+| `tests/Support/` | `FrozenClock`, `InMemoryIdempotencyStore`, `SynchronousTransactions`, `InMemoryClient{,ApiKey}Repository`, `InMemoryClientDirectory`, `FixedTokenGenerator`, `InMemoryReferenceCatalog`, `RecordingAuditLogWriter`, `StubClientAuthenticator`, `RecordingAuthAttemptLog`, `InMemoryProviderTypeDeclarations`, `InMemoryProviderAccountRepository`, `StubProviderCatalog`, `StubClientDirectory`, `InMemoryProviderGroupRepository`, `StubProviderAccountDirectory`, `InMemoryPackageRepository`. |
 | `src/Jobs/` | `PurgeExpiredIdempotencyKeys` (Phase 5). Queue worker itself: Phase 29. |
 | `bin/PurgeIdempotencyKeys.php` | CLI entrypoint for the purge job (`composer idempotency:purge`). |
-| `bin/{CreateClient,IssueClientApiKey,RevokeClientApiKey,ListClients}.php` | Client onboarding CLI (`composer client:*`) — Phase 6, interim until the admin panel. |
+| `bin/{CreateClient,IssueClientApiKey,RevokeClientApiKey,ListClients}.php` | Client onboarding CLI (`composer client:*`) — Phase 6. |
+| `bin/{CreateProviderAccount,RotateProviderAccountSecret,AddProviderAccountEndpoint,ListProviderAccounts}.php` | Provider-account CLI (`composer provider-account:*`) — Phase 9. |
+| `bin/{CreateProviderGroup,ConfigureProviderGroup,SetProviderGroupAccounts}.php` | Provider-group / routing CLI (`composer provider-group:*`) — Phase 10. |
+| `bin/{CreatePackage,UpdatePackage,SetPackageAvailability,ListPackages}.php` | Package catalogue CLI (`composer package:*`) — Phase 11. |
 
 ## Tests (`tests/`, PSR-4 `Gomrok\Tests\`)
 

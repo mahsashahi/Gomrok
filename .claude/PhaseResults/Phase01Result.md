@@ -13,7 +13,7 @@
 ## Work Completed
 
 - Ran the Interactive Phase Rule: presented the phase scope and asked 5 decision questions
-  one-by-one (full record with options and reasoning in `.claude/PhaseDecisions.md` → Phase 1). All five
+  one-by-one (full record with options and reasoning in `.claude/PhaseResults/PhaseDecisions.md` → Phase 1). All five
   were answered with the recommended option:
   1. **Module / folder structure** → Module-based hexagonal with **per-module**
      `Domain / Application / Infrastructure / Http` layers.
@@ -23,7 +23,7 @@
      `ulid CHAR(26)` column on every externally-visible row; APIs/callbacks/admin use the ULID.
      **⚠ CHANGED 2026-09-08 during Phase 3** — the user replaced this with plain
      `INT AUTO_INCREMENT` IDs (from 1), no ULID/UUID/typed-ID classes, `int` in DB and PHP. See
-     `PhaseDecisions.md` Phase 1 Q3, `Architecture.md` §6, and `Phase03Result.md`.
+     `PhaseResults/PhaseDecisions.md` Phase 1 Q3, `Architecture.md` §6, and `Phase03Result.md`.
   4. **Money representation** → `brick/money` wrapped in a `Shared\Domain\Money` value object;
      stored as `amount_minor BIGINT` + `currency CHAR(3)`.
   5. **Provider-adapter interface** → Required core `PaymentProviderPort` + optional capability

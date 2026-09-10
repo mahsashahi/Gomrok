@@ -79,7 +79,7 @@ of `CreateClient` / `UpdateClient` / `DisableClient` / `EnableClient` / `SetClie
 - Docs: `.claude/docs/database-design.md`, `database-diagram.md` + `.html`, `db_explain.md`,
   `Phases.md` (row 6 → ☑, scope/exit rewritten), `Architecture.md` §1/§5,
   `.claude/FileIndex.md`, `.claude/knowledge/Knowledge.md`, `.claude/docs/Commands.md`,
-  `.claude/Orders.md` (D9), `.env.example`, `.claude/PhaseDecisions.md` (Phase 6 Q1–Q5).
+  `.claude/Orders.md` (D9), `.env.example`, `.claude/PhaseResults/PhaseDecisions.md` (Phase 6 Q1–Q5).
 
 ## Implementation Details
 
@@ -140,7 +140,7 @@ CLI: four `bin/` scripts. Internal: use cases depend on the new `Transactions` p
 
 ## Technical Decisions
 
-`PhaseDecisions.md` Phase 6 Q1–Q5:
+`PhaseResults/PhaseDecisions.md` Phase 6 Q1–Q5:
 
 1. API key = prefixed token + `sha256(secret)`, looked up by a public `key_id`.
 2. Client settings = typed columns on `clients` + a `client_endpoints` table (not JSON / EAV).

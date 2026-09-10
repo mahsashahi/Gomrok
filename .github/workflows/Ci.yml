@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: gomrok
+          MYSQL_USER: gomrok
+          MYSQL_PASSWORD: gomrok
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -ugomrok -pgomrok"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      APP_ENV: testing
+      APP_DEBUG: 'true'
+      APP_ENCRYPTION_KEY: KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_NAME: gomrok
+      DB_USER: gomrok
+      DB_PASSWORD: gomrok
+      DB_CHARSET: utf8mb4
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, intl, pdo, pdo_mysql, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Static checks and unit tests
+        run: composer ci
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -ugomrok -pgomrok --silent; then
+              echo "MySQL is up"; exit 0
+            fi
+            echo "waiting for MySQL ($i)"; sleep 2
+          done
+          echo "MySQL did not become ready"; exit 1
+
+      - name: Migrate and seed
+        run: composer db:setup
+
+      - name: Integration tests
+        run: composer test:integration

@@ -135,7 +135,7 @@ src/
 
 - **`src/Bootstrap/`** and **`src/Http/`** are app-level (non-module) code: the composition root
   and endpoints that belong to no business module. Added in Phase 2 — see
-  `.claude/PhaseResults/Phase02Result.md` / `PhaseDecisions.md` Phase 2 Q6.
+  `.claude/PhaseResults/Phase02Result.md` / `PhaseResults/PhaseDecisions.md` Phase 2 Q6.
 - PHP namespace root: `Gomrok\` → `src/` (PSR-4). Class name == file name (PascalCase, satisfies
   `.claude/Rule.md`); non-class config files (`container.php`, `routes.php`) keep the
   conventional lowercase name (`Rule.md` §3.1).
@@ -177,7 +177,7 @@ domain events. No event is used to cross a process boundary — the queue is.
 
 ## 6. Identifiers
 
-**Decision changed 2026-09-08** (was: BIGINT PK + public ULID — see `PhaseDecisions.md` Phase 1
+**Decision changed 2026-09-08** (was: BIGINT PK + public ULID — see `PhaseResults/PhaseDecisions.md` Phase 1
 Q3). Plain numeric IDs, no abstraction:
 
 - **Primary key:** every table has `id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY`, values
@@ -243,18 +243,65 @@ interface SupportsManualPolling   { pollPaymentStatus(...); }        // e.g. Zir
   `SupportsSubscriptions`, so "subscribe via Ziraat" is impossible at the type level, not a
   runtime throw.
 
-**Capability descriptor (runtime gating).**
-`ProviderCapabilities` is a value object listing flags (`one_time_payment`, `hosted_checkout`,
-`redirect_payment`, `authorization`, `capture`, `refund`, `partial_refund`, `subscription`,
-`subscription_cancel`, `customer_portal`, `webhook`, `return_url`, `three_d_secure`,
-`manual_status_polling`, …). It is the intersection of: the provider type's declared caps, the
-provider account's config, and the client/country config. The application layer checks it
-**before** attempting an action and rejects unsupported combinations explicitly — never silently
-downgrades a requested purchase type.
+**Capability descriptor (runtime gating).** *Implemented Phase 8 — `Modules/Providers`.*
+`Capability` (backed enum, 19 flags — `hosted_checkout`, `partial_refund`, `subscription_cancel`,
+`three_d_secure`, `manual_status_polling`, …) is the source of truth; `provider_capabilities` is
+a seeded mirror. **Purchase types** (`one_time_payment` / `recurring_payment` / `auto_charge` /
+`subscription`) are a **separate** `PurchaseType` enum — the routing-level concept — deliberately
+not capability flags (Phase 8 Q2). `ProviderCapabilities` is the immutable set VO; a provider
+type's `ProviderTypeDeclaration` pairs it with the supported purchase types
+(`provider_type_capabilities` / `provider_type_purchase_types`, seeded stripe + paypal +
+mollie + ziraat as of Phase 10).
+`ProviderCapabilityResolver` narrows the type declaration by payment method
+(`MethodCapabilityRules` — an in-code placeholder until `provider_type_method_capabilities`
+lands in Phase 9/12); account config (Phase 9) and client/country config (Phase 10) wrap it. The
+application layer checks it **before** attempting an action and rejects unsupported combinations
+explicitly — never silently downgrades a requested purchase type. `ProviderCatalog` is the
+module's published read port.
 
-**Routing.** `ProviderRouter` resolves an ordered candidate list: client default order → country
-/ provider-group override → filter by package, currency, method, requested purchase type,
-capability → pick the first enabled, capable account. Result is snapshotted on the payment.
+**Provider accounts (Phase 9).** `provider_accounts` — a client's credentials per provider type
+per `mode` (`live` / `test`, matched to the API key prefix by the Phase 10 router). The secret
+key is `SecretCipher`-encrypted (§11 *Secrets at rest*); `provider_account_endpoints` holds
+per-account webhook/callback verification config (token + encrypted signing secret);
+`provider_account_countries` / `provider_account_methods` are the account-level filters the
+router uses (capabilities are inherited from the type). `ProviderAccountDirectory` is the
+published read port (no secrets); `ProviderAccountCredentials` is the separate decrypt path.
+
+**Routing (Phase 10).** Provider groups are the **single** country→provider mechanism (Q1 — no
+`country_provider_configs` tables). A `provider_group` binds a set of countries (+ optional
+`device_type`, optional `currency_code`) to an ordered list of the client's provider accounts
+(`provider_group_accounts.priority`), plus the purchase types / methods it sells
+(`provider_group_purchase_types` / `_methods`). `is_default = true` is the fallback group (no
+countries). `Modules\Providers\Application\Routing\ProviderRouter::route(RoutingRequest)`:
+
+1. resolve the client's group for `(country, deviceType)` → else the `is_default` group → else
+   `provider_routing.no_group_for_market`.
+2. group must allow the requested purchase type (`provider_routing.purchase_type_not_enabled`) —
+   this is where a subscription request in a one-time-only market **fails**, never downgrades.
+3. group currency (if pinned) and group methods must match.
+4. keep each `provider_group_accounts` entry only if: enabled, account active, `mode` matches
+   the request (from the API key prefix), account serves the country, the provider-type
+   declaration supports the purchase type, and the account's methods allow it — else record a
+   `RejectionReason`.
+5. survivors ordered by `priority`; `chosen = first`.
+
+Returns a `RoutingDecision` VO (ordered `candidates` + `rejections` + resolved group) with a
+`toArray()` / `fromArray()` snapshot contract — **not** persisted this phase; Phase 17 snapshots
+it on the payment (Q3/Q4).
+
+### Packages (Phase 11)
+
+`Modules/Packages`. The client-owned catalogue: `packages` (one table with `client_id`, `code`
+unique per client — no global catalogue, no `client_packages` junction) + four **fail-open**
+availability join tables (`package_countries` / `_currencies` / `_payment_methods` /
+`_provider_accounts` — an empty set for a dimension = available everywhere for it, Phase 11 Q2).
+`status = disabled` is the per-client hide switch. Use cases: `CreatePackage`, `UpdatePackage`,
+`ChangePackageStatus`, `SetPackageAvailability` (full-replace, audited `package.*`).
+
+`PackageCatalog::resolve(clientId, country, currency, ?method)` → `list<ResolvedPackage>`: the
+client's active packages whose dimensions all match, each with its provider accounts narrowed to
+the client's active set. **No `price` (Phase 13), no `purchaseTypes` (Phase 12)** yet;
+`GET /api/v1/packages` is mounted in Phase 13. `PackageDirectory` is the raw read port.
 
 ## 9. Resolution pipelines (sketch)
 
@@ -262,10 +309,15 @@ Order is deterministic and will be documented precisely in the Pricing/Vouchers/
 
 ```
 PACKAGE LIST
-  client + country + currency + method + purchase type (+ user)
-    → pricing group match (→ default fallback group)
-    → price list assignment (stable hash of user id)
-    → per-package: resolved price, currency, available providers/methods/purchase types
+  client + country + currency + method (+ purchase type, user)
+    → PackageCatalog::resolve  [Packages module — implemented Phase 11]
+        active packages of the client, kept if every availability dimension matches
+        (country / currency / method — empty set = matches anything)
+        → per package: id, code, name, description, metadata,
+          provider accounts narrowed to the client's active set, available methods
+    → pricing group match (→ default fallback group)          [Phase 13]
+    → price list assignment (stable hash of user id)          [Phase 13]
+    → purchase types + trial/duration/badge per package       [Phase 12]
 
 PRICE
   1. client + package
@@ -302,6 +354,7 @@ and flagged, never dropped.
 | --- | --- |
 | **DI** | PHP-DI; shared definitions in `src/Config/container.php`, per-module in `src/Modules/<Name>/Infrastructure/definitions.php` (merged by `ContainerFactory`). Nothing is `new`-ed in a controller/handler. Use cases depend on the `Transactions` port, not `TransactionRunner` directly. |
 | **Config** | `.env` → typed settings object; secrets from env or a secret store, never committed, never logged. |
+| **Secrets at rest (Phase 9)** | Provider secret keys + webhook signing secrets stored encrypted — `Shared\Application\SecretCipher` port, `SodiumSecretCipher` default (libsodium, key from base64 `APP_ENCRYPTION_KEY`; missing key = boot-time error). Only `Modules\Providers\Application\ProviderAccountCredentials` decrypts (adapters only); everywhere else sees `secret_last_four`. A Vault / KMS `SecretCipher` can replace the default with no schema change. |
 | **Logging** | Structured JSON via `Shared` logger; every payment/subscription flow carries `correlation_id`, `client_id`, `client_user_id?`, `package_id?`, `payment_id?`, `subscription_id?`, `voucher_id?`, `country`, `currency`, `purchase_type`, `payment_method?`, `provider`, provider txn/sub ids. Never log secrets. |
 | **Idempotency** | `Idempotency-Key` on client writes → `IdempotencyMiddleware` + `idempotency_keys` (Phase 5, decision Q1: **lock + entity mapping**, no stored response bodies). Claim `processing` → run handler → `done` (records `target_type`/`target_id`) or `failed`. Replay of `done` re-serialises the entity's *current* state via an `IdempotentReplayResolver`; `processing` → 409; same key, different request fingerprint → 422. 24h TTL, purge job. Middleware wired to routes in Phase 7. Provider webhook event ids deduped separately. |
 | **Audit log** | `AuditLogWriter` port + `audit_logs` (Phase 5, decision Q2: **event + full before/after row snapshots**, secret keys redacted). Called by sensitive admin write paths from Phase 6 on. Append-only. |

@@ -1,0 +1,20 @@
+[
+  { "code": "TR", "name": "Türkiye", "default_currency": "TRY" },
+  { "code": "US", "name": "United States", "default_currency": "USD" },
+  { "code": "GB", "name": "United Kingdom", "default_currency": "GBP" },
+  { "code": "DE", "name": "Germany", "default_currency": "EUR" },
+  { "code": "FR", "name": "France", "default_currency": "EUR" },
+  { "code": "NL", "name": "Netherlands", "default_currency": "EUR" },
+  { "code": "IT", "name": "Italy", "default_currency": "EUR" },
+  { "code": "ES", "name": "Spain", "default_currency": "EUR" },
+  { "code": "IE", "name": "Ireland", "default_currency": "EUR" },
+  { "code": "BE", "name": "Belgium", "default_currency": "EUR" },
+  { "code": "AT", "name": "Austria", "default_currency": "EUR" },
+  { "code": "PT", "name": "Portugal", "default_currency": "EUR" },
+  { "code": "SE", "name": "Sweden", "default_currency": "SEK" },
+  { "code": "DK", "name": "Denmark", "default_currency": "DKK" },
+  { "code": "FI", "name": "Finland", "default_currency": "EUR" },
+  { "code": "PL", "name": "Poland", "default_currency": "PLN" },
+  { "code": "AE", "name": "United Arab Emirates", "default_currency": "AED" },
+  { "code": "SA", "name": "Saudi Arabia", "default_currency": "SAR" }
+]

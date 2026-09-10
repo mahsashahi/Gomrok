@@ -82,7 +82,7 @@ A bootable, testable, empty Slim 4 application. No business logic, no business/r
   (`Dockerfile`, `phpstan.neon`, `phinx.php`, `.php-cs-fixer.dist.php`; and non-class PHP config
   files `container.php` / `routes.php` keep lowercase names); ## Project Documents gained a
   `Commands.md` row.
-- `/Users/mahsa/PhpstormProjects/Gomrok/.claude/PhaseDecisions.md` — Phase 2 Q1–Q6 recorded.
+- `/Users/mahsa/PhpstormProjects/Gomrok/.claude/PhaseResults/PhaseDecisions.md` — Phase 2 Q1–Q6 recorded.
 - `/Users/mahsa/PhpstormProjects/Gomrok/.claude/docs/Phases.md` — Phase 2 tracking row → ☑.
 - `/Users/mahsa/PhpstormProjects/Gomrok/.claude/Changelog.md` — Phase 2 entry.
 

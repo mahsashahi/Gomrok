@@ -14,7 +14,7 @@
 ## Work Completed
 
 The Phinx migration workflow plus exactly three reference tables. All five decisions were made
-first (`PhaseDecisions.md` Phase 4 Q1–Q5), and **the schema was presented and confirmed by the
+first (`PhaseResults/PhaseDecisions.md` Phase 4 Q1–Q5), and **the schema was presented and confirmed by the
 user** before any migration was written (`Rule.md` §5).
 
 - **Migration config.** `phinx.php` rewritten for namespaced migrations —

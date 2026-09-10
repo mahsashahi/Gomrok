@@ -13,12 +13,12 @@ at the fuller text.
 
 - **Language.** When the user writes in Persian, reply in **English**. Only reply in Persian when
   the user explicitly asks for a Persian reply. *(CLAUDE.md → Language Rule)*
-- **LastAiAnswer.md.** After every *substantive* response (design analysis, technical
+- **last_ai_answer.md.** After every *substantive* response (design analysis, technical
   recommendation, code plan, architecture explanation, phase summary), overwrite
-  `.claude/docs/LastAiAnswer.md` with just that answer — single-slot buffer, use `Write`
+  `.claude/docs/last_ai_answer.md` with just that answer — single-slot buffer, use `Write`
   (never `Edit` / append), start with `# Q: <one-line topic>` then the response body. Skip it for
   short confirmations, tool-result echoes, one-line questions, and meta-talk about the rule
-  itself. Standing rule — do not ask permission each time. *(CLAUDE.md → LastAiAnswer.md Response
+  itself. Standing rule — do not ask permission each time. *(CLAUDE.md → last_ai_answer.md Response
   Log Rule)*
 - **Explain the important decisions**; keep code and architecture simple and practical; avoid
   overengineering; prefer clear over clever. *(CLAUDE.md → Expected Claude Behavior)*
@@ -48,7 +48,7 @@ at the fuller text.
 
 Every file **and directory** in this repo is named in `PascalCase`:
 
-- Words joined with no separator, each capitalised: `Phases.md`, `LastAiAnswer.md`, `Rule.md`,
+- Words joined with no separator, each capitalised: `Phases.md`, `Rule.md`,
   `DatabaseDesign.md`, `ProviderAdapter.php`, `.claude/docs/Design/`, `Src/Modules/Payments/`.
   (Bare filenames are used here as naming examples — for their actual location see §3.4.)
 - No `snake_case`, `kebab-case`, `SCREAMING_CASE`, or spaces.
@@ -59,8 +59,8 @@ Every file **and directory** in this repo is named in `PascalCase`:
 - **All-caps community filenames are still PascalCased**: `Changelog.md` (not `CHANGELOG.md`),
   `Knowledge.md` (not `KNOWLEDGE.md`), `Readme.md` (not `README.md`), `Todo.md` (not `TODO.md`),
   `License.md` (not `LICENSE`). These are conventions, not tool-mandated names — see exceptions.
-- Acronyms are treated as words: `LastAiAnswer.md` not `LastAIAnswer.md`; `HttpClient.php` not
-  `HTTPClient.php`.
+- Acronyms are treated as words: `HttpClient.php` not `HTTPClient.php`; `ApiKey.php` not
+  `APIKey.php`.
 - The extension stays lowercase (`.md`, `.php`, `.html`, `.dc.html`).
 - Third-party / generated artefacts (e.g. the Claude Design exports under `.claude/docs/Design/`) are renamed
   to PascalCase too. If a rename breaks an internal reference — as `support.js` → `Support.js`
@@ -80,6 +80,8 @@ Every file **and directory** in this repo is named in `PascalCase`:
 - **Non-class PHP config files that return a value** (`src/Config/container.php`,
   `src/Config/routes.php`, and future `settings.php` etc.) keep the conventional lowercase name —
   they are `require`-d, not autoloaded, and this matches `.claude/docs/Architecture.md` §4.
+- **The response-log buffer** — `.claude/docs/last_ai_answer.md` keeps its lowercase snake_case
+  name (user request, 2026-09-09; the *last_ai_answer.md Response Log Rule* names it that way).
 - **The database docs** — `.claude/docs/database-design.md`, `.claude/docs/database-diagram.md`
   (+ `.html`), `.claude/docs/db_explain.md`, and root `mkdocs.yml` — keep their kebab-case names
   (Phase 4 Q1; the inherited spec's *Database Diagram Maintenance Rule* names them that way and
@@ -105,7 +107,6 @@ loose in the project root. Layout:
 .claude/
 ├── Rule.md              this file — the standing-rules catalogue
 ├── Changelog.md         chronological change log            (= struct.md CHANGELOG.md)
-├── PhaseDecisions.md    every phase decision Q/options/selection
 ├── Orders.md            requirements & decisions register   (= struct.md ORDERS.md)
 ├── FileIndex.md         map of the key files in the repo    (= struct.md FILE_INDEX.md)
 ├── struct.md            the target-structure spec this tree was built from (user-owned)
@@ -122,11 +123,13 @@ loose in the project root. Layout:
 │   ├── SecurityRules.md  TenantIsolation.md  RolePermissionModel.md
 │   └── DeploymentRunbook.md  DnsRecords.md  LocalAssets.md  MediaStorage.md  (placeholders)
 ├── docs/               reference docs Claude reads before implementing
-│   ├── Architecture.md  Phases.md  Commands.md  LastAiAnswer.md  ClaudeOld.md
+│   ├── Architecture.md  Phases.md  Commands.md  last_ai_answer.md  ClaudeOld.md
 │   ├── ProjectDescription.md  Domain.md  Permissions.md  Ui.md  Recommendations.md
 │   ├── Deployment.md  Server.md   (placeholders — no infra chosen yet)
 │   └── Design/              admin-panel design export (GomrokAdminPanelV4.dc.html + Support.js)
-└── PhaseResults/       per-phase records — Readme.md, Template.md, PhaseNNResult.md (append-only)
+└── PhaseResults/       Readme.md, Template.md, PhaseNNResult.md (per-phase, append-only),
+                        PhaseDecisions.md (every phase decision Q/options/selection — moved
+                        here 2026-09-08; struct.md put it at `.claude/` root)
 ```
 
 Naming inside `.claude/`:
@@ -168,14 +171,14 @@ The **database docs** live under `.claude/docs/` with kebab-case names (Phase 4 
 - The final database schema does **not** go in `CLAUDE.md`. It lives in the DB docs (§5).
 - The 30-phase plan: `.claude/docs/Phases.md`.
 - Every phase decision question, its options, the recommendation, and the user's final selection:
-  `.claude/PhaseDecisions.md` — see §4.2.
+  `.claude/PhaseResults/PhaseDecisions.md` — see §4.2.
 - Per-phase completion records: `.claude/PhaseResults/` — one `PhaseNNResult.md` per completed
   phase (see `.claude/PhaseResults/Readme.md`).
 - The map of key files across the whole repo: `.claude/FileIndex.md`.
 - Cross-cutting conventions: this file, `.claude/Rule.md`.
 - The admin-panel design is mirrored under `.claude/docs/Design/` (see `.claude/docs/Design/Readme.md`).
 - Do not put the full decision questionnaire inside `.claude/docs/Phases.md`; it links to
-  `.claude/PhaseDecisions.md`.
+  `.claude/PhaseResults/PhaseDecisions.md`.
 
 ### 3.5 Project-document registry
 
@@ -195,17 +198,17 @@ The complete list of the project's documentation files. Keep this table in sync 
 | Rule.md | `.claude/Rule.md` | Consolidated catalogue of every standing project rule (working agreement, framing, naming, phase workflow, database, evidence, docs, security) with pointers into `CLAUDE.md`. |
 | FileIndex.md | `.claude/FileIndex.md` | Map of the key files across the whole repo (docs, source entry points, config, tests) so they can be found fast. |
 | Phases.md | `.claude/docs/Phases.md` | The fixed 30-phase implementation plan: per-phase goal/scope/DB/exit, the *Status & execution tracking* table (status, start/end datetime, estimated & actual duration, tokens), and *How each phase runs*. |
-| PhaseDecisions.md | `.claude/PhaseDecisions.md` | The permanent record of every phase decision question — the question, all options, the recommendation, the user's selection, status, and any later change. |
+| PhaseResults/PhaseDecisions.md | `.claude/PhaseResults/PhaseDecisions.md` | The permanent record of every phase decision question — the question, all options, the recommendation, the user's selection, status, and any later change. |
 | Architecture.md | `.claude/docs/Architecture.md` | The target architecture baseline decided in Phase 1: dependency rule, module map, folder layout, cross-module communication, identifiers, money, provider-adapter model, resolution-pipeline sketches, payment lifecycle, cross-cutting concerns, deferred items. |
 | Changelog.md | `.claude/Changelog.md` | Chronological (newest-first) record of every meaningful change: date, summary, files changed, reason, migration notes, breaking changes. |
 | Knowledge.md | `.claude/knowledge/Knowledge.md` | Durable domain knowledge and gotchas learned while building Gomrok — provider quirks, money-scale rules, pricing/voucher edge cases, identifier boundary, webhook rules. |
 | Commands.md | `.claude/docs/Commands.md` | Everyday commands: setup, Docker, running the app, tests (incl. a single test), static analysis, code style, Phinx migrations, full local CI. |
-| LastAiAnswer.md | `.claude/docs/LastAiAnswer.md` | Single-slot buffer holding only the most recent substantive assistant response (overwritten each time; see §1). |
+| last_ai_answer.md | `.claude/docs/last_ai_answer.md` | Single-slot buffer holding only the most recent substantive assistant response (overwritten each time; see §1). |
 | ClaudeOld.md | `.claude/docs/ClaudeOld.md` | Superseded archive of an early spec draft. Kept for history only — carries a SUPERSEDED banner; do not follow it. |
 | PhaseResults/Readme.md | `.claude/PhaseResults/Readme.md` | Explains the phase-result convention: naming, structure, and the rules for `PhaseNNResult.md` files. |
 | PhaseResults/Template.md | `.claude/PhaseResults/Template.md` | The section layout to copy when creating a phase result file. |
 | PhaseNNResult.md | `.claude/PhaseResults/PhaseNNResult.md` | One per completed phase (zero-padded, e.g. `Phase01Result.md`): the detailed record of what was *actually* done that phase. Append-only. |
-| Orders.md | `.claude/Orders.md` | Requirements & decisions register — one row per requirement/decision with date/source/status/phase, pointing at `PhaseDecisions.md` / `CLAUDE.md` / `Rule.md`. Higher-level index over `PhaseDecisions.md`. |
+| Orders.md | `.claude/Orders.md` | Requirements & decisions register — one row per requirement/decision with date/source/status/phase, pointing at `PhaseResults/PhaseDecisions.md` / `CLAUDE.md` / `Rule.md`. Higher-level index over `PhaseResults/PhaseDecisions.md`. |
 | struct.md | `.claude/struct.md` | The user's target-structure spec that this `.claude/` tree was built from. User-owned — do not edit. |
 | agents/\*.md | `.claude/agents/<Role>Agent.md` | Subagent definitions (`BackendAgent`, `DatabaseAgent`, `DiscoveryAgent`, `DocsAgent`, `FrontendAgent`, `QaAgent`, `ReviewAgent`, `SecurityAgent`, `TestingAgent`, `DeploymentAgent`). **Templates** — frontmatter set, bodies are placeholders; refine before relying on any. |
 | commands/\*.md | `.claude/commands/<Command>.md` (+ `phases/`, `workflow/`) | Slash-command definitions: `/Implement /Plan /Refactor /Review /Spec`, their `/workflow:*` multi-agent variants, and `/phases:*` thin pointers to `docs/Phases.md`. **Templates.** |
@@ -273,7 +276,7 @@ For every phase that needs architectural, technical, implementation, or product 
 **Ask one at a time.**
 
 - Ask decision questions **one at a time**. Never present all of a phase's questions at once.
-- Wait for the answer, record it in `.claude/PhaseDecisions.md`, then ask the next.
+- Wait for the answer, record it in `.claude/PhaseResults/PhaseDecisions.md`, then ask the next.
 - Don't start implementing a decision-dependent part of the phase until its questions are
   answered.
 
@@ -282,8 +285,17 @@ options · a short explanation of each option · the recommended option (when th
 **Never auto-select the recommendation** — the user makes the final choice. Never guess a
 selection.
 
-**Persist immediately.** Maintain `.claude/PhaseDecisions.md`. The moment the user answers a
-question, update that file — do not wait for the end of the phase. Format per phase:
+**Persist immediately.** Maintain `.claude/PhaseResults/PhaseDecisions.md`. The moment the user answers a
+question, update that file — do not wait for the end of the phase.
+
+**Newest-first order.** `.claude/PhaseResults/PhaseDecisions.md` is ordered newest → oldest:
+the current phase's section at the **top**, Phase 1's at the bottom; within a phase the
+questions run in **descending** order (Q5, Q4, … Q1). **Always prepend a new phase's decision
+section — and each new question within a phase — to the top of the file; never append to the
+end, never re-sort the rest.** A revised decision is edited in place (keeping the change history
+per "Changing a decision" below); it does not move.
+
+Format per phase:
 
 ```
 ## Phase N — [Phase Name]
@@ -320,7 +332,7 @@ choice — keep enough history to see what changed:
 ```
 
 **End-of-phase decision check** — before marking a phase complete, verify: (1) all required
-questions were asked; (2) every one has a recorded answer; (3) `.claude/PhaseDecisions.md` reflects the
+questions were asked; (2) every one has a recorded answer; (3) `.claude/PhaseResults/PhaseDecisions.md` reflects the
 user's actual selections; (4) the implementation follows those selections. If the implementation
 diverges from a recorded decision, **stop and ask** before changing the decision or proceeding.
 
@@ -371,9 +383,9 @@ Applies automatically to all current and future phases.
 | File | When to update |
 | --- | --- |
 | `.claude/Changelog.md` | Check before changes; update after every meaningful change — date, summary, files changed, reason, migration notes, breaking changes. |
-| `.claude/docs/LastAiAnswer.md` | After every substantive response (§1). |
+| `.claude/docs/last_ai_answer.md` | After every substantive response (§1). |
 | `.claude/docs/Phases.md` | The *Status & execution tracking* row for each phase (Status, Start/End Datetime, Est./Actual Duration, Tokens Used) as it runs; contents when scope is confirmed to change. |
-| `.claude/PhaseDecisions.md` | Immediately after the user answers each phase decision question — options, recommendation, selection, status, and any later change (§4.2). |
+| `.claude/PhaseResults/PhaseDecisions.md` | Immediately after the user answers each phase decision question — options, recommendation, selection, status, and any later change (§4.2). |
 | `.claude/docs/database-design.md`, `database-diagram.md` (+ `.html`), `db_explain.md` | Every schema change, same change (§5). |
 | `.claude/PhaseResults/PhaseNNResult.md` | Created once, right after phase NN completes; never edited afterwards except to fix an error. |
 | `.claude/Rule.md` | Whenever a new standing rule or convention is agreed; and its **## Project Documents** table whenever any documentation file is created / renamed / moved / removed (§3.5). |

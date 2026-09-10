@@ -9,5 +9,5 @@ Copy this only if per-phase command files become useful. Gomrok's single source 
 
 - Phase number & name — match `.claude/docs/Phases.md`.
 - One line: what the phase delivers.
-- Links: `.claude/docs/Phases.md` (scope/exit), `.claude/PhaseDecisions.md` (decisions),
+- Links: `.claude/docs/Phases.md` (scope/exit), `.claude/PhaseResults/PhaseDecisions.md` (decisions),
   `.claude/PhaseResults/PhaseNNResult.md` (outcome).

@@ -793,17 +793,19 @@ notifyClient()
 
 ### File naming
 
-Every file authored for this project is named in **PascalCase** (`Phases.md`, `LastAiAnswer.md`,
+Every file authored for this project is named in **PascalCase** (`Phases.md`, `Rule.md`,
 `ProviderAdapter.php`) — no snake_case, kebab-case, or spaces; acronyms treated as words
-(`LastAiAnswer`, not `LastAIAnswer`). `CLAUDE.md` and ecosystem-owned names (`composer.json`,
-`.env`, `mkdocs.yml`, …) are excepted. Full rule with exceptions: `.claude/Rule.md` §3.1.
+(`HttpClient`, not `HTTPClient`). `CLAUDE.md`, `.claude/docs/last_ai_answer.md`, and
+ecosystem-owned names (`composer.json`, `.env`, `mkdocs.yml`, …) are excepted. Full rule with
+exceptions: `.claude/Rule.md` §3.1.
 
 ### Documentation directory
 
 All project documentation lives under **`.claude/`** — `.claude/Rule.md`, `.claude/Changelog.md`,
-`.claude/PhaseDecisions.md`, `.claude/FileIndex.md`, `.claude/docs/*` (Architecture, Phases,
-Commands, LastAiAnswer, …), `.claude/knowledge/*`, `.claude/PhaseResults/*`, plus the `agents/`
-`commands/` `skills/` skeletons, `.claude/docs/Design/` (the design export) — never loose in the
+`.claude/FileIndex.md`, `.claude/docs/*` (Architecture, Phases, Commands, last_ai_answer, …),
+`.claude/knowledge/*`, `.claude/PhaseResults/*` (per-phase result files **plus
+`PhaseResults/PhaseDecisions.md`**, moved there 2026-09-08), plus the `agents/` `commands/`
+`skills/` skeletons, `.claude/docs/Design/` (the design export) — never loose in the
 project root. `CLAUDE.md` is the one exception (the harness auto-loads `./CLAUDE.md`). Files
 in `.claude/` are PascalCase (incl. the `PhaseResults/` and `docs/Design/` sub-dirs); the
 tool-recognised `agents/ commands/ skills/` sub-dirs plus `docs/ knowledge/` are lowercase. Full rule:
@@ -1442,13 +1444,13 @@ When I write instructions in Persian, respond in English.
 
 Do not answer my Persian instructions in Persian unless I explicitly ask you to respond in Persian.
 
-## LastAiAnswer.md Response Log Rule
+## last_ai_answer.md Response Log Rule
 
-Every substantive assistant response in this project must be saved to `.claude/docs/LastAiAnswer.md` (`/Users/mahsa/PhpstormProjects/Gomrok/.claude/docs/LastAiAnswer.md`). The file is a **single-slot buffer**:
+Every substantive assistant response in this project must be saved to `.claude/docs/last_ai_answer.md` (`/Users/mahsa/PhpstormProjects/Gomrok/.claude/docs/last_ai_answer.md`). The file is a **single-slot buffer**:
 
-* **Command: always delete the last response from `.claude/docs/LastAiAnswer.md` and add the last answer in it.** Every time, first clear whatever is currently in `.claude/docs/LastAiAnswer.md`, then write the newest substantive answer. `.claude/docs/LastAiAnswer.md` must only ever hold the single most recent answer — nothing from before it.
+* **Command: always delete the last response from `.claude/docs/last_ai_answer.md` and add the last answer in it.** Every time, first clear whatever is currently in `.claude/docs/last_ai_answer.md`, then write the newest substantive answer. `.claude/docs/last_ai_answer.md` must only ever hold the single most recent answer — nothing from before it.
 * **Always overwrite** the file with the latest substantive response — never append.
-* Use the `Write` tool on `.claude/docs/LastAiAnswer.md` (not `Edit`) — overwriting is the intended behavior.
+* Use the `Write` tool on `.claude/docs/last_ai_answer.md` (not `Edit`) — overwriting is the intended behavior.
 * The file starts with `# Q: <one-line topic paraphrased from my question>` followed by the full response body verbatim.
 
 What counts as substantive:
@@ -1461,12 +1463,12 @@ What counts as substantive:
 * ORD justifications.
 * Anything with reasoning worth keeping.
 
-What does NOT count (do not update `.claude/docs/LastAiAnswer.md` for these):
+What does NOT count (do not update `.claude/docs/last_ai_answer.md` for these):
 
 * Short administrative confirmations ("saved", "will do", "done").
 * Pure tool-result echoes.
 * One-line clarifying questions.
-* Meta responses about the `.claude/docs/LastAiAnswer.md` ritual itself.
+* Meta responses about the `.claude/docs/last_ai_answer.md` ritual itself.
 
 Do not ask permission each time. The rule is standing.
 
@@ -1476,7 +1478,7 @@ Before starting each implementation phase, explain what will be done in that pha
 
 Before making decision-dependent changes in a phase, ask the phase's decision questions
 **one at a time** — never present them all at once. Ask Q1, wait for the answer, record it in
-`.claude/PhaseDecisions.md`, then ask Q2, and so on. Do not start implementing a decision-dependent part
+`.claude/PhaseResults/PhaseDecisions.md`, then ask Q2, and so on. Do not start implementing a decision-dependent part
 of the phase until its questions are answered.
 
 Each question must show:
@@ -1492,9 +1494,12 @@ Each question must show:
 **Do not auto-select the recommended option — the user makes the final choice, and you must
 never guess it.**
 
-Every question and its answer is persisted to `.claude/PhaseDecisions.md` immediately (not at end of
+Every question and its answer is persisted to `.claude/PhaseResults/PhaseDecisions.md` immediately (not at end of
 phase), with a `Status: Pending → Decided` marker and full change history if the user later
-revises a choice. Full rules and the required format: `.claude/Rule.md` §4.2.
+revises a choice. That file is ordered **newest-first** — the current phase's section at the
+top, Phase 1 at the bottom, questions within a phase in descending order (Q5…Q1); new phases and
+new questions are always **prepended to the top**, never appended to the end or re-sorted. Full
+rules and the required format: `.claude/Rule.md` §4.2.
 
 Do not continue with implementation until the phase decisions are clear. If the user already
 answered a question earlier, do not ask it again — use the previous answer.
@@ -1555,7 +1560,7 @@ work as completed work. `.claude/docs/Phases.md` stays the roadmap; `.claude/Pha
 - This applies automatically to all phases. See `.claude/PhaseResults/Readme.md`.
 
 **End-of-phase decision check.** Before marking a phase complete, verify: (1) all required
-decision questions were asked; (2) every one has a recorded answer; (3) `.claude/PhaseDecisions.md`
+decision questions were asked; (2) every one has a recorded answer; (3) `.claude/PhaseResults/PhaseDecisions.md`
 reflects the user's actual selections; (4) the implementation follows those selections. If the
 implementation diverges from a recorded decision, stop and ask before changing the decision or
 proceeding. *(.claude/Rule.md → §4.2)*

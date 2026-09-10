@@ -39,7 +39,7 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
 - Plain `INT UNSIGNED AUTO_INCREMENT` primary keys (from 1); plain `INT` foreign keys.
   **No ULID / UUID / typed-ID classes.** The same `int` is used in the DB, in PHP, and in
   API paths / callback URLs / admin routes. (Decision changed 2026-09-08 — see
-  `Architecture.md` §6, `DatabaseAgent.md`, `PhaseDecisions.md` Phase 1 Q3.)
+  `Architecture.md` §6, `DatabaseAgent.md`, `PhaseResults/PhaseDecisions.md` Phase 1 Q3.)
 - Because sequential ints are guessable, cross-tenant safety comes from **authorization** — every
   query is scoped to the authenticated client (`TenantIsolation.md`), never from unguessable ids.
 - `BIGINT` is still fine for non-key columns (e.g. `amount_minor`); the "no BIGINT" rule is
@@ -117,6 +117,99 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
   concern.
 - `AppFactory::create(?ContainerInterface)` accepts an override container so functional tests
   boot the real Slim stack with the DB adapters stubbed.
+
+## Provider capabilities (Phase 8)
+
+- **Two vocabularies, kept separate** (Phase 8 Q2): `PurchaseType` (`one_time_payment`,
+  `recurring_payment`, `auto_charge`, `subscription`) is the routing-level concept — country
+  config, package availability, the payment flow all speak it. `Capability` (19 flags:
+  `hosted_checkout`, `partial_refund`, `subscription_cancel`, `three_d_secure`,
+  `manual_status_polling`, …) is the finer "can it do this action" layer. `subscription` is a
+  purchase type, **not** a capability flag.
+- `Capability` enum is the source of truth; `provider_capabilities` is a seeded mirror for FK
+  integrity + admin display. An integration test keeps them in lock-step (like `currencies`).
+- Per-type declarations (`provider_type_capabilities` / `provider_type_purchase_types`) are
+  seeded for **stripe + paypal only**. Ziraat & Mollie rows land in their adapter phases (23/22).
+  When an adapter lands, its `getCapabilities()` must be a **subset** of what the type declares
+  in the DB — the DB is the ceiling.
+- Payment methods are **not** a table yet (Phase 8 Q4). Method-level nuance ("Mollie via PayPal
+  can't do subscriptions / recurring") is `MethodCapabilityRules`, an in-code placeholder that
+  `provider_type_method_capabilities` replaces in Phase 9/12. The `ProviderCapabilityResolver`
+  signature already carries `?PaymentMethod` so that's an additive change, not a refactor.
+- `ProviderCapabilityResolver` resolves: type declaration − method exclusions. Account (Phase 9)
+  and client/country (Phase 10) narrowing wrap it. Unknown provider → `null` / `false`, never a
+  silent "yes".
+
+## Provider accounts & secrets (Phase 9)
+
+- Provider **secret keys** are encrypted at rest: `Shared\Application\SecretCipher` port +
+  `SodiumSecretCipher` (libsodium `crypto_secretbox`, key from base64 `APP_ENCRYPTION_KEY`).
+  Missing key → the cipher throws when first resolved (never a silent fallback). CI + `phpunit.xml`
+  set a throwaway key; `.env.example` ships it blank.
+- Stored: `secret_ciphertext` + `secret_last_four`. The plaintext is only ever in memory during
+  create / rotate (encrypt) and inside a provider adapter (decrypt via `ProviderAccountCredentials`
+  — the one decrypt path, kept off `ProviderAccountDirectory`). `public_key` is not secret →
+  plaintext.
+- `provider_accounts.mode` (`live` / `test`) maps 1:1 to the API key's `gk_live` / `gk_test`
+  prefix. **Enforcement is Phase 10 routing** — a test request must never resolve a live account.
+- `provider_account_endpoints`: one active per `kind` (webhook/callback/return), enforced in the
+  aggregate (`addEndpoint` deactivates the prior active). Rows are never deleted → rotated tokens
+  keep history. `token` (unique, `whk_…`) is the URL segment consumed by the Webhooks module
+  (Phase 25).
+- Account-level capability narrowing is **not** modelled (Phase 9 Q4) — an account inherits its
+  provider type's `ProviderCapabilities`; `provider_account_countries` / `_methods` are the only
+  account-level filters (used by the Phase 10 router).
+- Secret rotation, endpoint add, disable/enable are all **audited** (`provider_account.*` actions);
+  `SecretRedactor` + `ProviderAccountAuditSnapshot` keep plaintext/ciphertext out of the audit JSON.
+
+## Provider routing (Phase 10)
+
+- **Provider groups are the only country→provider mechanism** (Phase 10 Q1). There is no
+  `country_provider_configs` / `country_provider_priorities` / `country_payment_methods` /
+  `country_purchase_capabilities` table — `Phases.md` originally listed them; the Q1 decision
+  superseded that.
+- A `provider_group` = countries + optional `device_type` + optional `currency_code` + ordered
+  `provider_group_accounts` + `provider_group_purchase_types` / `_methods`. `is_default = true`
+  is the fallback group (no country rows), one per `(client_id, device_type)`.
+- Three invariants are **app-enforced, not DB constraints** (MySQL has no cross-table check):
+  one default per scope; a country in ≤1 non-default group per `(client, device_type)`
+  (`ConfigureProviderGroup` rejects overlap); a `provider_group_accounts` link's account belongs
+  to the group's client (`SetProviderGroupAccounts` rejects otherwise).
+- `ProviderRouter::route()` returns `Result<RoutingDecision>`. Purchase-type gate = group set
+  **∩** the account's `ProviderTypeDeclaration` (so Turkey `one_time_payment`-only rejects a
+  subscription even though Stripe supports it). Empty group purchase-type set = fail closed;
+  empty method set = fail open.
+- `RoutingDecision` is an **in-memory VO** — no table this phase (Q4). It has `toArray()` /
+  `fromArray()` (version-tagged) for Phase 17 to snapshot on the payment. `chosen()` = first
+  candidate; the rest are the fallback chain.
+- `mode` (live/test) enforcement lives here: `RoutingRequest->mode` comes from the API key
+  prefix; a `test` request rejecting a `live` account shows up as `RejectionReason::ModeMismatch`
+  (and `provider_routing.no_provider_for_market` if that leaves no candidate).
+- Ziraat + Mollie provider-type declarations are now seeded (`data/ProviderTypeDeclarations.json`);
+  Ziraat has **no** subscription/auto_charge/recurring purchase types — keep it that way.
+
+## Packages (Phase 11)
+
+- One `packages` table with `client_id`; `code` unique **per client** (`UNIQUE (client_id,
+  code)`). **No** global catalogue, **no** `client_packages` junction, **no**
+  `packages.enable_for_client` permission — `status = disabled` is the per-client hide switch.
+- Availability = 4 dedicated join tables (`package_countries` / `_currencies` /
+  `_payment_methods` / `_provider_accounts`), all **fail open**: an empty set for a dimension =
+  available everywhere for it (Phase 11 Q2). Same fail-open direction as `provider_group_methods`.
+- `PackageCatalog::resolve()` is a **concrete** Application class (like `ProviderRouter`), not a
+  port — depends on `PackageRepository` + `ProviderAccountDirectory`. It narrows each package's
+  provider-account set to the client's **active** accounts. `PackageDirectory` is the raw read
+  port (`Pdo` adapter, `GROUP_CONCAT` projection).
+- `ResolvedPackage` deliberately has **no `price`** (Phase 13) and **no `purchaseTypes`** (Phase
+  12). `GET /api/v1/packages` is **not** mounted yet — Phase 13 wires it once those exist (Q3).
+- `packages.metadata` is a pass-through JSON object — validated as an object at the use-case
+  boundary, `json_encode`/`json_decode` at the persistence boundary, never queried.
+- Phase 12 adds trial config / `durationMonths` / `badge` / `highlighted` / `clientPackageId` /
+  purchase capabilities / package-provider definitions by **additive migration** — the Phase 11
+  `packages` table is deliberately lean (Q4).
+- `SetPackageAvailability` validates every country/currency (`ReferenceCatalog`), method
+  (`PaymentMethod`), and provider-account id (must be in
+  `ProviderAccountDirectory::forClient(package.clientId)` — cross-client guard, app-enforced).
 
 ## Gotchas
 

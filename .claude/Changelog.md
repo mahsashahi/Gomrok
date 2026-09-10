@@ -7,10 +7,296 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-10 — Replace provider-shaped fake seed credentials
+
+**Summary.** GitHub secret scanning flagged the `sk_test_…` / `whsec_…` fixture strings in the
+env-gated dev seeders as real Stripe credentials and blocked the push. Replaced them with values
+that are obviously not provider credentials (`gomrok-local-dev-fake-…`). Behaviour is unchanged —
+the seeders still encrypt the fake secret via `SecretCipher` and store `secret_last_four`.
+
+**Files changed**
+- `src/Database/Seeds/ProviderAccountsSeeder.php` — `FAKE_SECRET`, `FAKE_WEBHOOK_SECRET`, and the
+  inline fake `public_key`.
+- `src/Database/Seeds/ProviderGroupsSeeder.php` — the generated fake `secret` + `public_key` in
+  `upsertAccount()`.
+- `.claude/PhaseResults/PhaseDecisions.md` — the Phase 9 Q5 note quoting the old string.
+
+**Reason.** Unblock the push; keep committed fixtures from ever resembling live secrets.
+
+**Migration notes.** None. Re-run `composer db:reset` locally if you already seeded — the upsert
+refreshes the encrypted value.
+
+**Breaking changes.** None.
+
+## 2026-09-10 — Phase 11: Packages module — catalog & availability
+
+**Summary.** Gomrok's client-owned package catalogue: `packages` (one table with `client_id`,
+`code` unique per client — no global catalogue, no `client_packages` junction) + four fail-open
+availability join tables, and a `PackageCatalog` that resolves the market-filtered list.
+Decisions (`PhaseResults/PhaseDecisions.md` Phase 11 Q1–Q5): four dedicated join tables · empty
+set = available everywhere per dimension · internal `PackageCatalog` port, HTTP endpoint
+deferred to Phase 13 · lean `packages` table (Phase 12 adds its fields) · separate
+`SetPackageAvailability` handler + CLI + dev seeder. **Schema confirmed by the user.**
+
+**Files created**
+- Migrations `20260910120001-05` → `Create{Packages,PackageCountries,PackageCurrencies,PackagePaymentMethods,PackageProviderAccounts}Table`; `PackagesSeeder` (env-gated).
+- `src/Modules/Packages/Domain/*` — `Package` (aggregate), `PackageCode`, `PackageStatus`,
+  `PackageRepository`.
+- `src/Modules/Packages/Application/*` — `PackageCatalog` (+ `ResolvedPackage`), `PackageDirectory`
+  (+ `PackageSummary`), `PackageAuditSnapshot`; use cases `CreatePackage`, `UpdatePackage`,
+  `ChangePackageStatus`, `SetPackageAvailability`.
+- `src/Modules/Packages/Infrastructure/*` — `PdoPackageRepository`, `PdoPackageDirectory`,
+  `definitions.php`.
+- CLI: `bin/{CreatePackage,UpdatePackage,SetPackageAvailability,ListPackages}.php`.
+- Tests: `tests/Unit/Modules/Packages/Domain/PackageTest.php`,
+  `tests/Unit/Modules/Packages/Application/{PackageCatalogTest,PackageHandlersTest}.php`,
+  `tests/Integration/PackagesPersistenceTest.php`,
+  `tests/Support/InMemoryPackageRepository.php`.
+- `.claude/PhaseResults/Phase11Result.md`.
+
+**Files changed**
+- `src/Bootstrap/ContainerFactory.php` — registers the Packages module `definitions.php`.
+- `composer.json` / `composer.lock` — `package:create` / `:update` / `:set-availability` /
+  `:list` scripts + descriptions.
+- `tests/Integration/MigrationRoundTripTest.php` — 5 new tables.
+- DB docs (`database-design.md` → 27 tables, `database-diagram.md` + `.html` 9/9 mermaid,
+  `db_explain.md`); `Architecture.md` (§8 Packages, §9 pipeline); `Phases.md` (row 11 → ☑);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D14).
+
+**Reason.** Phase 11 of the 30-phase plan — the catalogue Gomrok owns so clients stop keeping
+their own package definitions.
+
+**Migration notes.** 5 new tables, all additive; no changes to existing tables; no backfill.
+`package_provider_accounts` cross-client integrity is app-enforced.
+
+**Breaking changes.** None.
+
+## 2026-09-09 — Phase 10: Country provider configuration & routing resolution
+
+**Summary.** Provider groups — the single mechanism (Phase 10 Q1) for "which provider account
+for this purchase" — plus a deterministic `ProviderRouter` that rejects unsupported combinations
+rather than downgrading them. Decisions (`PhaseResults/PhaseDecisions.md` Phase 10 Q1–Q5):
+provider groups only (no `country_provider_configs` tables) · group-level purchase-type / method
+enablement, intersected with each account's provider-type declaration · resolver returns an
+ordered candidate list + `RoutingDecision` snapshot VO · VO only, no routing table this phase ·
+seed real Ziraat + Mollie declarations. **Schema confirmed by the user.**
+
+**Files created**
+- Migrations `20260909220001-05` → `Create{ProviderGroups,ProviderGroupCountries,ProviderGroupAccounts,ProviderGroupPurchaseTypes,ProviderGroupMethods}Table`.
+- Seeder `ProviderGroupsSeeder` (env-gated: `local-dev` turkey/germany/netherlands/default).
+- `src/Modules/Providers/Domain/*` — `ProviderGroup` (aggregate), `ProviderGroupAccount`,
+  `ProviderGroupSlug`, `ProviderGroupStatus`, `DeviceType`, `ProviderGroupRepository`.
+- `src/Modules/Providers/Application/Routing/*` — `ProviderRouter`, `RoutingRequest`,
+  `RoutingDecision` (+ `toArray()` / `fromArray()`), `RoutedAccount`, `RejectedAccount`,
+  `RejectionReason`.
+- `src/Modules/Providers/Application/*` — `ProviderGroupAuditSnapshot`; use cases
+  `CreateProviderGroup`, `ConfigureProviderGroup`, `SetProviderGroupAccounts`
+  (+ `ProviderGroupAccountInput`), `ChangeProviderGroupStatus`.
+- `src/Modules/Providers/Infrastructure/PdoProviderGroupRepository.php`.
+- CLI: `bin/{CreateProviderGroup,ConfigureProviderGroup,SetProviderGroupAccounts}.php`.
+- Tests: `tests/Unit/Modules/Providers/Domain/ProviderGroupTest.php`,
+  `tests/Unit/Modules/Providers/Application/Routing/{ProviderRouterTest,RoutingDecisionTest}.php`,
+  `tests/Unit/Modules/Providers/Application/ProviderGroupHandlersTest.php`,
+  `tests/Integration/ProviderGroupsPersistenceTest.php`,
+  `tests/Support/{InMemoryProviderGroupRepository,StubProviderAccountDirectory}.php`.
+- `.claude/PhaseResults/Phase10Result.md`.
+
+**Files changed**
+- `src/Database/Seeds/data/ProviderTypeDeclarations.json` — added `mollie` + `ziraat`.
+- `src/Database/Seeds/ProviderTypeDeclarationsSeeder.php` — docblock (no code change).
+- `src/Modules/Providers/Infrastructure/definitions.php` — binds `ProviderGroupRepository`.
+- `composer.json` — `provider-group:*` scripts + descriptions; `composer.lock` hash refreshed.
+- `tests/Integration/MigrationRoundTripTest.php` — 5 new tables in the list.
+- `tests/Unit/Database/ProviderTypeDeclarationsDataTest.php` — accepts mollie / ziraat.
+- DB docs (`database-design.md` → 22 tables, `database-diagram.md` + `.html`, `db_explain.md`);
+  `Phases.md` (row 10 → ☑, scope rewritten to match Q1); `.claude/FileIndex.md`;
+  `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`; `.claude/Orders.md`.
+
+**Reason.** Phase 10 of the 30-phase plan — deterministic provider routing with no silent
+purchase-type downgrades.
+
+**Migration notes.** 5 new tables, all additive; no changes to existing tables; no backfill.
+Cross-client and "one default per scope" / "country in one group" invariants are app-enforced
+(no cross-table FK in MySQL).
+
+**Breaking changes.** None.
+
+## 2026-09-09 — Rename `LastAiAnswer.md` → `last_ai_answer.md`
+
+**Summary.** The single-slot response-log buffer is renamed from `.claude/docs/LastAiAnswer.md`
+to `.claude/docs/last_ai_answer.md` (user request).
+
+**Files changed**
+- `.claude/docs/LastAiAnswer.md` → `.claude/docs/last_ai_answer.md` (renamed, content unchanged).
+- `CLAUDE.md` — *last_ai_answer.md Response Log Rule* heading + all in-rule paths; §3.1 naming
+  example; §3.3 docs list.
+- `.claude/Rule.md` — §1 working-agreement bullet; §3.1 (removed the old file from the PascalCase
+  examples, added a new *response-log buffer* exception); §3.4 tree; Project Documents table;
+  §"where things get written" table.
+- `.claude/FileIndex.md`, `.claude/Orders.md` (P5 row) — path updated.
+
+**Reason.** User asked for the lowercase snake_case name.
+
+**Migration notes.** None (documentation only). Older Changelog entries keep the historical
+`LastAiAnswer.md` name.
+
+**Breaking changes.** None.
+
+## 2026-09-09 — Phase 9: Provider accounts (per client)
+
+**Summary.** A client's live/test provider credentials, with the secret key encrypted at rest.
+Decisions (`PhaseResults/PhaseDecisions.md` Phase 9 Q1–Q5): app-encrypted column behind a
+`SecretCipher` port (libsodium) · `mode` enum on the account, key prefix picks the pool ·
+separate `provider_account_endpoints` table for webhook/callback config · countries + methods
+join tables only, capabilities inherited from the type · CLI + env-gated dev seeder.
+**Schema confirmed by the user.**
+
+**Files created**
+- Migrations `2026090919300{1..4}` → `Create{ProviderAccounts,ProviderAccountEndpoints,ProviderAccountCountries,ProviderAccountMethods}Table`.
+  Seeder `ProviderAccountsSeeder`.
+- `src/Shared/Application/{SecretCipher,SecretDecryptionFailed}.php`,
+  `src/Shared/Infrastructure/Crypto/SodiumSecretCipher.php`.
+- `src/Modules/Providers/Domain/*` — `ProviderAccount`, `ProviderAccountEndpoint`,
+  `ProviderAccountSlug`, `EncryptedSecret`, `ProviderAccountMode`, `ProviderAccountStatus`,
+  `EndpointKind`, `ProviderAccountRepository`.
+- `src/Modules/Providers/Application/*` — `ProviderAccountDirectory` + `ProviderAccountSummary`,
+  `ProviderAccountCredentials`, `ProviderAccountAuditSnapshot`, and `CreateProviderAccount` /
+  `SetProviderAccountMarkets` / `RotateProviderAccountSecret` / `AddProviderAccountEndpoint` /
+  `ChangeProviderAccountStatus` (handler + command [+ result]).
+- `src/Modules/Providers/Infrastructure/*` — `PdoProviderAccountRepository`,
+  `PdoProviderAccountDirectory`, `PdoProviderAccountCredentials`.
+- CLI: `bin/{CreateProviderAccount,RotateProviderAccountSecret,AddProviderAccountEndpoint,ListProviderAccounts}.php`.
+- Tests: `tests/Unit/Shared/Infrastructure/SodiumSecretCipherTest.php`,
+  `tests/Unit/Modules/Providers/Domain/ProviderAccountTest.php`,
+  `tests/Unit/Modules/Providers/Application/ProviderAccountHandlersTest.php`,
+  `tests/Integration/ProviderAccountsPersistenceTest.php`,
+  `tests/Support/{InMemoryProviderAccountRepository,StubProviderCatalog,StubClientDirectory}.php`.
+- `.claude/PhaseResults/Phase09Result.md`.
+
+**Files modified**
+- `src/Config/Settings.php` — `?string $encryptionKeyBase64` from `APP_ENCRYPTION_KEY`.
+- `src/Config/container.php` — lazy `SecretCipher` factory.
+- `src/Modules/Providers/Infrastructure/definitions.php` — binds the account ports.
+- `composer.json` — `ext-sodium`; `provider-account:*` scripts.
+- `.env.example`, `phpunit.xml`, `.github/workflows/Ci.yml` — `APP_ENCRYPTION_KEY` (throwaway
+  key for CI / tests; blank in `.env.example`). `Ci.yml` — `sodium` extension.
+- `tests/Integration/MigrationRoundTripTest.php` — 4 provider-account tables.
+- DB docs (`database-design.md`, `database-diagram.md` + `.html`, `db_explain.md` — 17 tables),
+  `.claude/docs/Phases.md` (row 9 → ☑), `Architecture.md` §8/§11, `.claude/FileIndex.md`,
+  `.claude/knowledge/Knowledge.md`, `.claude/docs/Commands.md`, `.claude/Orders.md` (D12).
+
+**DB changes.** 4 new tables — `provider_accounts` (FK `clients` CASCADE, `provider_types`
+RESTRICT), `provider_account_endpoints` (unique `token`), `provider_account_countries` (FK
+`countries.code`), `provider_account_methods`. No changes to existing tables. Non-schema:
+`APP_ENCRYPTION_KEY` env var.
+
+**Verification.** `composer ci` green — 157 unit tests, 572 assertions. PHPStan `max` +
+strict-rules clean (247 files). php-cs-fixer clean. `composer test:integration` → 29 tests, all
+self-skip (no Docker). `SecretCipher` round-trips; migration + seeder classes load; the DI
+container wires it with `APP_ENCRYPTION_KEY` set.
+
+**NOT verified here.** Migrations + `ProviderAccountsPersistenceTest` (secret round-trip against
+real MySQL) — CI, or `docker compose up -d mysql && composer db:reset && composer test:integration`.
+
+**Breaking changes.** `ext-sodium` now required. `Settings::__construct` gained an optional
+parameter (internal).
+
+## 2026-09-09 — Phase 8: Providers module (types & capability model)
+
+**Summary.** Second `src/Modules/` module — models what each provider *type* can do, no SDKs.
+Decisions (`PhaseResults/PhaseDecisions.md` Phase 8 Q1–Q5): `Capability` enum + seeded
+`provider_capabilities` mirror · separate `PurchaseType` enum (not capability flags) · join
+tables for per-type declarations · payment methods = code-only enum + in-code
+`MethodCapabilityRules` placeholder, no method tables yet · seed **stripe + paypal** only
+(ziraat/mollie deferred to their adapter phases). **Schema confirmed by the user.**
+
+**Files created**
+- Migrations `2026090917000{1,2,3}` → `Create{ProviderCapabilities,ProviderTypeCapabilities,ProviderTypePurchaseTypes}Table`.
+- Seeders `ProviderCapabilitiesSeeder` (from the enum), `ProviderTypeDeclarationsSeeder`
+  (stripe + paypal, from `src/Database/Seeds/data/ProviderTypeDeclarations.json`).
+- `src/Modules/Providers/Domain/*` — `Capability`, `CapabilityGroup`, `PurchaseType`,
+  `PaymentMethod`, `ProviderCapabilities`, `ProviderTypeDeclaration`, `ProviderTypeDeclarations`
+  (port), `MethodConstraint`, `MethodCapabilityRules`.
+- `src/Modules/Providers/Application/*` — `ProviderCapabilityResolver`,
+  `ResolvedProviderCapabilities`, `ProviderCatalog` (port) + `ProviderTypeSummary`.
+- `src/Modules/Providers/Infrastructure/*` — `PdoProviderTypeDeclarations`, `PdoProviderCatalog`,
+  `definitions.php`.
+- Tests: `tests/Unit/Modules/Providers/**` (Domain: Capability, ProviderCapabilities,
+  MethodCapabilityRules; Application: ProviderCapabilityResolver — the exit matrix),
+  `tests/Unit/Database/ProviderTypeDeclarationsDataTest.php` (JSON ↔ enum guard),
+  `tests/Integration/ProviderCapabilitiesPersistenceTest.php`,
+  `tests/Support/InMemoryProviderTypeDeclarations.php`.
+- `.claude/PhaseResults/Phase08Result.md`.
+
+**Files modified**
+- `src/Bootstrap/ContainerFactory.php` — Providers `definitions.php` added to `MODULE_DEFINITIONS`.
+- `tests/Integration/MigrationRoundTripTest.php` — 3 provider tables added to `TABLES`.
+- DB docs (`database-design.md`, `database-diagram.md` + `.html`, `db_explain.md` — 13 tables),
+  `.claude/docs/Phases.md` (row 8 → ☑), `Architecture.md` §8, `.claude/FileIndex.md`,
+  `.claude/knowledge/Knowledge.md`, `.claude/Orders.md` (D11).
+
+**DB changes.** New: `provider_capabilities` (19 seeded rows), `provider_type_capabilities`,
+`provider_type_purchase_types` (both FK `provider_types` + `provider_capabilities`, CASCADE;
+seeded stripe + paypal). All three static — no timestamps. No changes to `provider_types`.
+
+**Verification.** `composer ci` green — 141 unit tests, 506 assertions. PHPStan `max` +
+strict-rules clean (202 files). php-cs-fixer clean. `composer test:integration` → 26 tests, all
+self-skip (no Docker). Migration + seeder classes load; `Capability` = 19 cases; seed JSON =
+stripe + paypal; container wires the resolver.
+
+**NOT verified here.** Migrations + `ProviderCapabilitiesPersistenceTest` (incl. the enum ↔
+`provider_capabilities` lock-step check) against real MySQL — runs in CI, or
+`docker compose up -d mysql && composer db:reset && composer test:integration`.
+
+**Breaking changes.** None (all additive).
+
+## 2026-09-08 — PhaseDecisions.md reordered newest-first
+
+**Summary.** Reversed the order of every decision section in
+`.claude/PhaseResults/PhaseDecisions.md`: newest phase now at the **top**, Phase 1 at the
+bottom; within each phase the questions run in **descending** order (Q5 → Q1). This **reverses**
+the "append-only, oldest-first" rule added earlier the same day (user request).
+
+**Files changed**
+- `.claude/PhaseResults/PhaseDecisions.md` — sections reordered (Phase 7→1; questions Q5→Q1
+  within each). **Content preserved exactly** — the reorder was done mechanically and verified:
+  identical byte count, identical line multiset, all 36 question bodies byte-for-byte unchanged.
+  Intro "Order" note updated to describe newest-first.
+- `.claude/Rule.md` §4.2, `CLAUDE.md` *Interactive Phase Rule*, `.claude/PhaseResults/Readme.md`,
+  memory `phase-workflow-and-results.md` — the ordering rule flipped to **newest-first, prepend
+  new entries to the top**.
+
+**Reason.** User wants the most recent decisions first.
+
+## 2026-09-08 — Move PhaseDecisions.md into PhaseResults/
+
+**Summary.** `.claude/PhaseDecisions.md` → **`.claude/PhaseResults/PhaseDecisions.md`** (user
+request). Content unchanged. Also made the file's append-only chronological order (oldest first,
+new phases/questions appended to the end) an explicit written rule.
+
+**Files changed**
+- Moved `.claude/PhaseDecisions.md` → `.claude/PhaseResults/PhaseDecisions.md`.
+- Path references updated in: `CLAUDE.md`, `.claude/Rule.md` (§3.3 tree, §3.4, §4.2, §7 tables),
+  `.claude/FileIndex.md`, `.claude/Orders.md`, `.claude/PhaseResults/Readme.md`,
+  `.claude/PhaseResults/Phase0{1..7}Result.md`, `.claude/Changelog.md`,
+  `.claude/docs/{Phases,Architecture,LastAiAnswer,database-design}.md`,
+  `.claude/knowledge/Knowledge.md`, `.claude/commands/phases/*.md`,
+  `src/Shared/Http/IdempotencyMiddleware.php`, `src/Shared/Application/ErrorLog/ErrorLogWriter.php`.
+- `.claude/Rule.md` §4.2 + `CLAUDE.md` *Interactive Phase Rule* + `PhaseResults/PhaseDecisions.md`
+  intro + `PhaseResults/Readme.md`: added the **append-only, chronological** rule.
+- Fixed a stray `        د` prefix on `.claude/docs/Phases.md` line 1 (pre-existing typo).
+
+**Reason.** Keep all per-phase history (results + decisions) together under `PhaseResults/`.
+
+**Notes.** `struct.md` (user-owned) still shows the old `.claude/` root location and is left
+as-is; the deviation is noted in `Rule.md` §3.3. No code behaviour change — the two PHP edits
+are docblock comments only (`composer ci` still green).
+
 ## 2026-09-08 — Phase 7: Client API authentication & scoping
 
 **Summary.** Gomrok's first real API surface: `/api/v1` group behind Bearer API-key auth, plus
-`GET /api/v1/me`; `/health` stays public. Decisions (`PhaseDecisions.md` Phase 7 Q1–Q5):
+`GET /api/v1/me`; `/health` stays public. Decisions (`PhaseResults/PhaseDecisions.md` Phase 7 Q1–Q5):
 `Authorization: Bearer` only · a per-request `ClientContext` holder + request attributes ·
 `last_used_at` written throttled (≤ 1/key/5 min) · `401 unauthorized` for any credential fault,
 `403 client_disabled` for a valid key on a disabled client, generic bodies · `Idempotency-Key`
@@ -46,7 +332,7 @@ required on `/api/v1` writes + failed-attempt logging to a new table, **no rate 
   `tests/Integration/MigrationRoundTripTest.php` — `client_auth_attempts` in the table list.
 - DB docs (`database-design.md`, `database-diagram.md` + `.html`, `db_explain.md` — 10 tables),
   `.claude/docs/Phases.md` (row 7 → ☑), `Architecture.md`, `FileIndex.md`, `knowledge/Knowledge.md`,
-  `Commands.md`, `Orders.md` (D10), `PhaseDecisions.md` (Phase 7 Q1–Q5).
+  `Commands.md`, `Orders.md` (D10), `PhaseResults/PhaseDecisions.md` (Phase 7 Q1–Q5).
 
 **DB changes.** New table `client_auth_attempts` (FK to `clients(id)` SET NULL, three
 `(*, created_at)` indexes). No changes to existing tables.
@@ -64,7 +350,7 @@ GitHub Actions, or `docker compose up -d mysql && composer db:reset && composer 
 
 ## 2026-09-08 — Phase 6: Clients module (domain & persistence)
 
-**Summary.** The tenant model — the first `src/Modules/` module. Decisions (`PhaseDecisions.md`
+**Summary.** The tenant model — the first `src/Modules/` module. Decisions (`PhaseResults/PhaseDecisions.md`
 Phase 6 Q1–Q5): API key = prefixed token + `sha256(secret)` looked up by a public `key_id` ·
 client settings = typed columns on `clients` + a `client_endpoints` table · required immutable
 `slug` · soft reversible `active`/`disabled` (keys untouched) · CLI commands + an
@@ -101,7 +387,7 @@ client settings = typed columns on `clients` + a `client_endpoints` table · req
 - `composer.json` — `client:create` / `client:issue-key` / `client:revoke-key` / `client:list`.
 - DB docs (`database-design.md`, `database-diagram.md` + `.html`, `db_explain.md` — 9 tables),
   `.claude/docs/Phases.md` (row 6 → ☑), `Architecture.md`, `FileIndex.md`, `knowledge/Knowledge.md`,
-  `Commands.md`, `Orders.md` (D9), `.env.example`, `PhaseDecisions.md` (Phase 6 Q1–Q5).
+  `Commands.md`, `Orders.md` (D9), `.env.example`, `PhaseResults/PhaseDecisions.md` (Phase 6 Q1–Q5).
 
 **DB changes.** New tables `clients`, `client_api_keys`, `client_endpoints` (all FK to
 `clients(id)` CASCADE). Added `fk_idempotency_keys_client_id` (CASCADE),
@@ -122,7 +408,7 @@ satisfied).
 ## 2026-09-08 — Phase 5: Migration workflow & cross-cutting tables
 
 **Summary.** The tables nearly every later module writes to, plus their ports/adapters, plus CI
-that finally executes migrations against real MySQL. Decisions (`PhaseDecisions.md` Phase 5
+that finally executes migrations against real MySQL. Decisions (`PhaseResults/PhaseDecisions.md` Phase 5
 Q1–Q5): idempotency = lock + entity mapping (no stored response bodies) · audit = event + full
 before/after row snapshots · error log = explicit writer only (no Monolog DB handler) ·
 idempotency retention = `expires_at` + purge job · hardening = round-trip test + `db:reset` +
@@ -184,7 +470,7 @@ autowired via the container).
 
 ## 2026-09-08 — Phase 4: Database foundations (reference tables)
 
-**Summary.** Migration workflow + the three reference tables. Decisions (`PhaseDecisions.md`
+**Summary.** Migration workflow + the three reference tables. Decisions (`PhaseResults/PhaseDecisions.md`
 Phase 4 Q1–Q5): DB docs = the spec's kebab-case files + `mkdocs.yml` · namespaced Phinx
 migrations, no base class · currencies from `brick/money`, countries from a bundled JSON ·
 capability catalogue **deferred to Phase 8** · full ISO currencies + 18 curated countries.
@@ -224,7 +510,7 @@ a real MySQL — no Docker daemon and the local MariaDB rejects the `gomrok` use
 ## 2026-09-08 — Phase 3: Shared kernel
 
 **Summary.** Built `src/Shared/**` — 15 classes every module will use. No business logic, no
-schema. Decisions (`PhaseDecisions.md` Phase 3 Q1–Q5): richer `Money` API · plain-int IDs (Q2,
+schema. Decisions (`PhaseResults/PhaseDecisions.md` Phase 3 Q1–Q5): richer `Money` API · plain-int IDs (Q2,
 tied to the Q3-of-Phase-1 change) · **hybrid** error model (`Result`/`DomainError` returned;
 exceptions for bugs/infra) · **Monolog** logger · **PSR-20** clock.
 
@@ -264,7 +550,7 @@ and API/callback/admin URLs. Isolation is enforced by authorization, not by ungu
 `BIGINT` still allowed for non-key columns (money `amount_minor`).
 
 **Files modified**
-- `.claude/PhaseDecisions.md` — Phase 1 Q3 marked *changed* (Previously/Current/Changed/Reason);
+- `.claude/PhaseResults/PhaseDecisions.md` — Phase 1 Q3 marked *changed* (Previously/Current/Changed/Reason);
   Phase 3 Q2 resolved as "no ID abstraction".
 - `.claude/docs/Architecture.md` — §6 rewritten; §3 decision table; §4 folder layout; §7 Money
   note; §12 testing mention.
@@ -352,7 +638,7 @@ to PascalCase per `.claude/Rule.md` §3.1.
 - `.claude/FileIndex.md` — new entries.
 
 **Files preserved (unchanged):** every pre-existing `.claude/` file — `Rule.md` content,
-`Changelog.md`, `PhaseDecisions.md`, `FileIndex.md`, `docs/*`, `knowledge/Knowledge.md`,
+`Changelog.md`, `PhaseResults/PhaseDecisions.md`, `FileIndex.md`, `docs/*`, `knowledge/Knowledge.md`,
 `{agents,commands,skills}/Readme.md`, `PhaseResults/*`, and the project-root `CLAUDE.md`.
 
 **Notes.** The agent files carry valid frontmatter and the command files carry `description`
@@ -371,7 +657,7 @@ Composer).
 **Files modified** (references repointed `PhaseResults/` → `.claude/PhaseResults/`)
 - `CLAUDE.md` (Phase Completion Rule, Documentation-directory note).
 - `.claude/Rule.md` (§3.3 layout + text, §3.4, §7, ## Project Documents, §4.1).
-- `.claude/FileIndex.md`, `.claude/PhaseDecisions.md`, `.claude/docs/{Architecture,Phases}.md`,
+- `.claude/FileIndex.md`, `.claude/PhaseResults/PhaseDecisions.md`, `.claude/docs/{Architecture,Phases}.md`,
   `.claude/PhaseResults/{Readme,Template,Phase01Result}.md`.
 
 **Migration notes.** `PhaseResults/PhaseNNResult.md` → `.claude/PhaseResults/PhaseNNResult.md`.
@@ -380,13 +666,13 @@ Composer).
 ## 2026-09-07 — Documentation reorganised into `.claude/`
 
 **Summary.** Adopted the standard Claude Code project layout. `Documents/` retired; all docs now
-live under `.claude/` (`Rule.md`, `Changelog.md`, `PhaseDecisions.md`, `FileIndex.md` at the
+live under `.claude/` (`Rule.md`, `Changelog.md`, `PhaseResults/PhaseDecisions.md`, `FileIndex.md` at the
 root; `docs/`, `knowledge/`, plus empty `agents/`, `commands/`, `skills/` skeletons). Folder
 skeleton adopted, existing docs adapted into it, PascalCase file names kept, `CLAUDE.md` left at
 the project root, phase-tracking artefacts kept.
 
 **Files moved** (`Documents/` → `.claude/`)
-- `Rule.md`, `Changelog.md`, `PhaseDecisions.md` → `.claude/`
+- `Rule.md`, `Changelog.md`, `PhaseResults/PhaseDecisions.md` → `.claude/`
 - `Architecture.md`, `Commands.md`, `Phases.md`, `LastAiAnswer.md`, `ClaudeOld.md` → `.claude/docs/`
 - `Knowledge.md` → `.claude/knowledge/`
 - `Documents/` directory removed.
@@ -399,7 +685,7 @@ the project root, phase-tracking artefacts kept.
 - `CLAUDE.md` — "Documentation directory" note; naming-rule pointer.
 - `.claude/Rule.md` — §3.1 (`.claude/` sub-dir naming), §3.3 rewritten around the `.claude/`
   layout, §3.4, §7, ## Project Documents (+ `FileIndex.md`, skeletons).
-- `.claude/docs/{Architecture,Phases}.md`, `.claude/PhaseDecisions.md`, `.claude/knowledge/Knowledge.md`,
+- `.claude/docs/{Architecture,Phases}.md`, `.claude/PhaseResults/PhaseDecisions.md`, `.claude/knowledge/Knowledge.md`,
   `PhaseResults/{Readme,Phase01Result,Phase02Result}.md`, `Design/Readme.md`.
 
 **Reason.** Match the conventional Claude Code structure (native `agents/`/`commands/`/`skills/`)
@@ -478,7 +764,7 @@ automatically whenever a doc file is created / renamed / moved / removed.
 
 **Files moved** (project root → `Documents/`)
 - `Architecture.md`, `Changelog.md`, `ClaudeOld.md`, `Knowledge.md`, `LastAiAnswer.md`,
-  `PhaseDecisions.md`, `Phases.md`, `Rule.md`
+  `PhaseResults/PhaseDecisions.md`, `Phases.md`, `Rule.md`
 
 **Left at the project root (intentional)**
 - `CLAUDE.md` — the harness auto-loads `./CLAUDE.md`; moving it breaks that. It now points into

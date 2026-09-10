@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gomrok — database diagram</title>
+<style>
+  body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 1000px; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #e5e5e5; padding-bottom: .3rem; }
+  .note { color: #666; font-size: .9rem; }
+  .mermaid { margin: 1rem 0; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head>
+<body>
+<h1>Gomrok — database diagram</h1>
+<p class="note">
+  Canonical source: <code>database-diagram.md</code> (this page mirrors it). When served over
+  HTTP this page fetches and renders the Mermaid blocks from that file live; opened as a plain
+  file it shows the embedded snapshot below. Keep both in sync (<code>.claude/Rule.md</code> §5).
+</p>
+
+<div id="live"></div>
+
+<noscript><p class="note">Enable JavaScript, or read <code>database-diagram.md</code> directly.</p></noscript>
+
+<!-- Embedded snapshot (file:// fallback) — regenerate from database-diagram.md on every schema change. -->
+<div id="snapshot">
+<h2>Module map</h2>
+<pre class="mermaid">
+flowchart TD
+    Ref["Reference data&lt;br/&gt;currencies · countries · provider_types"]
+    Xc["Cross-cutting&lt;br/&gt;idempotency_keys · audit_logs · error_logs"]
+    Clients["Clients&lt;br/&gt;clients · client_api_keys · client_endpoints"]
+    Providers["Providers&lt;br/&gt;capabilities + purchase types (P8)&lt;br/&gt;provider_accounts + endpoints/countries/methods (P9)&lt;br/&gt;provider_groups + routing (P10)"]
+    Packages["Packages&lt;br/&gt;packages + country/currency/method/provider availability (P11)"]
+    Ref -.-&gt; Clients
+    Ref -.-&gt; Providers
+    Ref -.-&gt; Packages
+    Ref -.-&gt; Pricing
+    Clients --&gt; Xc
+    Clients --&gt; Packages
+    Providers --&gt; Packages
+    Clients --&gt; Payments
+    Providers --&gt; Payments
+    Packages --&gt; Payments
+    Pricing --&gt; Payments
+    Vouchers --&gt; Payments
+    Payments --&gt; Subscriptions
+    Payments --&gt; Webhooks
+    Payments --&gt; Notifications
+    Admin -.-&gt; Payments
+    classDef done fill:#d5f5e3,stroke:#27ae60;
+    classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
+    class Ref,Xc,Clients,Providers,Packages done;
+    class Pricing,Vouchers,Payments,Subscriptions,Webhooks,Notifications,Admin todo;
+</pre>
+
+<h2>Reference data (Phase 4)</h2>
+<pre class="mermaid">
+erDiagram
+    currencies {
+        int id PK
+        char code UK
+        smallint numeric_code UK
+        varchar name
+        tinyint minor_unit_scale
+    }
+    countries {
+        int id PK
+        char code UK
+        varchar name
+        char default_currency FK
+    }
+    provider_types {
+        int id PK
+        varchar code UK
+        varchar name
+        tinyint requires_registration
+        tinyint api_capable
+    }
+    currencies ||--o{ countries : "default_currency"
+</pre>
+
+<h2>Cross-cutting (Phase 5)</h2>
+<pre class="mermaid">
+erDiagram
+    idempotency_keys {
+        int id PK
+        int client_id
+        varchar idempotency_key
+        char request_fingerprint
+        varchar status
+        varchar target_type
+        int target_id
+        smallint response_status
+        datetime created_at
+        datetime updated_at
+        datetime expires_at
+    }
+    audit_logs {
+        int id PK
+        varchar actor_type
+        int actor_id
+        int client_id
+        varchar action
+        varchar target_type
+        int target_id
+        json before
+        json after
+        json context
+        varchar correlation_id
+        varchar ip
+        varchar user_agent
+        datetime created_at
+    }
+    error_logs {
+        int id PK
+        varchar level
+        varchar source
+        text message
+        varchar exception_class
+        varchar code
+        int client_id
+        varchar correlation_id
+        json context
+        mediumtext stack_trace
+        datetime created_at
+        datetime resolved_at
+        int resolved_by
+    }
+</pre>
+
+<h2>Clients (Phase 6)</h2>
+<pre class="mermaid">
+erDiagram
+    clients {
+        int id PK
+        varchar slug UK
+        varchar name
+        varchar status
+        char default_currency FK
+        char default_country FK
+        varchar timezone
+        varchar notification_signing_secret
+        datetime disabled_at
+        int disabled_by
+        varchar disabled_reason
+        datetime created_at
+        datetime updated_at
+    }
+    client_api_keys {
+        int id PK
+        int client_id FK
+        varchar key_id UK
+        char secret_hash
+        varchar prefix
+        char last_four
+        varchar label
+        varchar status
+        datetime created_at
+        datetime last_used_at
+        datetime expires_at
+        datetime revoked_at
+        int revoked_by
+    }
+    client_endpoints {
+        int id PK
+        int client_id FK
+        varchar purpose
+        varchar url
+        tinyint is_active
+        datetime created_at
+        datetime updated_at
+    }
+    clients ||--o{ client_api_keys : "issues"
+    clients ||--o{ client_endpoints : "registers"
+</pre>
+
+<h2>Client API authentication (Phase 7)</h2>
+<pre class="mermaid">
+erDiagram
+    client_auth_attempts {
+        int id PK
+        varchar outcome
+        varchar reason
+        varchar key_id
+        int client_id FK
+        varchar ip
+        varchar user_agent
+        varchar correlation_id
+        datetime created_at
+    }
+    clients ||--o{ client_auth_attempts : "attempts"
+</pre>
+
+<h2>Providers (Phase 8)</h2>
+<pre class="mermaid">
+erDiagram
+    provider_types {
+        int id PK
+        varchar code UK
+        varchar name
+        tinyint requires_registration
+        tinyint api_capable
+    }
+    provider_capabilities {
+        int id PK
+        varchar code UK
+        varchar label
+        varchar description
+        varchar capability_group
+    }
+    provider_type_capabilities {
+        int id PK
+        int provider_type_id FK
+        int capability_id FK
+    }
+    provider_type_purchase_types {
+        int id PK
+        int provider_type_id FK
+        varchar purchase_type
+    }
+    provider_types ||--o{ provider_type_capabilities : "declares"
+    provider_capabilities ||--o{ provider_type_capabilities : "declared by"
+    provider_types ||--o{ provider_type_purchase_types : "supports"
+</pre>
+
+<h2>Providers — accounts (Phase 9)</h2>
+<pre class="mermaid">
+erDiagram
+    provider_accounts {
+        int id PK
+        int client_id FK
+        int provider_type_id FK
+        varchar slug
+        varchar name
+        varchar mode
+        varchar status
+        varchar public_key
+        text secret_ciphertext
+        char secret_last_four
+        datetime created_at
+        datetime updated_at
+    }
+    provider_account_endpoints {
+        int id PK
+        int provider_account_id FK
+        varchar kind
+        varchar token UK
+        text signing_secret_ciphertext
+        tinyint is_active
+        datetime created_at
+        datetime updated_at
+    }
+    provider_account_countries {
+        int id PK
+        int provider_account_id FK
+        char country_code FK
+        datetime created_at
+    }
+    provider_account_methods {
+        int id PK
+        int provider_account_id FK
+        varchar payment_method
+        datetime created_at
+    }
+    clients ||--o{ provider_accounts : "connects"
+    provider_types ||--o{ provider_accounts : "of type"
+    provider_accounts ||--o{ provider_account_endpoints : "verifies via"
+    provider_accounts ||--o{ provider_account_countries : "serves"
+    provider_accounts ||--o{ provider_account_methods : "offers"
+</pre>
+
+<h2>Providers — routing (Phase 10)</h2>
+<pre class="mermaid">
+erDiagram
+    provider_groups {
+        int id PK
+        int client_id FK
+        varchar slug
+        varchar name
+        tinyint is_default
+        varchar device_type
+        char currency_code FK
+        varchar status
+        datetime created_at
+        datetime updated_at
+    }
+    provider_group_countries {
+        int id PK
+        int provider_group_id FK
+        char country_code FK
+        datetime created_at
+    }
+    provider_group_accounts {
+        int id PK
+        int provider_group_id FK
+        int provider_account_id FK
+        smallint priority
+        tinyint is_enabled
+        datetime created_at
+    }
+    provider_group_purchase_types {
+        int id PK
+        int provider_group_id FK
+        varchar purchase_type
+        datetime created_at
+    }
+    provider_group_methods {
+        int id PK
+        int provider_group_id FK
+        varchar payment_method
+        datetime created_at
+    }
+    clients ||--o{ provider_groups : "routes via"
+    currencies ||--o{ provider_groups : "settles in"
+    provider_groups ||--o{ provider_group_countries : "covers"
+    countries ||--o{ provider_group_countries : "grouped by"
+    provider_groups ||--o{ provider_group_accounts : "prioritises"
+    provider_accounts ||--o{ provider_group_accounts : "listed in"
+    provider_groups ||--o{ provider_group_purchase_types : "sells"
+    provider_groups ||--o{ provider_group_methods : "allows"
+</pre>
+
+<h2>Packages — catalog & availability (Phase 11)</h2>
+<pre class="mermaid">
+erDiagram
+    packages {
+        int id PK
+        int client_id FK
+        varchar code
+        varchar name
+        text description
+        varchar status
+        json metadata
+        datetime created_at
+        datetime updated_at
+    }
+    package_countries {
+        int id PK
+        int package_id FK
+        char country_code FK
+        datetime created_at
+    }
+    package_currencies {
+        int id PK
+        int package_id FK
+        char currency_code FK
+        datetime created_at
+    }
+    package_payment_methods {
+        int id PK
+        int package_id FK
+        varchar payment_method
+        datetime created_at
+    }
+    package_provider_accounts {
+        int id PK
+        int package_id FK
+        int provider_account_id FK
+        datetime created_at
+    }
+    clients ||--o{ packages : "owns"
+    packages ||--o{ package_countries : "sold in"
+    countries ||--o{ package_countries : "market for"
+    packages ||--o{ package_currencies : "priced in"
+    currencies ||--o{ package_currencies : "currency for"
+    packages ||--o{ package_payment_methods : "sold via"
+    packages ||--o{ package_provider_accounts : "bought through"
+    provider_accounts ||--o{ package_provider_accounts : "sells"
+</pre>
+</div>
+
+<script>
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' });
+
+  async function renderLiveFromMarkdown() {
+    if (location.protocol === 'file:') return false;
+    try {
+      const md = await (await fetch('database-diagram.md', { cache: 'no-store' })).text();
+      const blocks = [...md.matchAll(/```mermaid\n([\s\S]*?)```/g)].map(m => m[1]);
+      if (!blocks.length) return false;
+      const live = document.getElementById('live');
+      live.innerHTML = '<h2>From database-diagram.md (live)</h2>';
+      blocks.forEach((code, i) => {
+        const el = document.createElement('pre');
+        el.className = 'mermaid';
+        el.textContent = code;
+        live.appendChild(el);
+      });
+      document.getElementById('snapshot').hidden = true;
+      await mermaid.run({ nodes: live.querySelectorAll('.mermaid') });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  renderLiveFromMarkdown().then(ok => {
+    if (!ok) mermaid.run({ nodes: document.querySelectorAll('#snapshot .mermaid') });
+  });
+</script>
+</body>
+</html>

@@ -63,7 +63,7 @@
 - DB docs (`database-design.md`, `database-diagram.md` + `.html`, `db_explain.md` — now 10
   tables), `.claude/docs/Phases.md` (row 7 → ☑), `Architecture.md` §11, `.claude/FileIndex.md`,
   `.claude/knowledge/Knowledge.md`, `.claude/docs/Commands.md`, `.claude/Orders.md` (D10),
-  `.claude/PhaseDecisions.md` (Phase 7 Q1–Q5).
+  `.claude/PhaseResults/PhaseDecisions.md` (Phase 7 Q1–Q5).
 
 ## Implementation Details
 
@@ -121,7 +121,7 @@ New table `client_auth_attempts` — columns and indexes in `database-design.md`
 
 ## Technical Decisions
 
-`PhaseDecisions.md` Phase 7 Q1–Q5:
+`PhaseResults/PhaseDecisions.md` Phase 7 Q1–Q5:
 
 1. `Authorization: Bearer <token>` only (no `X-Api-Key` alias yet).
 2. Authenticated client via a per-request `ClientContext` holder **plus** request attributes.

@@ -18,6 +18,13 @@ final readonly class Settings
         public string $appEnv,
         public bool $appDebug,
         public DatabaseSettings $database,
+        /**
+         * Base64-encoded 32-byte key for {@see \Gomrok\Shared\Infrastructure\Crypto\SodiumSecretCipher}.
+         * Null when `APP_ENCRYPTION_KEY` is unset — only the cipher itself fails
+         * (at construction), so code paths that don't touch provider secrets
+         * still work.
+         */
+        public ?string $encryptionKeyBase64 = null,
     ) {
     }
 
@@ -30,6 +37,7 @@ final readonly class Settings
         return new self(
             appEnv: self::str('APP_ENV', 'production'),
             appDebug: self::bool('APP_DEBUG', false),
+            encryptionKeyBase64: self::nullableStr('APP_ENCRYPTION_KEY'),
             database: new DatabaseSettings(
                 host: self::str('DB_HOST', '127.0.0.1'),
                 port: self::int('DB_PORT', 3306),
@@ -46,6 +54,13 @@ final readonly class Settings
         $value = $_ENV[$key] ?? getenv($key);
 
         return \is_string($value) && $value !== '' ? $value : $default;
+    }
+
+    private static function nullableStr(string $key): ?string
+    {
+        $value = $_ENV[$key] ?? getenv($key);
+
+        return \is_string($value) && $value !== '' ? $value : null;
     }
 
     private static function int(string $key, int $default): int

@@ -92,7 +92,7 @@
 - `.claude/docs/Phases.md` — Phase 5 tracking row → ☑; scope/exit rewritten to match.
 - `.claude/docs/Commands.md` — DB reset/fresh, background-jobs, CI sections.
 - `.claude/Changelog.md`, `.claude/FileIndex.md`, `.claude/knowledge/Knowledge.md`,
-  `.claude/Orders.md` (D8), `.claude/PhaseDecisions.md` (Phase 5 Q1–Q5).
+  `.claude/Orders.md` (D8), `.claude/PhaseResults/PhaseDecisions.md` (Phase 5 Q1–Q5).
 
 ## Implementation Details
 
@@ -153,7 +153,7 @@ Internal: `JsonErrorHandler::__construct` gained two required parameters (autowi
 
 ## Technical Decisions
 
-`PhaseDecisions.md` Phase 5 Q1–Q5:
+`PhaseResults/PhaseDecisions.md` Phase 5 Q1–Q5:
 
 1. Idempotency storage = **lock + entity mapping** (no stored response bodies).
 2. Audit content = **event + full before/after row snapshots** (user chose over the recommended

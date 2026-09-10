@@ -23,5 +23,7 @@
     <php>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_DEBUG" value="true"/>
+        <!-- Throwaway 32-byte key for tests that exercise SecretCipher. -->
+        <env name="APP_ENCRYPTION_KEY" value="KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="/>
     </php>
 </phpunit>

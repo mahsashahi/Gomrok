@@ -14,7 +14,7 @@
 
 Built `src/Shared/**` — the value objects and infrastructure every module will depend on. No
 business logic, no database schema. All five Phase 3 decisions were made first (see
-`PhaseDecisions.md` Phase 3 Q1–Q5); Phase 1 Q3 (identifiers) was **changed** to plain integers
+`PhaseResults/PhaseDecisions.md` Phase 3 Q1–Q5); Phase 1 Q3 (identifiers) was **changed** to plain integers
 mid-phase (documented separately, `Changelog.md` 2026-09-08).
 
 - **Money & currency.** `Gomrok\Shared\Domain\Money` (readonly, wraps `brick/money`) with the
@@ -83,7 +83,7 @@ mid-phase (documented separately, `Changelog.md` 2026-09-08).
 - `/Users/mahsa/PhpstormProjects/Gomrok/src/Bootstrap/AppFactory.php` — added
   `CorrelationIdMiddleware` and the custom JSON error handler.
 - `.claude/docs/Architecture.md` §4 (Shared classes), `.claude/docs/Phases.md` (Phase 3 row → ☑),
-  `.claude/PhaseDecisions.md` (Phase 3 Q1–Q5), `.claude/Changelog.md`, `.claude/FileIndex.md`,
+  `.claude/PhaseResults/PhaseDecisions.md` (Phase 3 Q1–Q5), `.claude/Changelog.md`, `.claude/FileIndex.md`,
   `.claude/knowledge/Knowledge.md`.
 
 ## Implementation Details

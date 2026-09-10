@@ -4,9 +4,13 @@ The permanent record of every decision question asked during every phase — the
 options offered, the recommendation, and the user's final selection. Updated the moment the user
 answers a question, not at end of phase. See `.claude/Rule.md` §4.2.
 
+**Order: chronological, oldest first.** Phase 1 at the top, the newest phase at the bottom;
+within a phase, Q1 → Qn in order. **New phase decisions are always appended to the end of this
+file — never prepended.** (`.claude/Rule.md` §4.2.)
+
 - `.claude/Rule.md` → how decisions are asked and recorded.
 - `.claude/docs/Phases.md` → roadmap, phase status, timing.
-- `.claude/PhaseDecisions.md` (this file) → all questions, options, recommendations, selections.
+- `.claude/PhaseResults/PhaseDecisions.md` (this file) → all questions, options, recommendations, selections.
 - `.claude/PhaseResults/PhaseNNResult.md` → what was actually implemented per phase.
 
 ---
