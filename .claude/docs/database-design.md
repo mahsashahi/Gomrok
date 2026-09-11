@@ -39,9 +39,10 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Pricing — groups & default prices (Phase 13) | `pricing_groups`, `pricing_group_countries`, `default_package_prices`, `client_exchange_rates`, `pricing_group_packages` — **5** |
 | Pricing — dimension overrides (Phase 14) | `price_rules` — **1** |
 | Pricing — A/B price lists (Phase 15) | `price_lists`, `price_list_packages` — **2** |
-| — | (more business tables land per module from Phase 16) |
+| Vouchers — definitions & eligibility (Phase 16) | `vouchers`, `voucher_eligibility_rules`, `voucher_currency_discounts` — **3** |
+| — | (more business tables land per module from Phase 17) |
 
-**Total: 38 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 41 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -823,6 +824,78 @@ stored assignment pointing at a now-disabled list drops to control). Then:
 
 ---
 
+## Vouchers — definitions & eligibility (Phase 16)
+
+Voucher definitions and the eligibility gate. **Not this phase:** discount calculation,
+`voucher_redemptions`, the redemption lifecycle (Phase 17), the voucher decision snapshot
+(Phase 18). **Source of truth for all voucher behaviour: `.claude/Voucher.md`** — read it
+alongside this section; if they ever disagree, `Voucher.md` wins.
+
+### `vouchers`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `code` | VARCHAR(64) | no | upper-case, `^[A-Z0-9][A-Z0-9_-]{2,63}$`; `UNIQUE (client_id, code)` |
+| `name` | VARCHAR(150) | no | |
+| `description` | VARCHAR(500) | yes | |
+| `status` | VARCHAR(20) | no | `active` / `disabled`, default `active` |
+| `valid_from` / `valid_until` | DATETIME | yes / yes | `NULL` = no bound on that side |
+| `first_purchase_only` | TINYINT(1) | no | default `0` |
+| `min_purchase_minor` | BIGINT UNSIGNED | yes | `NULL` = no minimum |
+| `min_purchase_currency` | CHAR(3) | yes | FK → `currencies(code)` RESTRICT; required iff `min_purchase_minor` set |
+| `default_discount_type` | VARCHAR(20) | no | `none` / `percentage` / `full` — **never `fixed`** |
+| `default_percent_bp` | SMALLINT UNSIGNED | yes | 1–10000; required iff type `percentage` |
+| `max_total_redemptions` | INT UNSIGNED | yes | **`NULL` = unlimited globally** (Phase 16 Q3) |
+| `max_per_user` | INT UNSIGNED | yes | **`NULL` = unlimited per client user** |
+| `max_per_client` | INT UNSIGNED | yes | **`NULL` = unlimited per client** |
+| `redeemed_count` | INT UNSIGNED | no | default `0`; global tally, **Phase 17 increments it** |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (client_id, code)` = `uniq_vouchers_client_code`; `INDEX (client_id, status)` =
+`idx_vouchers_client_status`.
+
+### `voucher_eligibility_rules` (Phase 16 Q1)
+
+One row per `(voucher, dimension, value)` — `dimension` ∈ `country` / `currency` / `package` /
+`provider_account` / `payment_method` / `purchase_type` / `subscription_interval`; `value` a
+code / id-as-string / enum value. `UNIQUE (voucher_id, dimension, value)` =
+`uniq_voucher_eligibility`; `INDEX (voucher_id, dimension)` = `idx_voucher_eligibility_dim`.
+Semantics: OR within a dimension, AND across, no rows = unrestricted. `package` /
+`provider_account` values are validated to belong to the voucher's client at write time (no DB
+FK on `value`).
+
+### `voucher_currency_discounts` (Phase 16 Q2)
+
+A per-currency **override** of the voucher's default discount — a currency using the default has
+no row here.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `voucher_id` | INT UNSIGNED | no | FK → `vouchers(id)` CASCADE |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT |
+| `discount_type` | VARCHAR(20) | no | `fixed` / `percentage` / `full` |
+| `percent_bp` | SMALLINT UNSIGNED | yes | 1–10000; set iff `percentage` |
+| `amount_minor` | BIGINT UNSIGNED | yes | this currency's minor units; set iff `fixed`, `> 0` |
+| `max_discount_minor` | BIGINT UNSIGNED | yes | optional cap, this currency; only with `percentage` |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (voucher_id, currency_code)` = `uniq_voucher_currency_discounts`.
+
+### Resolution
+
+**Discount** for checkout currency X: override row for X → else the voucher default
+(`percentage` / `full`) → else (`none`) not applicable in X.
+**Eligibility** (`VoucherEligibilityEvaluator`, Phase 16 Q4): reports **every** unmet condition —
+status, window, client scope, every restricted dimension, discount applicability, minimum
+purchase (same-currency comparison only), first-purchase-only, and the **global** usage cap.
+Per-user / per-client caps need `voucher_redemptions` and are Phase 17 (`VoucherUsagePort` is
+declared, not implemented, this phase). Full detail: `.claude/Voucher.md` §5.
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -876,6 +949,8 @@ stored assignment pointing at a now-disabled list drops to control). Then:
 | `src/Database/Migrations/20260910150001_create_price_rules_table.php` | `Gomrok\Database\Migrations\CreatePriceRulesTable` |
 | `src/Database/Migrations/20260910160001_create_price_lists_tables.php` | `Gomrok\Database\Migrations\CreatePriceListsTables` (also backfills a control list per existing pricing group) |
 | `src/Database/Seeds/PricingSeeder.php` | `Gomrok\Database\Seeds\PricingSeeder` (env-gated: `local-dev` gets default/dach/us groups + baselines + EUR→USD rate + two `pro` price rules + a control list per group + a disabled `dach` "List B · -10%" with an exact `pro` €21.00) |
+| `src/Database/Migrations/20260910170001_create_voucher_tables.php` | `Gomrok\Database\Migrations\CreateVoucherTables` |
+| `src/Database/Seeds/VouchersSeeder.php` | `Gomrok\Database\Seeds\VouchersSeeder` (env-gated: `local-dev` gets `WELCOME10` [10%, once/user] + `EU5` [`none` default, EUR/USD/GBP fixed overrides, `pro`-only]) |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

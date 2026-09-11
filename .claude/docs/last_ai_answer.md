@@ -1,62 +1,56 @@
-# Q: Phase 15 — Price lists (A/B) (completion summary)
+# Q: Phase 16 — Vouchers module: definitions & eligibility (completion summary)
 
 ## What was implemented
 
-A/B price experiments inside a pricing group — **data model + resolver math + management
-surface**. Two tables:
+The new **Vouchers module**: voucher definitions and the eligibility gate — not discount
+calculation or redemption (Phase 17).
 
-- **`price_lists`** — one **control** row per pricing group (`is_control = 1`, `factor 1.0000`,
-  `is_enabled = 1`, undeletable, never disabled, created with the group + backfilled for existing
-  groups by the migration) plus non-control experiment lists carrying a `DECIMAL(6,4)` factor.
-- **`price_list_packages`** — an exact per-package amount on a non-control list, overriding the
-  factor for that package.
+- **`vouchers`** — client-scoped, `code` unique per client; validity window,
+  `first_purchase_only`, minimum purchase; a **default discount** (`none`/`percentage`/`full` —
+  never `fixed`) plus three **nullable usage-limit columns** (`max_total_redemptions` /
+  `max_per_user` / `max_per_client`, `NULL` = unlimited on that axis) + `redeemed_count`
+  (global tally, Phase 17-owned).
+- **`voucher_eligibility_rules`** — one `(voucher, dimension, value)` table across 7 dimensions
+  (country, currency, package, provider account, payment method, purchase type, subscription
+  interval). OR within a dimension, AND across, no rows = unrestricted.
+- **`voucher_currency_discounts`** — a per-currency **override** of the default discount.
+  Resolution: override row → else default → else (`none`) not applicable in that currency.
+- **`VoucherEligibilityEvaluator`** reports **every** unmet condition in one pass (not
+  fail-fast): status, window, client scope, every restricted dimension, discount applicability,
+  same-currency minimum purchase, first-purchase (unknown vs. known-false are distinct reasons),
+  and the global usage cap. Per-user/per-client caps are deferred to Phase 17 behind a declared
+  `VoucherUsagePort`.
+- 7 audited use cases, `VoucherDirectory`, PDO adapters, 8 `bin/` CLI scripts +
+  `composer voucher:*`, and an env-gated seeder (`WELCOME10`, `EU5`).
 
-**`PriceListResolver`** runs in `PriceResolver::resolve` **between** the Phase 13 base amount and
-the Phase 14 `price_rules` step: exact list-package amount → else `base × factor` (HALF_EVEN) →
-else base unchanged. `ResolvedPrice` gained `priceListId` / `priceListName` / `priceListFactor`
-(always stamped) and `PriceSource` gained `PriceList` (set only when the amount moved). An
-unknown / foreign-group / disabled `$priceListId` falls back to the control list.
+**Two decisions the user changed from the recommendation:** Q2 discount model became "default +
+per-currency overrides" (not just per-currency amounts); Q3 usage limits became plain nullable
+columns on `vouchers` (not a `voucher_usage_limits` child table).
 
-### Deferred (Phase 15 Q4 + Q5 — your decision, 2026-09-10)
-
-The **visitor→list assignment** — `price_list_assignments` table, deterministic bucketing /
-hashing service, disable-fallback sweep, `visitor_ref` query params on `/packages` +
-`/pricing/resolve` — is **not built**. It moves to **Phase 24 (Payment creation flow)**, where
-Q4 and Q5 will be re-asked with their full option lists before anything is implemented. Until
-then `PriceResolver::resolve` passes `$priceListId = null` and every resolve uses the control
-list. Recorded in `PhaseDecisions.md`, `Phases.md` (Phase 15 + Phase 24), and a project memory.
-
-Q1 was also revised on your instruction: **explicit control row (Option 2)**, not the
-recommended implicit control.
+**New standing rule (your instruction):** `.claude/Voucher.md` is now the single source of truth
+for all voucher behaviour. `CLAUDE.md` gained a "Voucher Rules File" section requiring every
+future voucher-related change to also be recorded there.
 
 ## Files created
 
-- Migration `20260910160001_create_price_lists_tables.php` (+ control-row backfill).
-- `src/Modules/Pricing/Domain/` — `PriceList.php`, `PriceListPackage.php`,
-  `PriceListRepository.php`, `PriceListPackageRepository.php`.
-- `src/Modules/Pricing/Application/` — `PriceListResolver.php`, `PriceListAuditSnapshot.php`,
-  `PriceListSummary.php`, `PriceListDirectory.php`, `CreatePriceList/`, `ChangePriceListStatus/`,
-  `SetPriceListFactor/`, `SetPriceListPackagePrice/`.
-- `src/Modules/Pricing/Infrastructure/` — `PdoPriceListRepository.php`,
-  `PdoPriceListPackageRepository.php`, `PdoPriceListDirectory.php`.
-- `bin/{CreatePriceList,SetPriceListStatus,SetPriceListFactor,SetPriceListPackagePrice,ListPriceLists}.php`.
-- `tests/Support/{InMemoryPriceListRepository,InMemoryPriceListPackageRepository}.php`.
-- `tests/Unit/Modules/Pricing/{Domain/PriceListTest,Application/PriceListResolverTest,Application/PriceListHandlersTest}.php`.
-- `.claude/PhaseResults/Phase15Result.md`.
+- Migration `20260910170001_create_voucher_tables.php`.
+- `src/Modules/Vouchers/` — full `Domain/`, `Application/`, `Infrastructure/` (see
+  `.claude/Voucher.md` §10 for the exact class list).
+- 8 `bin/*Voucher*.php` CLI scripts.
+- `src/Database/Seeds/VouchersSeeder.php`.
+- `tests/Support/InMemory{Voucher,VoucherEligibilityRule,VoucherCurrencyDiscount}Repository.php`.
+- `tests/Unit/Modules/Vouchers/{Domain,Application}/*` (4 test classes).
+- `.claude/Voucher.md`, `.claude/PhaseResults/Phase16Result.md`.
 
 ## Files updated
 
-- Pricing: `PriceResolver.php` (new dep + `?int $priceListId` + the step), `PriceSource.php`,
-  `ResolvedPrice.php`, `CreatePricingGroup/CreatePricingGroupHandler.php` (writes the control
-  row), `Infrastructure/definitions.php`.
-- `src/Database/Seeds/PricingSeeder.php` (control list per group + disabled `dach` List B).
-- `composer.json` / `composer.lock` (5 `pricing:*-list*` scripts).
-- Tests: `MigrationRoundTripTest`, `PricingPersistenceTest`, `PackagesApiTest`,
-  `PriceResolverTest` (+1 case), `PriceCatalogTest`, `PricingHandlersTest`.
-- Docs: `database-design.md` (38 tables), `database-diagram.md` + `.html` (13/13 mermaid),
-  `db_explain.md`, `Architecture.md` (§8/§9/§13), `Phases.md` (row 15 ☑, row 24 gains the
-  deferred work), `Changelog.md`, `FileIndex.md`, `Knowledge.md`, `Commands.md`, `Orders.md`
-  (D18).
+- `src/Bootstrap/ContainerFactory.php`, `composer.json`/`.lock`,
+  `tests/Integration/MigrationRoundTripTest.php`.
+- `CLAUDE.md` (new Voucher Rules File section), `.claude/Rule.md` (Project Documents).
+- Docs: `database-design.md` (41 tables), `database-diagram.md` + `.html` (14/14 mermaid — also
+  fixed a stale module-map snapshot from Phases 14–15), `db_explain.md`, `Architecture.md`
+  (§3/§8/§9/§13), `Phases.md` (row 16 → ☑), `Changelog.md`, `FileIndex.md`, `Knowledge.md`,
+  `Commands.md`, `Orders.md` (D19).
 
 ## Files removed
 
@@ -64,47 +58,44 @@ None.
 
 ## Database changes
 
-Two additive tables (`price_lists`, `price_list_packages`), migration `20260910160001`, which
-also backfills one control `price_lists` row per existing `pricing_groups` row via
-`INSERT … SELECT`. `is_control` uniqueness and control-list immutability are app-enforced. Total:
-**38 tables**.
+Three additive tables (`vouchers`, `voucher_eligibility_rules`, `voucher_currency_discounts`).
+No existing-table changes, no backfill. Every cross-field consistency rule (discount shape,
+min-purchase pairing, window ordering, usage-limit positivity) is app-enforced, not DB-enforced.
+Total: **41 tables**.
 
 ## Tests added / changed
 
-- New: `PriceListTest` (4), `PriceListResolverTest` (7), `PriceListHandlersTest` (4).
-- Changed: `PriceResolverTest` (+1), `PriceCatalogTest`, `PricingHandlersTest`, `PackagesApiTest`,
-  `PricingPersistenceTest`, `MigrationRoundTripTest`.
-- Run: `composer test` (unit), `composer test:integration` (CI-only), `composer ci`.
+- New: `VoucherTest` (6), `VoucherCurrencyDiscountTest` (3),
+  `VoucherEligibilityEvaluatorTest` (10 — the exit criterion), `VoucherHandlersTest` (6).
+- Changed: `MigrationRoundTripTest` (3 new tables).
+- Run with: `composer test` (unit), `composer test:integration` (CI-only), `composer ci`.
 
 ## Captured evidence
 
 ```
 $ composer ci
- [OK] No errors        # php-cs-fixer + phpstan (max + strict-rules)
-OK (271 tests, 1064 assertions)
-
-$ composer test:integration
-Tests: 33, Assertions: 0, Skipped: 33.        # no local MySQL
+ [OK] No errors
+OK (297 tests, 1176 assertions)
 ```
 
-`PriceListEvidence.php` (in-memory resolver; `$priceListId` passed directly since assignment is
-deferred):
+`VoucherEvidence.php` (in-memory evaluator):
 
 ```
-no list arg (control)            ->   2900 EUR  source=baseline           list=List A · control (x1.0000)
-List B (factor 0.9000)           ->   2610 EUR  source=price_list         list=List B · -10% (x0.9000)
-List C (exact pro = 1999)        ->   1999 EUR  source=price_list         list=List C · hero price (x1.0000)
-List D (disabled -> control)     ->   2900 EUR  source=baseline           list=List A · control (x1.0000)
-List B + card (price rule wins)  ->   2500 EUR  source=dimension_override list=List B · -10% (x0.9000)
-unknown list id 999 -> control   ->   2900 EUR  source=baseline           list=List A · control (x1.0000)
+WELCOME10, any country/currency, no card       -> ELIGIBLE
+WELCOME10, disabled                            -> blocked   voucher.disabled
+EU5, pro (42), EUR (override exists)           -> ELIGIBLE
+EU5, pro (42), TRY (no override, default=none) -> blocked   voucher.no_discount_for_currency
+EU5, starter (99), EUR (wrong package)         -> blocked   voucher.package_not_eligible
+GATED, below minimum                            -> blocked  voucher.below_minimum, voucher.first_purchase_unknown, voucher.exhausted
+GATED, meets everything but exhausted           -> blocked  voucher.exhausted
 ```
 
 ## Known limitations
 
-- No visitor→list assignment yet (deferred to Phase 24) — every resolve uses control.
-- API responses unchanged; the applied list is carried only on the internal DTO.
-- `price_lists` DB round-trip is asserted only in CI.
+- No discount calculation or redemption yet (Phase 17); `VoucherUsagePort` is declared only.
+- No `POST /api/v1/vouchers/validate` endpoint (Phase 19).
+- `vouchers` DB round-trip asserted only in CI.
 
 ## Next recommended phase
 
-**Phase 16 — Vouchers module: definitions & eligibility.**
+**Phase 17 — Voucher validation, discount calc & redemption lifecycle.**

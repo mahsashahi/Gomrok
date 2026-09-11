@@ -191,6 +191,30 @@ Provider secrets are encrypted with `APP_ENCRYPTION_KEY` — set it before creat
 The API token is printed **once** by `client:create` / `client:issue-key`. `--test` issues a
 `gk_test_…` key. Needs a running DB.
 
+```bash
+# Vouchers — definitions & eligibility (Phase 16)
+composer voucher:create -- --client=televika --code=WELCOME10 --name="Welcome 10%" --default-type=percentage --default-percent-bp=1000
+composer voucher:set-limits -- --client=televika --voucher=1 --max-per-user=1
+composer voucher:set-eligibility -- --client=televika --voucher=1 --rule=country:DE --rule=country:AT
+composer voucher:set-currency-discount -- --client=televika --voucher=2 --currency=TRY --type=fixed --amount-minor=5000
+composer voucher:remove-currency-discount -- --client=televika --voucher=2 --currency=TRY
+composer voucher:set-status -- --client=televika --voucher=1 --disable   # or --enable
+composer voucher:update -- --client=televika --voucher=1 --name="Welcome 15%" --default-type=percentage --default-percent-bp=1500
+composer voucher:list -- --client=televika
+```
+
+`code` is `^[A-Z0-9][A-Z0-9_-]{2,63}$` (≥3 chars), unique per client, stored upper-case. A
+voucher's **default discount** is `none` / `percentage` / `full` (never `fixed`);
+`voucher:set-currency-discount` adds a per-currency **override** (any type, incl. `fixed`) that
+wins over the default for that currency — resolution is override → else default → else (`none`)
+not applicable. Usage limits are three nullable columns
+(`--max-total` / `--max-per-user` / `--max-per-client`) — omit a flag for "unlimited" on that
+axis; `--max-per-user=1` with the other two unset is "valid for everyone, once per user."
+`voucher:set-eligibility` **full-replaces** the rule set (repeat `--rule=dimension:value`; no
+`--rule` at all clears every restriction). There is no `POST /api/v1/vouchers/validate`
+endpoint yet (Phase 19) and no redemption (Phase 17) — this CLI only manages definitions. Full
+rule set: **`.claude/Voucher.md`**.
+
 `composer db:setup` in `local` / `testing` also seeds a `local-dev` client with a fixed token:
 `gk_test_000000000000dead.localdevsecretlocaldevsecret1234` (dev only — the seeder no-ops in
 production).

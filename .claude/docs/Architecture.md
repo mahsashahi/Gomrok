@@ -87,7 +87,7 @@ Each module lives at `src/Modules/<Name>/` with `Domain/`, `Application/`, `Infr
 | **Providers** | Provider types, provider accounts (per client, multiple per type), the capability model & capability resolution, country/group provider routing, provider adapters. |
 | **Packages** | Client-scoped package catalogue, availability rules, purchase-type capabilities, package↔provider definitions (remote id + sync state). |
 | **Pricing** | Pricing groups, default prices, override dimensions, the deterministic price-resolution engine, A/B price lists + visitor assignment. |
-| **Vouchers** | Voucher definitions, eligibility rules, usage limits, discount calculation, concurrency-safe redemption lifecycle. |
+| **Vouchers** | Voucher definitions, eligibility rules, usage limits (Phase 16 — implemented); discount calculation, concurrency-safe redemption lifecycle (Phase 17). |
 | **Payments** | Payment aggregate, internal status lifecycle, payment attempts, provider transactions, provider customers, gateway references, refunds/captures/cancellations, decision snapshots. |
 | **Subscriptions** | Subscription aggregate & ownership model, subscription events, subscription↔payment links, lifecycle from webhooks. |
 | **Webhooks** | Inbound provider webhook ingestion (store-first), signature verification, idempotent processing, replay protection, reverse lookup to internal records. |
@@ -363,6 +363,35 @@ price-list layer; Phases 16–17 add vouchers, 18 tax/fee.
   price, dimension rules applied) — client-authenticated. Gomrok never trusts a client-supplied
   price.
 
+### Vouchers (Phase 16 — definitions & eligibility)
+
+`Modules/Vouchers`. **Source of truth for all voucher behaviour: `.claude/Voucher.md`** — this
+is the architecture-level summary; Phase 17 adds discount calculation + redemption, Phase 18 the
+decision snapshot, Phase 19 `POST /api/v1/vouchers/validate`.
+
+- **`vouchers`** — client-scoped (`UNIQUE (client_id, code)`), a validity window, an optional
+  minimum purchase, `first_purchase_only`, a **default discount** (`default_discount_type`
+  `none`/`percentage`/`full` — never `fixed`), and three **nullable usage-limit columns**
+  (`max_total_redemptions` / `max_per_user` / `max_per_client`; `NULL` = unlimited on that axis —
+  Phase 16 Q3, columns chosen over a per-scope child table) + a global `redeemed_count` that only
+  Phase 17 writes.
+- **`voucher_eligibility_rules`** — one `(voucher, dimension, value)` table (Phase 16 Q1) across
+  country / currency / package / provider account / payment method / purchase type /
+  subscription interval; OR within a dimension, AND across, no rows = unrestricted.
+- **`voucher_currency_discounts`** — a per-currency **override** of the default discount
+  (Phase 16 Q2, extended by the user): resolution is override row → else the voucher default →
+  else (`none`) not applicable. Each override fully specifies its own type (can differ from the
+  default), with an optional percentage cap in that currency.
+- **`VoucherEligibilityEvaluator`** (Phase 16 Q4) reports **every** unmet condition, not just the
+  first — status, window, client scope, every restricted dimension, discount applicability,
+  same-currency minimum purchase, first-purchase-only, and the **global** usage cap. Per-user /
+  per-client caps need `voucher_redemptions` and are declared-but-unimplemented behind
+  `VoucherUsagePort` until Phase 17.
+- Audited handlers (`CreateVoucher`, `UpdateVoucher`, `SetVoucherEligibility` full-replace,
+  `SetVoucherCurrencyDiscount` / `RemoveVoucherCurrencyDiscount`, `SetVoucherUsageLimits`,
+  `ChangeVoucherStatus`) + `voucher:*` CLI + an env-gated seeder. No HTTP endpoint yet
+  (Phase 19).
+
 ## 9. Resolution pipelines (sketch)
 
 Order is deterministic and will be documented precisely in the Pricing/Vouchers/Providers phases.
@@ -396,8 +425,11 @@ PRICE  (GET /api/v1/pricing/resolve — PriceResolver)
        - available rule  → override amount (source = dimension_override)
        - unavailable rule → pricing.combination_unavailable (hard stop, no fallback)
        - precedence: matched-dimension count → fixed dimension priority → highest id
-  5. voucher eligibility check                               [Phase 16–17]
-  6. apply voucher discount
+  5. voucher eligibility check (VoucherEligibilityEvaluator, all reasons)   [Phase 16 — implemented]
+       - status / window / client scope / scoping dimensions / discount applicability /
+         minimum purchase / first-purchase / global usage cap
+       - per-user / per-client usage cap (needs voucher_redemptions)        [Phase 17]
+  6. resolve + apply voucher discount (currency override -> else default)  [Phase 17]
   7. tax / fee rules (if any)                                [Phase 18]
   8. final payable amount  → snapshot
 
@@ -457,5 +489,8 @@ and flagged, never dropped.
 - A/B price-list **visitor→list assignment** (persistence, deterministic bucketing,
   disable-fallback, `visitor_ref` params) — deferred from Phase 15 (Q4/Q5) to **Phase 24**
   (Payment creation flow); the `price_lists` data model + resolver hook exist from Phase 15.
+- Voucher **discount calculation, `voucher_redemptions`, the redemption lifecycle, and
+  per-user/per-client usage-cap enforcement** — Phase 16 built definitions + eligibility only;
+  `VoucherUsagePort` is declared, not implemented, until **Phase 17**.
 - Queue technology choice (DB-backed vs Redis vs …) — Phase 29 (a `Jobs` port is defined earlier).
 - `mkdocs` site + DB docs location convention (repo-root vs `.claude/docs/`) — Phase 4.

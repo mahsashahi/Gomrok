@@ -16,6 +16,178 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 16 — Vouchers module: definitions & eligibility
+
+### Q5 — Management surface, code rules, seeder
+
+**Question:** How are vouchers managed — granular handlers or one fat command? `code` rules?
+seeder?
+
+**Options:**
+
+1. **Full surface, one handler per concern** — `CreateVoucher` / `UpdateVoucher` /
+   `SetVoucherEligibility` (full-replace) / `SetVoucherCurrencyDiscount` +
+   `RemoveVoucherCurrencyDiscount` / `SetVoucherUsageLimits` / `ChangeVoucherStatus`;
+   `VoucherDirectory` (`forClient` / `findByCode` / `findById`); `voucher:*` CLI; env-gated
+   seeder. `code` unique per client, upper-case, `^[A-Z0-9][A-Z0-9_-]{2,63}$`.
+2. One big `CreateVoucher` / `UpdateVoucher` taking rules + overrides + limits inline.
+3. Full handlers + CLI, no seeder this phase.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — granular audited handlers (`CreateVoucher`, `UpdateVoucher`,
+`SetVoucherEligibility` full-replace, `SetVoucherCurrencyDiscount` + `RemoveVoucherCurrencyDiscount`,
+`SetVoucherUsageLimits`, `ChangeVoucherStatus`) + `VoucherDirectory` + `voucher:*` CLI +
+env-gated `VouchersSeeder`. `code` = `^[A-Z0-9][A-Z0-9_-]{2,63}$`, stored upper-case,
+`UNIQUE (client_id, code)`.
+
+**Status:** Decided
+
+---
+
+### Q4 — What does the eligibility evaluator return?
+
+**Question:** `VoucherEligibilityEvaluator::evaluate(Voucher, VoucherContext)` — one reason or
+all reasons? How are usage counts / first-purchase handled?
+
+**Options:**
+
+1. **Collect every unmet condition** — a `VoucherEligibility` VO (`eligible: bool` +
+   `reasons: list<string>`). Global usage cap checked; per-user / per-client deferred to Phase
+   17 via a documented `VoucherUsagePort` seam (no impl this phase). `first_purchase_only` with
+   an unknown `isFirstPurchase` → `voucher.first_purchase_unknown` (indeterminate → not eligible).
+2. Fail-fast `Result::err(DomainError)` on the first failing check — one reason.
+3. Option 1's shape + a stub `VoucherUsagePort` returning "0 redemptions" so per-user/per-client
+   appear checked now.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `VoucherEligibility` value object listing **every** failing reason
+code; evaluator checks state / window / client scope / all `voucher_eligibility_rules`
+dimensions / discount-applicability / minimum-purchase / first-purchase / **global** usage cap;
+per-user + per-client caps deferred to Phase 17 behind a `VoucherUsagePort` seam (declared, not
+implemented, in Phase 16).
+
+**Status:** Decided
+
+---
+
+### Q3 — How are usage limits stored, and what does Phase 16 enforce?
+
+**Question:** `voucher_usage_limits`: global / per-user / per-client caps. What storage shape,
+and what does the eligibility engine check now (counting is Phase 17)?
+
+**Options:**
+
+1. A `voucher_usage_limits` child table — `(voucher_id, scope, max_count)`; global row also
+   carries a denormalised `redeemed_count`.
+2. Limit columns on `vouchers` — `max_total_redemptions` / `max_per_user` / `max_per_client`,
+   all nullable = unlimited.
+3. Limits table + a separate `voucher_counters` table for every tally.
+
+**Recommended:** Option 1
+
+**Selected:** **Option 2 (user)** — the three limit fields live directly on `vouchers`, each
+**nullable = unlimited for that dimension**. **No per-scope child table this phase.**
+
+- `vouchers.max_total_redemptions` INT UNSIGNED null — `NULL` = unlimited globally.
+- `vouchers.max_per_user` INT UNSIGNED null — `NULL` = unlimited per client user;
+  `1` = each user once.
+- `vouchers.max_per_client` INT UNSIGNED null — `NULL` = unlimited per client.
+- `vouchers.redeemed_count` INT UNSIGNED NOT NULL DEFAULT 0 — the global tally, incremented
+  atomically by Phase 17 on redemption; Phase 16 only reads it.
+- **Canonical example (must be expressible):** valid for everyone, once per user →
+  `max_total_redemptions = NULL`, `max_per_user = 1`, `max_per_client = NULL`.
+- **Eligibility (this phase):** the engine checks the **global** cap only
+  (`max_total_redemptions IS NOT NULL AND redeemed_count >= max_total_redemptions` →
+  `voucher.exhausted`). Per-user / per-client checks need `voucher_redemptions` and are Phase 17.
+
+**Status:** Decided
+
+**Related:** all voucher rules/decisions are the source-of-truth in **`.claude/Voucher.md`**
+(created this phase; `CLAUDE.md` now requires every voucher change to be logged there).
+
+---
+
+### Q2 — How is the discount defined (multi-currency)?
+
+**Question:** `discount_type` ∈ fixed / percentage / full. A fixed discount is an amount in a
+currency; Gomrok resolves prices across EUR / USD / TRY / … . How is the discount stored so it
+works per currency?
+
+**Options:**
+
+1. Single-currency fixed vouchers — discount columns on `vouchers`; a `fixed` voucher is only
+   eligible when the checkout currency matches its `amount_currency`.
+2. Per-currency fixed amounts in a `voucher_amounts` child table — percentage / full on
+   `vouchers`, fixed amounts one row per currency.
+3. Everything in a `voucher_discounts` child table — no discount columns on `vouchers`.
+
+**Recommended:** Option 2
+
+**Selected:** **Option 2, extended (user)** — a **default discount** on `vouchers` **plus
+optional per-currency override rows**. Resolution per checkout currency: (1) a currency-specific
+override row if one exists, else (2) the voucher default. Default and overrides are separate and
+non-duplicative — a currency that uses the default has **no** row.
+
+- **`vouchers` default discount:** `default_discount_type` ENUM(`none`, `percentage`, `full`)
+  NOT NULL + `default_percent_bp` SMALLINT UNSIGNED (required iff `percentage`; basis points,
+  1..10000). **No default fixed amount** (a fixed amount is inherently per-currency) and **no
+  default cap** (a cap is inherently per-currency). `default_discount_type = none` ⇒ the voucher
+  only discounts in currencies that have an override row (covers a pure multi-currency
+  fixed-amount voucher, e.g. €5 / $6 / £4).
+- **`voucher_currency_discounts` override:** `(id, voucher_id FK CASCADE, currency_code CHAR(3)
+  FK currencies RESTRICT, discount_type ENUM(fixed, percentage, full), percent_bp SMALLINT
+  UNSIGNED null, amount_minor BIGINT UNSIGNED null, max_discount_minor BIGINT UNSIGNED null,
+  created_at, updated_at)`, `UNIQUE (voucher_id, currency_code)`. Each row fully specifies that
+  currency's discount (any type), with an optional percentage cap in that currency's minor units.
+- **Domain guards:** `percentage` ⇒ `percent_bp` set (1..10000), `amount_minor` null;
+  `fixed` ⇒ `amount_minor` set (> 0), `percent_bp` null; `full` ⇒ both null;
+  `max_discount_minor` only with `percentage`.
+- **Eligibility (this phase):** for checkout currency X, the voucher is currency-eligible iff an
+  override row for X exists **or** `default_discount_type != none`. The actual subtraction is
+  Phase 17.
+
+**Status:** Decided → **Revised 2026-09-10 (user)**
+
+**Change history:**
+- *2026-09-10 (initial):* Option 2 as recommended — `voucher_amounts` per-currency fixed amounts,
+  percentage/full on `vouchers`.
+- *2026-09-10 (revised, user):* Extended to **default discount + per-currency overrides** with
+  first-override-then-default resolution; `voucher_amounts` → `voucher_currency_discounts`
+  (each override row carries its own type/value/cap); added `default_discount_type = none` for
+  pure multi-currency fixed vouchers. User: "a voucher can define a default 5% discount … Then,
+  for specific currencies, I should be able to override that default … design the schema so the
+  default discount and per-currency overrides are clearly separated and do not duplicate rows."
+
+---
+
+### Q1 — How are a voucher's scoping dimensions stored?
+
+**Question:** A voucher can be restricted by client / country / currency / package / provider
+account / payment method / purchase type / subscription interval. Several values for one
+dimension = OR, across dimensions = AND, no rows = unrestricted. What storage shape?
+
+**Options:**
+
+1. **One `voucher_eligibility_rules` table** — `(id, voucher_id, dimension, value)`; `dimension`
+   an app-validated enum, `value` a VARCHAR; FK-able values (package, provider account)
+   validated at write time. Matches the `price_rules` "one rules table" pattern.
+2. Dedicated child table per dimension (~7 tables) — real FKs where a target table exists,
+   app-enforced VARCHAR for the code-enums. Clean integrity, larger surface.
+3. `scope JSON` column on `vouchers` — one column, no extra tables, but not queryable and no
+   integrity.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — one `voucher_eligibility_rules` table `(voucher_id, dimension, value)`;
+dimension enum app-validated; OR within a dimension, AND across; write-time validation for
+package / provider-account values.
+
+**Status:** Decided
+
+---
+
 ## Phase 15 — Price lists (A/B)
 
 ### Q5 — Management surface + where the visitor assignment gets written

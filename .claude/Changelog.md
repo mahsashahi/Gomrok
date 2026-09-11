@@ -7,6 +7,66 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-10 — Phase 16: Vouchers module — definitions & eligibility
+
+**Summary.** Voucher definitions and the eligibility gate — not the money math or redemption
+(Phase 17). New `Vouchers` module: `vouchers` (client-scoped, default discount, usage-limit
+columns), `voucher_eligibility_rules` (one `(voucher, dimension, value)` table across 7
+dimensions), `voucher_currency_discounts` (per-currency override of the default). A
+`VoucherEligibilityEvaluator` reports every unmet condition in one pass. Decisions
+(`PhaseResults/PhaseDecisions.md` Phase 16 Q1–Q5): **Q1** one `voucher_eligibility_rules` table
+· **Q2** default discount + per-currency overrides (user extended the recommended "amounts
+table" into a default-plus-override model — resolution: override → else default → else `none`
+not applicable) · **Q3** usage limits as **nullable columns on `vouchers`** (user overrode the
+recommended child table — `NULL` = unlimited; canonical "everyone, once per user" =
+`NULL/1/NULL`) · **Q4** the evaluator returns every failing reason, not fail-fast; per-user/
+per-client caps deferred to Phase 17 behind a declared `VoucherUsagePort` · **Q5** granular
+audited handlers + `voucher:*` CLI + seeder. **Schema confirmed by the user.**
+
+**New standing rule (user instruction this phase):** `.claude/Voucher.md` is now the **single
+source of truth for all voucher behaviour** — every future voucher-related rule/decision/schema
+change must also be recorded there. Added to `CLAUDE.md` ("Voucher Rules File" section) and
+`.claude/Rule.md` → Project Documents.
+
+**Files created**
+- Migration `20260910170001_create_voucher_tables.php` → `CreateVoucherTables` (3 tables).
+- **New `Vouchers` module** (`src/Modules/Vouchers/`, registered in `ContainerFactory`): domain
+  (`Voucher` aggregate, `VoucherCurrencyDiscount` + `VoucherEligibilityRule` VOs,
+  `VoucherStatus`/`DefaultDiscountType`/`DiscountType`/`VoucherEligibilityDimension` enums, 3
+  repository ports); application (`VoucherContext`, `VoucherEligibility`, `VoucherUsagePort`
+  (declared only), `VoucherEligibilityEvaluator`, `VoucherAuditSnapshot`, `VoucherSummary` +
+  `VoucherDirectory`, 7 use-case folders); infrastructure (4 `Pdo*` adapters, `definitions.php`).
+- CLI: `bin/{CreateVoucher,UpdateVoucher,SetVoucherEligibility,SetVoucherCurrencyDiscount,
+  RemoveVoucherCurrencyDiscount,SetVoucherUsageLimits,SetVoucherStatus,ListVouchers}.php`.
+- `src/Database/Seeds/VouchersSeeder.php` — `WELCOME10` (10%, once per user) + `EU5` (`none`
+  default, EUR/USD/GBP fixed overrides, `pro`-only).
+- Tests: `VoucherTest`, `VoucherCurrencyDiscountTest`, `VoucherEligibilityEvaluatorTest` (the
+  exit criterion), `VoucherHandlersTest`; support doubles `InMemory{Voucher,
+  VoucherEligibilityRule,VoucherCurrencyDiscount}Repository`.
+- `.claude/Voucher.md` (new — source of truth for voucher behaviour).
+- `.claude/PhaseResults/Phase16Result.md`.
+
+**Files changed**
+- `src/Bootstrap/ContainerFactory.php` (Vouchers module registered).
+- `composer.json` / `composer.lock` — `voucher:*` scripts + descriptions.
+- `tests/Integration/MigrationRoundTripTest.php` — 3 new tables.
+- `CLAUDE.md` — new "Voucher Rules File" section.
+- `.claude/Rule.md` (Project Documents), `.claude/FileIndex.md`.
+- DB docs (`database-design.md` → 41 tables, `database-diagram.md` + `.html` 14/14 mermaid —
+  also brought the `.html` module-map snapshot back in sync with Phases 14–15, which had drifted;
+  `db_explain.md`); `Architecture.md` (§3 module table, new §8 Vouchers, §9 pipeline, §13
+  deferred); `Phases.md` (row 16 → ☑, scope rewritten "as built"); `.claude/knowledge/Knowledge.md`;
+  `.claude/docs/Commands.md`; `.claude/Orders.md` (D19).
+
+**Reason.** Phase 16 of the 30-phase plan.
+
+**Migration notes.** 3 new tables, all additive; no existing-table changes; no backfill.
+Uniqueness (`code` per client, one rule per `(voucher, dimension, value)`, one override per
+`(voucher, currency)`) and every cross-field consistency rule (discount shape, min-purchase
+pairing, window ordering, usage-limit positivity) are app-enforced.
+
+**Breaking changes.** None.
+
 ## 2026-09-10 — Phase 15: Price lists (A/B) — data model, resolver & CRUD
 
 **Summary.** A/B price experiments inside a pricing group. Two tables: `price_lists` (one

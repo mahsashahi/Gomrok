@@ -322,6 +322,46 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
   (`price_list_package.currency_mismatch`); not allowed on a control list
   (`price_list.control_has_no_package_prices`).
 
+## Vouchers — definitions & eligibility (Phase 16)
+
+**`.claude/Voucher.md` is the source of truth for all voucher behaviour — check it first, and
+add to it before/alongside any voucher change.** This section is a pointer + gotchas, not a
+duplicate.
+
+- **Default discount excludes `fixed`.** `DefaultDiscountType` = `none`/`percentage`/`full`
+  only. A fixed amount is inherently currency-bound, so it only ever exists as a
+  `voucher_currency_discounts` override row (`DiscountType` there does include `fixed`). Two
+  separate enums, deliberately.
+- **Default + per-currency override, not "amounts per currency".** The user extended the
+  original Q2 recommendation: resolution for currency X is override row → else the voucher
+  default → else (`default_discount_type = none`) not applicable. An override can be a
+  *different type* from the default (e.g. default 5% but a TRY row is `fixed`), and it fully
+  specifies its own value + optional cap — no partial inheritance from the default.
+- **Usage limits are plain nullable columns on `vouchers`, not a child table** (Phase 16 Q3 —
+  the user overrode the recommended `voucher_usage_limits` table). `max_total_redemptions` /
+  `max_per_user` / `max_per_client`: `NULL` = unlimited on that axis. The canonical example
+  ("valid for everyone, once per user") is `NULL / 1 / NULL` — test it explicitly whenever
+  touching usage limits.
+- **Eligibility reports every unmet reason, never fail-fast** (Phase 16 Q4). Adding a new check
+  means appending to the `reasons` array in `VoucherEligibilityEvaluator::evaluate`, never
+  returning early.
+- **Minimum purchase only compares same-currency amounts.** If the checkout currency differs
+  from `min_purchase_currency`, the check is silently skipped (not rejected) — there is no FX
+  conversion inside the eligibility check in Phase 16.
+- **First-purchase has two distinct negative reasons.** `isFirstPurchase === null` →
+  `voucher.first_purchase_unknown` (indeterminate); `isFirstPurchase === false` →
+  `voucher.not_first_purchase`. Don't collapse them — the evaluator has no purchase-history
+  lookup, so "unknown" is a real, different case from "known not first".
+- **`VoucherUsagePort` is declared but never called** in Phase 16 — no adapter is bound in
+  `definitions.php`. Per-user / per-client usage checks are Phase 17's job once
+  `voucher_redemptions` exists. Don't wire a stub "0 redemptions" implementation — that was
+  explicitly rejected (Q4 Option 3) as pretending to check something it doesn't.
+- **`voucher_eligibility_rules.value` has no DB FK** — `package` / `provider_account` values are
+  plain VARCHARs validated against the client at write time
+  (`SetVoucherEligibilityHandler::validatePackage/validateProviderAccount`), not by the schema.
+- **`code` must be ≥3 characters**: `^[A-Z0-9][A-Z0-9_-]{2,63}$`. Two-character test codes like
+  `"V1"` fail this regex — use 3+ chars (bit us once in `VoucherHandlersTest`).
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

@@ -675,6 +675,25 @@ Gomrok must preserve a voucher decision snapshot for historical accuracy.
 
 Do not create voucher-related database tables or migrations until the database design is proposed and confirmed.
 
+## Voucher Rules File
+
+`.claude/Voucher.md` is the **single source of truth for all voucher-specific behaviour** in
+Gomrok — definitions, schema and schema behaviour, eligibility rules, discount rules (default +
+per-currency overrides), usage-limit rules, the redemption lifecycle, decision snapshots, and
+every voucher-related decision or assumption.
+
+**Any** new voucher-related rule, change, decision, behaviour, schema change, eligibility rule,
+pricing/discount rule, usage-limit rule, or implementation note **must also be recorded in
+`.claude/Voucher.md`** — before or alongside the code/migration that implements it, never after
+the fact. Keep it in lock-step with `.claude/docs/database-design.md` /
+`database-diagram.md` / `db_explain.md` (the voucher tables) and with
+`.claude/PhaseResults/PhaseDecisions.md` (the phase decisions). When `.claude/Voucher.md` and any
+other doc disagree about voucher behaviour, `.claude/Voucher.md` wins and the other doc is
+corrected.
+
+This section stays the high-level requirement; `.claude/Voucher.md` is the detailed, living
+catalogue. Read them together.
+
 ## Country-Based Provider and Purchase Capability Requirement
 
 Gomrok must support default provider and payment-method configuration with country-specific overrides.

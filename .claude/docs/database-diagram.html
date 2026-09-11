@@ -34,16 +34,21 @@ flowchart TD
     Clients["Clients&lt;br/&gt;clients · client_api_keys · client_endpoints"]
     Providers["Providers&lt;br/&gt;capabilities + purchase types (P8)&lt;br/&gt;provider_accounts + endpoints/countries/methods (P9)&lt;br/&gt;provider_groups + routing (P10)"]
     Packages["Packages&lt;br/&gt;availability (P11)&lt;br/&gt;purchase capabilities + provider definitions (P12)"]
-    Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + exchange rates + group-package rows (P13)"]
+    Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + group-package rows (P13)&lt;br/&gt;price_rules (P14)&lt;br/&gt;price_lists + price_list_packages (P15)"]
+    Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
     Ref -.-&gt; Pricing
+    Ref -.-&gt; Vouchers
     Clients --&gt; Xc
     Clients --&gt; Packages
     Providers --&gt; Packages
     Clients --&gt; Pricing
     Packages --&gt; Pricing
+    Clients --&gt; Vouchers
+    Packages --&gt; Vouchers
+    Providers --&gt; Vouchers
     Clients --&gt; Payments
     Providers --&gt; Payments
     Packages --&gt; Payments
@@ -55,8 +60,8 @@ flowchart TD
     Admin -.-&gt; Payments
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing done;
-    class Vouchers,Payments,Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers done;
+    class Payments,Subscriptions,Webhooks,Notifications,Admin todo;
 </pre>
 
 <h2>Reference data (Phase 4)</h2>
@@ -534,6 +539,56 @@ erDiagram
     price_lists ||--o{ price_list_packages : "exact prices"
     packages ||--o{ price_list_packages : "priced on"
     currencies ||--o{ price_list_packages : "priced in"
+</pre>
+
+<h2>Vouchers — definitions &amp; eligibility (Phase 16)</h2>
+<pre class="mermaid">
+erDiagram
+    vouchers {
+        int id PK
+        int client_id FK
+        varchar code
+        varchar name
+        varchar description
+        varchar status
+        datetime valid_from
+        datetime valid_until
+        tinyint first_purchase_only
+        bigint min_purchase_minor
+        char min_purchase_currency FK
+        varchar default_discount_type
+        smallint default_percent_bp
+        int max_total_redemptions
+        int max_per_user
+        int max_per_client
+        int redeemed_count
+        datetime created_at
+        datetime updated_at
+    }
+    voucher_eligibility_rules {
+        int id PK
+        int voucher_id FK
+        varchar dimension
+        varchar value
+        datetime created_at
+    }
+    voucher_currency_discounts {
+        int id PK
+        int voucher_id FK
+        char currency_code FK
+        varchar discount_type
+        smallint percent_bp
+        bigint amount_minor
+        bigint max_discount_minor
+        datetime created_at
+        datetime updated_at
+    }
+    clients ||--o{ vouchers : "issues"
+    vouchers ||--o{ voucher_eligibility_rules : "scoped by"
+    vouchers ||--o{ voucher_currency_discounts : "overrides via"
+    currencies ||--o{ voucher_currency_discounts : "priced in"
+    packages ||--o{ voucher_eligibility_rules : "scoped to (value)"
+    provider_accounts ||--o{ voucher_eligibility_rules : "scoped to (value)"
 </pre>
 </div>
 

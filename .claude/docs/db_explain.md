@@ -493,3 +493,64 @@ always carries `price_list_id` / `price_list_name` / `price_list_factor`; `sourc
 for Phase 24 to pass a real list id.
 
 - **Referenced by:** nothing yet (Phase 24 assignment; payment snapshots later).
+
+---
+
+## Vouchers — definitions & eligibility (Phase 16)
+
+Voucher definitions and the eligibility gate. **`.claude/Voucher.md` is the source of truth for
+all voucher behaviour** — this section is the per-table summary; read the two together.
+
+### `vouchers`
+
+Client-scoped (`UNIQUE (client_id, code)`, `code` upper-case). Carries the **default discount**
+(`default_discount_type` `none`/`percentage`/`full` + `default_percent_bp` — **never `fixed`**,
+because a fixed amount is inherently currency-bound and only exists as a
+`voucher_currency_discounts` override), the validity window, `first_purchase_only`, an optional
+minimum purchase (amount + currency, both or neither), and the three **usage-limit columns**
+(Phase 16 Q3 — the user chose columns over a child table): `max_total_redemptions` /
+`max_per_user` / `max_per_client`, each **nullable = unlimited** for that dimension. The
+canonical "valid for everyone, once per user" voucher is `NULL / 1 / NULL`. `redeemed_count`
+is the global tally — a `vouchers` column, default `0`, that only **Phase 17** ever increments
+(this module reads it for the global cap check).
+
+### `voucher_eligibility_rules`
+
+One row per `(voucher, dimension, value)` — `country` / `currency` / `package` /
+`provider_account` / `payment_method` / `purchase_type` / `subscription_interval`. Several rows
+for one dimension OR together; different dimensions AND together; **no rows for a dimension = it
+imposes no restriction**. `package` and `provider_account` values are validated against the
+voucher's client at write time (`SetVoucherEligibilityHandler`) since `value` is a plain VARCHAR
+with no DB FK. Full-replace only — there's no incremental add/remove of a single rule
+(`VoucherEligibilityRuleRepository::replaceForVoucher`).
+
+### `voucher_currency_discounts`
+
+The **per-currency override** of the voucher's default discount (Phase 16 Q2 — extended by the
+user from a plain per-currency-amount table to "default + override"). A currency using the
+default carries no row here. Each row fully specifies its own `discount_type` — an override can
+be a different kind from the default (e.g. default 5% but a `TRY` row is `fixed`). `max_discount_minor`
+only makes sense with `percentage` and is expressed in that row's own currency's minor units —
+there is no cap on the currency-agnostic default, because a cap is inherently currency-specific.
+
+### Resolution
+
+**Discount** for a checkout in currency X: `voucher_currency_discounts` row for X → else the
+voucher's default (`percentage`/`full`) → else (`none`) the voucher is inapplicable in X — this
+*is* one of the eligibility checks (`voucher.no_discount_for_currency`), not a separate lookup.
+
+**Eligibility** (`VoucherEligibilityEvaluator`, Phase 16 Q4) reports **every** unmet condition in
+one pass, not just the first: status, validity window, client scope, each restricted dimension,
+discount applicability for the checkout currency, minimum purchase (only compared when the
+checkout currency equals `min_purchase_currency` — no FX conversion in this check), first-purchase
+(an *unknown* `isFirstPurchase` is its own reason, `voucher.first_purchase_unknown`, distinct
+from a *known-false* one), and the global usage cap. Per-user / per-client caps need
+`voucher_redemptions` — **Phase 17** — and are declared-but-unimplemented behind
+`VoucherUsagePort` in Phase 16; the evaluator never calls it.
+
+- **Set / removed by** `bin/CreateVoucher.php`, `UpdateVoucher.php`, `SetVoucherEligibility.php`,
+  `SetVoucherCurrencyDiscount.php`, `RemoveVoucherCurrencyDiscount.php`,
+  `SetVoucherUsageLimits.php`, `SetVoucherStatus.php`; listed by `ListVouchers.php`.
+- **Referenced by:** nothing yet (`voucher_redemptions` — Phase 17; `POST
+  /api/v1/vouchers/validate` — Phase 19; the payment/subscription voucher-decision snapshot —
+  Phase 18).

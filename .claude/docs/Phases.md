@@ -33,7 +33,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 13 | Pricing module: default prices & pricing groups | ☑ | 2026-09-10 13:23 | 2026-09-10 13:58 | 4–6h | ~35m | N/A |
 | 14 | Pricing overrides & resolution engine | ☑ | 2026-09-10 14:04 | 2026-09-10 16:05 | 6–9h | 2h 01m | N/A |
 | 15 | Price lists (A/B) | ☑ | 2026-09-10 14:57 | 2026-09-10 16:04 | 3–5h | 1h 07m | N/A |
-| 16 | Vouchers module: definitions & eligibility | ☐ | — | — | 4–6h | — | — |
+| 16 | Vouchers module: definitions & eligibility | ☑ | 2026-09-10 16:08 | 2026-09-10 20:01 | 4–6h | 3h 53m | N/A |
 | 17 | Voucher validation, discount calc & redemption lifecycle | ☐ | — | — | 5–8h | — | — |
 | 18 | Decision snapshots | ☐ | — | — | 2–4h | — | — |
 | 19 | Resolution API endpoints | ☐ | — | — | 3–5h | — | — |
@@ -485,15 +485,32 @@ disable-fallback" exit criteria move to Phase 24 with the deferred decision.)*
 
 **Goal:** model vouchers and the rules that gate them.
 
-**Scope:**
-- `vouchers`, `voucher_eligibility_rules`, `voucher_usage_limits` (global / per-user /
-  per-client), validity windows, minimum purchase, maximum discount, first-purchase-only,
-  discount type (fixed / percentage / full-when-allowed), scoping (client / country / currency /
-  provider / payment method / purchase type / package).
+**As built (decisions Phase 16 Q1–Q5; full rule set: `.claude/Voucher.md`):**
+- `vouchers` — client-scoped, `code` unique per client; validity window, `first_purchase_only`,
+  minimum purchase (amount + currency); a **default discount** (`default_discount_type`
+  `none`/`percentage`/`full` — never `fixed`) + **usage-limit columns**
+  (`max_total_redemptions` / `max_per_user` / `max_per_client`, each nullable = unlimited — Q3,
+  user chose columns over a `voucher_usage_limits` child table) + `redeemed_count` (global
+  tally, Phase 17-owned).
+- `voucher_eligibility_rules` — one `(voucher, dimension, value)` table (Q1) across country /
+  currency / package / provider account / payment method / purchase type / subscription
+  interval; OR within a dimension, AND across, no rows = unrestricted.
+- `voucher_currency_discounts` — a per-currency **override** of the default discount (Q2,
+  extended by the user): override row → else default → else (`none`) not applicable; each
+  override fully specifies its own type + optional cap.
+- `VoucherEligibilityEvaluator` (Q4) reports **every** unmet condition (not fail-fast): status,
+  window, client scope, every restricted dimension, discount applicability, same-currency
+  minimum purchase, first-purchase (unknown vs. known-false are distinct reasons), and the
+  **global** usage cap. Per-user/per-client caps deferred to Phase 17 behind a declared
+  `VoucherUsagePort`.
+- Audited handlers (`CreateVoucher`, `UpdateVoucher`, `SetVoucherEligibility` full-replace,
+  `SetVoucherCurrencyDiscount` / `RemoveVoucherCurrencyDiscount`, `SetVoucherUsageLimits`,
+  `ChangeVoucherStatus`) + `voucher:*` CLI + env-gated seeder (`WELCOME10`, `EU5`).
 
-**DB:** voucher, eligibility, usage-limit tables.
+**DB:** `vouchers`, `voucher_eligibility_rules`, `voucher_currency_discounts` (3 tables).
 
-**Exit:** eligibility evaluation across every dimension tested.
+**Exit:** eligibility evaluation across every dimension tested
+(`VoucherEligibilityEvaluatorTest`).
 
 ## Phase 17 — Voucher validation, discount calc & redemption lifecycle
 

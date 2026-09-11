@@ -14,15 +14,20 @@ flowchart TD
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
     Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
     Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)<br/>price_lists + price_list_packages — A/B (P15)"]
+    Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
     Ref -.-> Pricing
+    Ref -.-> Vouchers
     Clients --> Xc
     Clients --> Packages
     Providers --> Packages
     Clients --> Pricing
     Packages --> Pricing
+    Clients --> Vouchers
+    Packages --> Vouchers
+    Providers --> Vouchers
     Clients --> Payments
     Providers --> Payments
     Packages --> Payments
@@ -35,8 +40,8 @@ flowchart TD
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing done;
-    class Vouchers,Payments,Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers done;
+    class Payments,Subscriptions,Webhooks,Notifications,Admin todo;
 ```
 
 Green = tables exist. Grey = designed in that module's phase.
@@ -609,3 +614,65 @@ an exact list-package amount → else `base × factor` → else the base unchang
 (`ResolvedPrice.source = price_list` when the amount moved). **Visitor→list assignment is
 deferred to Phase 24** — until then every resolve uses the control list. `local-dev` seeds a
 control list per group + a disabled `dach` "List B · -10%" with an exact `pro` €21.00.
+
+## Vouchers — definitions & eligibility (Phase 16)
+
+```mermaid
+erDiagram
+    vouchers {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        varchar code "UNIQUE (client_id, code)"
+        varchar name
+        varchar description
+        varchar status "active | disabled"
+        datetime valid_from "nullable"
+        datetime valid_until "nullable"
+        tinyint first_purchase_only
+        bigint min_purchase_minor "nullable"
+        char min_purchase_currency FK "-> currencies.code (RESTRICT); nullable"
+        varchar default_discount_type "none | percentage | full"
+        smallint default_percent_bp "nullable; 1-10000 bp"
+        int max_total_redemptions "NULL = unlimited"
+        int max_per_user "NULL = unlimited"
+        int max_per_client "NULL = unlimited"
+        int redeemed_count "global tally, Phase 17 owns writes"
+        datetime created_at
+        datetime updated_at
+    }
+    voucher_eligibility_rules {
+        int id PK
+        int voucher_id FK "-> vouchers.id (CASCADE)"
+        varchar dimension "country|currency|package|provider_account|payment_method|purchase_type|subscription_interval"
+        varchar value
+        datetime created_at
+    }
+    voucher_currency_discounts {
+        int id PK
+        int voucher_id FK "-> vouchers.id (CASCADE)"
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        varchar discount_type "fixed | percentage | full"
+        smallint percent_bp "nullable"
+        bigint amount_minor "nullable"
+        bigint max_discount_minor "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+
+    clients ||--o{ vouchers : "issues"
+    vouchers ||--o{ voucher_eligibility_rules : "scoped by"
+    vouchers ||--o{ voucher_currency_discounts : "overrides via"
+    currencies ||--o{ voucher_currency_discounts : "priced in"
+    packages ||--o{ voucher_eligibility_rules : "scoped to (value)"
+    provider_accounts ||--o{ voucher_eligibility_rules : "scoped to (value)"
+```
+
+Client-scoped discount codes. `voucher_eligibility_rules` — OR within a dimension, AND across, no
+rows = unrestricted (`package` / `provider_account` values validated at write time, not a DB FK).
+`voucher_currency_discounts` overrides the voucher's default discount per currency; a currency
+using the default has no row. Usage limits are plain nullable columns on `vouchers`
+(`max_total_redemptions` / `max_per_user` / `max_per_client`, `NULL` = unlimited) — no per-scope
+table. `VoucherEligibilityEvaluator` reports every unmet condition; per-user / per-client caps
+need `voucher_redemptions` and are Phase 17. `local-dev` seeds `WELCOME10` (10%, once per user)
+and `EU5` (`none` default, EUR/USD/GBP fixed overrides, restricted to the `pro` package). Full
+rule set: **`.claude/Voucher.md`**.

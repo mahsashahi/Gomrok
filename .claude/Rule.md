@@ -196,6 +196,7 @@ The complete list of the project's documentation files. Keep this table in sync 
 |---|---|---|
 | CLAUDE.md | `CLAUDE.md` (project root) | Entry-point instructions for Claude Code; the detailed project spec. Stays at the root because the harness auto-loads `./CLAUDE.md`; points into `.claude/` for everything else. |
 | Rule.md | `.claude/Rule.md` | Consolidated catalogue of every standing project rule (working agreement, framing, naming, phase workflow, database, evidence, docs, security) with pointers into `CLAUDE.md`. |
+| Voucher.md | `.claude/Voucher.md` | **Source of truth for all voucher behaviour** — definitions, schema & schema behaviour, eligibility rules, discount rules (default + per-currency overrides), usage-limit rules, redemption lifecycle, decision snapshots, every voucher decision. `CLAUDE.md` → *Voucher Rules File* requires every voucher-related change to be recorded here. |
 | FileIndex.md | `.claude/FileIndex.md` | Map of the key files across the whole repo (docs, source entry points, config, tests) so they can be found fast. |
 | Phases.md | `.claude/docs/Phases.md` | The fixed 30-phase implementation plan: per-phase goal/scope/DB/exit, the *Status & execution tracking* table (status, start/end datetime, estimated & actual duration, tokens), and *How each phase runs*. |
 | PhaseResults/PhaseDecisions.md | `.claude/PhaseResults/PhaseDecisions.md` | The permanent record of every phase decision question — the question, all options, the recommendation, the user's selection, status, and any later change. |
