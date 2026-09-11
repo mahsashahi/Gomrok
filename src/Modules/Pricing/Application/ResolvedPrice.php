@@ -93,4 +93,34 @@ final readonly class ResolvedPrice
             $this->priceListFactor,
         );
     }
+
+    /**
+     * The full resolved-price payload for a {@see PricingDecisionSnapshot}
+     * (Phase 18) — everything needed to reconstruct what was decided and why,
+     * without a repository lookup.
+     *
+     * @return array<string, scalar|null|list<string>>
+     */
+    public function toArray(): array
+    {
+        return [
+            'package_id' => $this->packageId,
+            'package_code' => $this->packageCode,
+            'amount_minor' => $this->amountMinor,
+            'amount' => $this->amountDecimal,
+            'currency_code' => $this->currencyCode,
+            'source' => $this->source->value,
+            'pricing_group_slug' => $this->pricingGroupSlug,
+            'pricing_group_is_default' => $this->pricingGroupIsDefault,
+            'name' => $this->name,
+            'badge' => $this->badge,
+            'highlighted' => $this->highlighted,
+            'display_order' => $this->displayOrder,
+            'applied_rule_id' => $this->appliedRuleId,
+            'applied_dimensions' => $this->appliedDimensions,
+            'price_list_id' => $this->priceListId,
+            'price_list_name' => $this->priceListName,
+            'price_list_factor' => $this->priceListFactor,
+        ];
+    }
 }

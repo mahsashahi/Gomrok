@@ -16,6 +16,186 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 18 — Decision snapshots
+
+### Q5 — Handler/CLI surface, and the payment hand-off contract
+
+**Question:** How is the checkout-attempt lifecycle driven, and what shape does Phase 20's
+"copy the immutable commercial data onto `payments`" hand-off take?
+
+**Options:**
+
+1. **One handler per step**, reusing the same `attempt_reference` across `checkout_attempts` and
+   `voucher_redemptions`: `CreateCheckoutAttempt` (→ `started`), `ResolveCheckoutPricing`
+   (→ `pricing_resolved`), `ReserveCheckoutVoucher` (→ `voucher_reserved`),
+   `SelectCheckoutProvider` (→ `provider_selected`), `ChangeCheckoutAttemptStatus` (escape hatch
+   for every other transition) + `CheckoutAttemptDirectory`. CLI: `checkout:start` /
+   `resolve-pricing` / `reserve-voucher` / `select-provider` / `set-status` / `list`.
+   `CheckoutAttempt::commercialSnapshot(): array` is defined now (package, resolved amount,
+   currency, voucher discount, provider/method) for Phase 20 to consume later.
+2. One big orchestrating handler running pricing + voucher + routing + all transitions in one
+   call.
+3. Option 1's handlers, no `commercialSnapshot()` method — the payment hand-off shape is
+   entirely Phase 20's problem.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — one handler per step + `ChangeCheckoutAttemptStatus` escape hatch +
+`CheckoutAttemptDirectory`; the checkout attempt's `attempt_reference` is passed straight
+through as the voucher redemption's `attempt_reference` too; `commercialSnapshot()` defined now,
+consumed by Phase 20.
+
+**Status:** Decided
+
+---
+
+### Q4 — Shape of the three decision-snapshot tables
+
+**Question:** Each snapshot FKs to `checkout_attempts.id` and is write-once. What's in each row,
+and specifically — does `voucher_decision_snapshots` duplicate `voucher_redemptions`' amounts?
+
+**Options:**
+
+1. **Thin `voucher_decision_snapshots`**, FK to `voucher_redemptions.id`, denormalizing only
+   identity (`voucher_id`, `voucher_code`, `voucher_name`) — amounts read via the FK, since
+   `voucher_redemptions` already never changes its money fields after insert (Phase 17).
+   `pricing_decision_snapshots` / `provider_routing_decision_snapshots` each get indexed
+   columns + one JSON payload column (`ResolvedPrice::toArray()` — new this phase —
+   / `RoutingDecision::toArray()` — already exists).
+2. Full duplication — copy every amount into `voucher_decision_snapshots` too.
+3. No `voucher_decision_snapshots` table; `checkout_attempts.voucher_redemption_id` is the only
+   link.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — thin `voucher_decision_snapshots` (identity + FK to
+`voucher_redemptions`, no duplicated amounts); `pricing_decision_snapshots` and
+`provider_routing_decision_snapshots` each carry indexed columns + a full JSON payload
+(`ResolvedPrice::toArray()`/`fromArray()` added this phase; `RoutingDecision` already has them).
+
+**Status:** Decided
+
+---
+
+### Q3 — The status lifecycle: legal transitions
+
+**Question:** 13 states — what's actually enforced, and what does Phase 18 implement vs. leave
+for later phases to drive?
+
+**Options:**
+
+1. **Monotonic rank, skips allowed; 4 terminal exits reachable from anywhere non-terminal.**
+2. Strict linear order, no skipping.
+3. No ordering enforcement at all.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1, fully specified by the user:
+
+- Happy-path rank: `started(1) → pricing_resolved(2) → voucher_reserved(3) →
+  provider_selected(4) → provider_checkout_created(5) → redirected_to_provider(6) →
+  returned_from_provider(7) → confirmed(8) → converted_to_payment(9)`.
+- A transition is valid iff: the new status has a **higher rank** than the current one, **or**
+  it's the **same status** (idempotent no-op), **or** it's one of the 4 **terminal exits**
+  (`failed`, `canceled`, `expired`, `abandoned`) — reachable from any non-terminal state.
+- **Skipping ranks is allowed** (e.g. no voucher → `pricing_resolved → provider_selected`
+  directly; an embedded/instant-confirm provider may skip the redirect states).
+- **No backward moves** to a lower-ranked status.
+- `converted_to_payment` requires the attempt to already be `confirmed`.
+- **Terminal states** (`converted_to_payment`, `failed`, `canceled`, `expired`, `abandoned`) —
+  once reached, no further transition of any kind.
+- **Phase 18 implements only these transitions for real:** `started → pricing_resolved`;
+  `pricing_resolved → voucher_reserved` (when a voucher is used) or
+  `pricing_resolved → provider_selected` (when not); `voucher_reserved → provider_selected`;
+  same-status no-op; any non-terminal `→ failed/canceled/expired/abandoned`.
+- `provider_checkout_created`, `redirected_to_provider`, `returned_from_provider`, `confirmed`,
+  `converted_to_payment` are **defined in the enum and the rank/guard rules now**, but have no
+  real caller until later phases (providers — Phase 21+; payments — Phase 20) drive them.
+  `abandoned`'s automatic detection (a staleness sweep) is Phase 29, per the Phase 17 Q2
+  precedent — only the status value and the manual transition exist now.
+
+**Status:** Decided
+
+---
+
+### Q2 — Where does `checkout_attempts` live, and what does it carry?
+
+**Question:** Which module owns the new `checkout_attempts` anchor, and what columns does it
+carry?
+
+**Options:**
+
+1. **A new `Checkout` module** (`src/Modules/Checkout/{Domain,Application,Infrastructure}`) owns
+   `checkout_attempts` + its status lifecycle; Pricing/Vouchers/Providers keep owning their own
+   decision-snapshot table, each with a `checkout_attempt_id` FK → `checkout_attempts(id)`
+   (a normal cross-module FK). Columns: `id`, `client_id` FK, `client_user_ref` (nullable),
+   `attempt_reference` (external, `UNIQUE`), `package_id` FK, `country`, `currency_code`,
+   `purchase_type` / `payment_method` / `subscription_interval` (nullable until resolved),
+   `status`, `error_code` / `error_message` (nullable), timestamps incl. `abandoned_at` /
+   `expired_at`.
+2. Fold `checkout_attempts` into the Vouchers module (it already has the closest analog,
+   `voucher_redemptions`) — inverts the real dependency; most checkouts have no voucher.
+3. Put it in `Shared` — `Shared` is infrastructure plumbing (transactions, audit), not a business
+   aggregate with its own status lifecycle.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — new `Checkout` module owns `checkout_attempts`; Pricing / Vouchers /
+Providers keep owning their own decision-snapshot table, linked by `checkout_attempt_id`.
+
+**Status:** Decided
+
+---
+
+### Q1 — What anchors a snapshot before Payments exists?
+
+**Question:** The three decision snapshots (pricing, voucher, routing) are meant to hang off
+"the payment/subscription creation record" (CLAUDE.md), but Payments doesn't exist until
+Phase 20. What anchors them until then?
+
+**Options:**
+
+1. Reuse Phase 17's `attempt_reference` concept directly on each of the three snapshot tables —
+   no new table.
+2. Independent, unrelated caller-supplied references per table — no guaranteed correlation.
+3. A new `checkout_attempts` anchor table that all three snapshot tables FK to.
+
+**Recommended:** Option 1
+
+**Selected:** **Modified Option 3 (user).** A central `checkout_attempts` table is the anchor —
+not just for the three decision snapshots, but for the **whole pre-payment lifecycle**: how far
+a user got in checkout, whether they abandoned it, and which pricing/voucher/routing/provider
+decisions were made. Rules set by the user:
+
+- `checkout_attempts` is the parent anchor for pre-payment decisions, with its **own status
+  lifecycle** (see Q3).
+- Pricing snapshots, voucher reservations, routing decisions, and provider checkout/session
+  references all link to `checkout_attempts.id`.
+- `attempt_reference` still exists as the **external**, caller-supplied idempotent reference
+  (`UNIQUE`) — but `checkout_attempts.id` is the **internal** relational anchor every child row
+  FKs to (not the string).
+- When the payment succeeds, Gomrok creates the final `payments` record (Phase 20) and links it
+  back to the originating `checkout_attempts` row.
+- No pre-payment decision data is lost after a payment is created — the checkout attempt row
+  and its children are kept permanently for audit, debugging, abandoned-checkout tracking, and
+  admin visibility.
+- The eventual `payments` record copies only the required **immutable commercial snapshot**
+  data from the checkout attempt — it does not become the sole home of that history.
+- Suggested statuses (refined in Q3): `started`, `pricing_resolved`, `voucher_reserved`,
+  `provider_selected`, `provider_checkout_created`, `redirected_to_provider`,
+  `returned_from_provider`, `confirmed`, `failed`, `canceled`, `expired`, `abandoned`,
+  `converted_to_payment`.
+
+This changes Phase 18's scope from "3 snapshot tables" to "a `checkout_attempts` anchor + the 3
+decision-snapshot tables as its children" — see the Q2/Q3/Q4/Q5 design that follows and the
+final DB design proposal for exact shapes. User: "I want Gomrok to track the full pre-payment
+lifecycle before a final payments record exists... Before creating the database schema, propose
+the checkout_attempts design and ask me for confirmation."
+
+**Status:** Decided
+
+---
+
 ## Phase 17 — Voucher validation, discount calc & redemption lifecycle
 
 ### Q5 — Handler surface, `VoucherUsagePort` wiring, CLI

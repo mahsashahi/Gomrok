@@ -6,6 +6,7 @@ use function DI\get;
 
 use Gomrok\Modules\Pricing\Application\PriceListDirectory;
 use Gomrok\Modules\Pricing\Application\PriceRuleDirectory;
+use Gomrok\Modules\Pricing\Application\PricingDecisionSnapshotRepository;
 use Gomrok\Modules\Pricing\Application\PricingGroupDirectory;
 use Gomrok\Modules\Pricing\Domain\ClientExchangeRateRepository;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePriceRepository;
@@ -21,6 +22,7 @@ use Gomrok\Modules\Pricing\Infrastructure\PdoPriceListPackageRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPriceListRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPriceRuleDirectory;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPriceRuleRepository;
+use Gomrok\Modules\Pricing\Infrastructure\PdoPricingDecisionSnapshotRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPricingGroupDirectory;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPricingGroupPackageRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPricingGroupRepository;
@@ -42,4 +44,5 @@ return [
     PriceListRepository::class => get(PdoPriceListRepository::class),
     PriceListPackageRepository::class => get(PdoPriceListPackageRepository::class),
     PriceListDirectory::class => get(PdoPriceListDirectory::class),
+    PricingDecisionSnapshotRepository::class => get(PdoPricingDecisionSnapshotRepository::class),
 ];

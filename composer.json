@@ -114,6 +114,12 @@
         "voucher:confirm": "php bin/ConfirmVoucherRedemption.php",
         "voucher:release": "php bin/ReleaseVoucherRedemption.php",
         "voucher:list-redemptions": "php bin/ListVoucherRedemptions.php",
+        "checkout:start": "php bin/CreateCheckoutAttempt.php",
+        "checkout:resolve-pricing": "php bin/ResolveCheckoutPricing.php",
+        "checkout:reserve-voucher": "php bin/ReserveCheckoutVoucher.php",
+        "checkout:select-provider": "php bin/SelectCheckoutProvider.php",
+        "checkout:set-status": "php bin/SetCheckoutAttemptStatus.php",
+        "checkout:list": "php bin/ListCheckoutAttempts.php",
         "ci": [
             "@cs",
             "@stan",
@@ -183,6 +189,12 @@
         "voucher:confirm": "Finalise a reservation after a successful payment (--client --voucher --attempt)",
         "voucher:release": "Free a reservation after a failed/canceled payment (--client --voucher --attempt)",
         "voucher:list-redemptions": "List a voucher's redemption history (--client --voucher)",
+        "checkout:start": "Start a checkout attempt (--client --attempt --package --country --currency ...)",
+        "checkout:resolve-pricing": "Resolve a checkout attempt's price and freeze the pricing snapshot (--client --attempt)",
+        "checkout:reserve-voucher": "Reserve a voucher for a checkout attempt (--client --attempt --code)",
+        "checkout:select-provider": "Route a checkout attempt to a provider account (--client --attempt --mode)",
+        "checkout:set-status": "Manually transition a checkout attempt's status (--client --attempt --status)",
+        "checkout:list": "List a client's checkout attempts (--client=<slug|id>)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }

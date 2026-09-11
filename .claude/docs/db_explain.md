@@ -589,5 +589,89 @@ exists, with no schema or handler change needed then.
   (`voucher_redemption.already_released` / `voucher_redemption.already_confirmed`).
 - **Set / advanced by** `bin/ReserveVoucherRedemption.php`, `ConfirmVoucherRedemption.php`,
   `ReleaseVoucherRedemption.php`; listed by `ListVoucherRedemptions.php`.
-- **Referenced by:** nothing yet (the payment/subscription voucher-decision snapshot is
-  Phase 18; Payments passing a real payment id as `attempt_reference` is Phase 20).
+- **Referenced by:** `voucher_decision_snapshots.voucher_redemption_id` (Phase 18, `UNIQUE` —
+  at most one decision snapshot per redemption). Payments passing a real payment id as
+  `attempt_reference` is still Phase 20.
+
+---
+
+## Checkout + decision snapshots (Phase 18)
+
+The new `Checkout` module's anchor table, plus one write-once decision-snapshot table per owning
+module (Pricing / Vouchers / Providers). Source of the full design: `.claude/docs/database-design.md`
+→ "Checkout + decision snapshots (Phase 18)"; this section is the narrative "why".
+
+### `checkout_attempts`
+
+- **Why it exists at all** (Phase 18 Q1, a user-directed expansion of the original proposal): a
+  payment doesn't materialize atomically — pricing gets resolved, a voucher may get reserved, a
+  provider gets chosen, the customer may get redirected and come back — and every one of those
+  steps can fail or be abandoned *before* a `payments` row would ever exist. Without this table
+  that whole pre-payment story is invisible: no abandoned-checkout tracking, no way to see "how
+  far did this customer get", nothing for admin debugging or reconciliation to look at.
+- **`attempt_reference` vs `id`** — exactly the Phase 17 `voucher_redemptions.attempt_reference`
+  pattern, one layer up: `attempt_reference` is the opaque, caller-supplied idempotency key
+  (`UNIQUE (client_id, attempt_reference)` — re-`start()` with the same string returns the
+  existing attempt untouched); `id` is the internal relational anchor every decision-snapshot
+  table FKs to. `ReserveCheckoutVoucherHandler` reuses the *same string* as the voucher
+  redemption's own `attempt_reference`, so both records key off one caller-supplied value.
+- **`status`** — see the `CheckoutAttemptStatus` lifecycle below. `error_code` / `error_message`
+  are only ever set on a `failed` exit. `abandoned_at` / `expired_at` are reserved columns — no
+  handler writes them yet; they exist now so the Phase 29 automatic-abandonment sweep needs no
+  migration when it lands.
+- **Set / advanced by** `bin/CreateCheckoutAttempt.php`, `ResolveCheckoutPricing.php`,
+  `ReserveCheckoutVoucher.php`, `SelectCheckoutProvider.php`, `SetCheckoutAttemptStatus.php`;
+  listed by `ListCheckoutAttempts.php`.
+- **Referenced by:** the three decision-snapshot tables below, each `checkout_attempt_id FK
+  CASCADE`. A future `payments` row (Phase 20) will also reference it, and will copy — never
+  re-derive — `CheckoutAttempt::commercialSnapshot()`'s fields at the moment of conversion.
+
+### Lifecycle (`CheckoutAttemptStatus`, Phase 18 Q3)
+
+A monotonic-rank state machine, specified in full by the user rather than picked from the
+proposed options: 9 ranked happy-path statuses (`started` … `converted_to_payment`) plus 4
+unranked exit statuses (`failed` / `canceled` / `expired` / `abandoned`). A transition is legal
+when it repeats the current status (no-op), or targets an exit (allowed from any non-terminal
+status), or `converted_to_payment` from exactly `confirmed`, or any strictly-higher rank —
+**skipping ranks is allowed**, which is the whole point: a checkout with no voucher jumps
+`pricing_resolved → provider_selected` directly rather than being forced through
+`voucher_reserved`. Once terminal (`converted_to_payment` or any exit), the row is frozen —
+`transitionTo()` rejects everything, including a repeat of the same terminal status.
+
+Only the transitions the user explicitly asked for in Phase 18 have a real caller: `started →
+pricing_resolved`, `pricing_resolved → voucher_reserved` (voucher used) or directly `→
+provider_selected` (no voucher), `voucher_reserved → provider_selected`, the same-status no-op,
+and any non-terminal → exit. `provider_checkout_created` through `converted_to_payment` are fully
+modelled (rank, guards, tests) but wait for Payments (Phase 20) and real provider adapters
+(Phase 21+) to actually drive them — the user was explicit that these should be "ready" now, not
+built out ahead of the phases that need them.
+
+### `pricing_decision_snapshots` / `voucher_decision_snapshots` / `provider_routing_decision_snapshots`
+
+- **Why three tables, not one** (Phase 18 Q4): each snapshot's shape depends on a value object
+  that already lives in its own module's Application layer — `ResolvedPrice` (Pricing),
+  `RoutingDecision` (Providers, reused from Phase 10 as-is) — so the snapshot VO and its
+  repository port live beside that type instead of crossing the dependency direction the other
+  way. `voucher_decision_snapshots` stays in the Vouchers module for the same reason, but is
+  deliberately **thin**: the actual amounts already live, immutably, on `voucher_redemptions`
+  (Phase 17), so duplicating them here would just be a second copy to keep in sync. It stores only
+  the voucher's *identity at decision time* (`voucher_code` / `voucher_name`), because a later
+  `UpdateVoucher` rename must not rewrite history.
+- **Write-once by construction** — none of the three repository ports expose an update method,
+  only `save(): int` and `findByCheckoutAttemptId()`. This is the architectural enforcement of "a
+  pricing/voucher/routing rule change must never rewrite a past decision" (the same principle
+  Phase 13–17 already apply to `default_package_prices` snapshots being resolved fresh each time,
+  taken one step further: here the *resolved result itself* is frozen). `UNIQUE
+  (checkout_attempt_id)` on each backs this up at the schema level — at most one decision of each
+  kind per attempt, ever.
+- **`payload JSON`** on the pricing and routing snapshots is the full `ResolvedPrice::toArray()` /
+  `RoutingDecision::toArray()` — everything the resolver considered, not just the winning
+  numbers — so a later admin view or dispute investigation can see *why* a decision was made, not
+  only what it was. `voucher_decision_snapshots` has no `payload` column; there was nothing left
+  to denormalize once the amounts stayed on `voucher_redemptions`.
+- **Set / advanced by** `ResolveCheckoutPricingHandler`, `ReserveCheckoutVoucherHandler`,
+  `SelectCheckoutProviderHandler` — each runs inside the same `Transactions::run()` call that
+  advances the parent `checkout_attempts.status`, so a snapshot row and its status transition
+  commit or roll back together.
+- **Referenced by:** nothing yet outside `checkout_attempts` — a future `payments` row (Phase 20)
+  is expected to read these for its own audit trail rather than take ownership of them.

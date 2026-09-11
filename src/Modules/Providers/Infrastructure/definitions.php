@@ -7,6 +7,7 @@ use function DI\get;
 use Gomrok\Modules\Providers\Application\ProviderAccountCredentials;
 use Gomrok\Modules\Providers\Application\ProviderAccountDirectory;
 use Gomrok\Modules\Providers\Application\ProviderCatalog;
+use Gomrok\Modules\Providers\Application\Routing\ProviderRoutingDecisionSnapshotRepository;
 use Gomrok\Modules\Providers\Domain\ProviderAccountRepository;
 use Gomrok\Modules\Providers\Domain\ProviderGroupRepository;
 use Gomrok\Modules\Providers\Domain\ProviderTypeDeclarations;
@@ -15,6 +16,7 @@ use Gomrok\Modules\Providers\Infrastructure\PdoProviderAccountDirectory;
 use Gomrok\Modules\Providers\Infrastructure\PdoProviderAccountRepository;
 use Gomrok\Modules\Providers\Infrastructure\PdoProviderCatalog;
 use Gomrok\Modules\Providers\Infrastructure\PdoProviderGroupRepository;
+use Gomrok\Modules\Providers\Infrastructure\PdoProviderRoutingDecisionSnapshotRepository;
 use Gomrok\Modules\Providers\Infrastructure\PdoProviderTypeDeclarations;
 
 /**
@@ -31,4 +33,5 @@ return [
     ProviderAccountDirectory::class => get(PdoProviderAccountDirectory::class),
     ProviderAccountCredentials::class => get(PdoProviderAccountCredentials::class),
     ProviderGroupRepository::class => get(PdoProviderGroupRepository::class),
+    ProviderRoutingDecisionSnapshotRepository::class => get(PdoProviderRoutingDecisionSnapshotRepository::class),
 ];

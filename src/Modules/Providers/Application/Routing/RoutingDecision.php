@@ -9,9 +9,10 @@ use LogicException;
 /**
  * The outcome of a successful routing resolution: the resolved group, the
  * ordered candidate accounts (chosen = first), and why every other account was
- * dropped. Serialise it with {@see toArray()} to snapshot on a payment /
- * subscription (Phase 17); {@see fromArray()} rebuilds a read-only view with no
- * repository lookups.
+ * dropped. Serialise it with {@see toArray()} to snapshot on a checkout attempt
+ * (Phase 18's `provider_routing_decision_snapshots`, via
+ * {@see ProviderRoutingDecisionSnapshot}); {@see fromArray()} rebuilds a
+ * read-only view with no repository lookups.
  *
  * @phpstan-type DecisionArray array{
  *     version: int,

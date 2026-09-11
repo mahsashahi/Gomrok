@@ -8,10 +8,12 @@ use Gomrok\Modules\Vouchers\Application\VoucherDirectory;
 use Gomrok\Modules\Vouchers\Application\VoucherRedemptionDirectory;
 use Gomrok\Modules\Vouchers\Application\VoucherUsagePort;
 use Gomrok\Modules\Vouchers\Domain\VoucherCurrencyDiscountRepository;
+use Gomrok\Modules\Vouchers\Domain\VoucherDecisionSnapshotRepository;
 use Gomrok\Modules\Vouchers\Domain\VoucherEligibilityRuleRepository;
 use Gomrok\Modules\Vouchers\Domain\VoucherRedemptionRepository;
 use Gomrok\Modules\Vouchers\Domain\VoucherRepository;
 use Gomrok\Modules\Vouchers\Infrastructure\PdoVoucherCurrencyDiscountRepository;
+use Gomrok\Modules\Vouchers\Infrastructure\PdoVoucherDecisionSnapshotRepository;
 use Gomrok\Modules\Vouchers\Infrastructure\PdoVoucherDirectory;
 use Gomrok\Modules\Vouchers\Infrastructure\PdoVoucherEligibilityRuleRepository;
 use Gomrok\Modules\Vouchers\Infrastructure\PdoVoucherRedemptionDirectory;
@@ -34,4 +36,5 @@ return [
     VoucherRedemptionRepository::class => get(PdoVoucherRedemptionRepository::class),
     VoucherUsagePort::class => get(PdoVoucherRedemptionRepository::class),
     VoucherRedemptionDirectory::class => get(PdoVoucherRedemptionDirectory::class),
+    VoucherDecisionSnapshotRepository::class => get(PdoVoucherDecisionSnapshotRepository::class),
 ];

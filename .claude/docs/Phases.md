@@ -35,7 +35,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 15 | Price lists (A/B) | ☑ | 2026-09-10 14:57 | 2026-09-10 16:04 | 3–5h | 1h 07m | N/A |
 | 16 | Vouchers module: definitions & eligibility | ☑ | 2026-09-10 16:08 | 2026-09-10 20:01 | 4–6h | 3h 53m | N/A |
 | 17 | Voucher validation, discount calc & redemption lifecycle | ☑ | 2026-09-11 12:52 | 2026-09-11 14:03 | 5–8h | 1h 11m | N/A |
-| 18 | Decision snapshots | ☐ | — | — | 2–4h | — | — |
+| 18 | Decision snapshots | ☑ | 2026-09-11 14:19 | 2026-09-11 15:44 | 2–4h | 1h 25m | N/A |
 | 19 | Resolution API endpoints | ☐ | — | — | 3–5h | — | — |
 | 20 | Payments module: aggregate & lifecycle | ☐ | — | — | 4–6h | — | — |
 | 21 | Provider adapter port & Stripe adapter | ☐ | — | — | 6–9h | — | — |
@@ -547,16 +547,52 @@ disable-fallback" exit criteria move to Phase 24 with the deferred decision.)*
 
 **Goal:** history never changes when rules change.
 
-**Scope:**
-- `pricing_decision_snapshots`, `voucher_decision_snapshots`,
-  `provider_routing_decision_snapshots`; a price snapshot written onto the payment / subscription
-  creation record preserving package id, base amount, country-override amount, currency, provider,
-  payment method, purchase type, subscription interval, voucher id / code, discount, tax, fee,
-  final payable amount, and pricing-rule version references.
+**As built (decisions Phase 18 Q1–Q5 — Q1 and Q3 were user-directed expansions of the originally
+proposed options, not a choice from the presented list):**
+- **New `Checkout` module** (Q2) anchored by **`checkout_attempts`** (Q1, fully specified by the
+  user): the pre-payment lifecycle's parent record. `attempt_reference` is the external,
+  caller-supplied idempotent key (`UNIQUE (client_id, attempt_reference)`); `id` is the internal
+  relational anchor every decision-snapshot table FKs to. Reuses the Phase 17
+  `attempt_reference`-as-idempotency-key device one layer up — `ReserveCheckoutVoucherHandler`
+  passes the checkout attempt's own reference straight through as the voucher redemption's.
+- **`CheckoutAttemptStatus`** (Q3, fully dictated by the user rather than picked from an option
+  letter): a monotonic-rank state machine — 9 ranked happy-path statuses (`started` →
+  `pricing_resolved` → `voucher_reserved` → `provider_selected` → `provider_checkout_created` →
+  `redirected_to_provider` → `returned_from_provider` → `confirmed` → `converted_to_payment`)
+  plus 4 unranked exit statuses (`failed` / `canceled` / `expired` / `abandoned`) reachable from
+  any non-terminal status. A transition is valid iff it repeats the current status (no-op), or
+  targets an exit, or is `converted_to_payment` from exactly `confirmed`, or has a strictly
+  higher rank than the current one — **skipping ranks is allowed** (no voucher used ⇒
+  `pricing_resolved → provider_selected` directly). Terminal once reached; no further transition
+  accepted. **Implemented for real this phase:** `started → pricing_resolved`,
+  `pricing_resolved → voucher_reserved` (voucher used) or `→ provider_selected` (no voucher),
+  `voucher_reserved → provider_selected`, the no-op, any non-terminal → exit. **Modelled only**
+  (rank + guards + tests, no real caller yet): `provider_checkout_created` … `confirmed` /
+  `converted_to_payment` — deferred to Payments (Phase 20) and the provider adapters
+  (Phase 21+), per the user's explicit instruction.
+- Three write-once decision-snapshot tables, one per owning module (Q4 — thin `voucher_decision_snapshots`
+  chosen): **`pricing_decision_snapshots`** (Pricing, full `ResolvedPrice::toArray()` payload),
+  **`voucher_decision_snapshots`** (Vouchers, identity-only — amounts stay on `voucher_redemptions`),
+  **`provider_routing_decision_snapshots`** (Providers, full `RoutingDecision::toArray()`
+  payload, Phase 10 VO reused as-is). Each `UNIQUE (checkout_attempt_id)`; no repository port
+  exposes an update method.
+- One handler per lifecycle step + a `CheckoutAttempt::commercialSnapshot()` method (Q5):
+  `CreateCheckoutAttemptHandler`, `ResolveCheckoutPricingHandler`, `ReserveCheckoutVoucherHandler`,
+  `SelectCheckoutProviderHandler`, `ChangeCheckoutAttemptStatusHandler` — each advances the status
+  and writes its snapshot inside one `Transactions::run()` call. `commercialSnapshot()` returns
+  only the attempt's own immutable commercial context, the exact shape a future `payments` row
+  (Phase 20) will copy at conversion — no checkout-attempt or decision-snapshot row is ever
+  deleted or mutated by that step.
+- `checkout:create|resolve-pricing|reserve-voucher|select-provider|set-status|list-attempts` CLI.
 
-**DB:** snapshot tables.
+**DB:** `checkout_attempts`, `pricing_decision_snapshots`, `voucher_decision_snapshots`,
+`provider_routing_decision_snapshots` (4 tables, migration `20260911150001`).
 
-**Exit:** snapshots proven immutable against later rule edits.
+**Exit:** lifecycle transition rules (`CheckoutAttemptStatusTest`, `CheckoutAttemptTest` — skip,
+no-op, backward-rejection, terminal-lock, `converted_to_payment` gating), full cross-module
+happy-path + no-voucher-path wiring (`CheckoutAttemptHandlersTest`), and a real-MySQL round-trip
+(`CheckoutAttemptPersistenceTest`, CI-only) all tested; `composer ci` green (332 unit tests,
+1354 assertions).
 
 ## Phase 19 — Resolution API endpoints
 

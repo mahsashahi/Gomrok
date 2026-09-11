@@ -41,9 +41,10 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Pricing — A/B price lists (Phase 15) | `price_lists`, `price_list_packages` — **2** |
 | Vouchers — definitions & eligibility (Phase 16) | `vouchers`, `voucher_eligibility_rules`, `voucher_currency_discounts` — **3** |
 | Vouchers — redemption lifecycle (Phase 17) | `voucher_redemptions` — **1** |
-| — | (more business tables land per module from Phase 18) |
+| Checkout + decision snapshots (Phase 18) | `checkout_attempts` (Checkout module) + `pricing_decision_snapshots` (Pricing) + `voucher_decision_snapshots` (Vouchers) + `provider_routing_decision_snapshots` (Providers) — **4** |
+| — | (more business tables land per module from Phase 19) |
 
-**Total: 42 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 46 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -946,6 +947,145 @@ idempotent and a confirmed redemption can never be released.
 
 ---
 
+## Checkout + decision snapshots (Phase 18)
+
+A new `Checkout` module anchors the whole pre-payment lifecycle (Phase 18 Q1/Q2, a user-directed
+expansion of the original proposal). `checkout_attempts` is the parent: `attempt_reference` is
+the external, caller-supplied idempotent key (the same device as `voucher_redemptions.attempt_reference`,
+Phase 17); `checkout_attempts.id` is the internal relational anchor every decision-snapshot table
+below FKs to. Three write-once decision-snapshot tables sit beside it, one per owning module
+(Phase 18 Q4) — `pricing_decision_snapshots` (Pricing), `voucher_decision_snapshots` (Vouchers),
+`provider_routing_decision_snapshots` (Providers) — each `UNIQUE (checkout_attempt_id)`: at most
+one decision of that kind per attempt, and no update method on any of the three repository ports.
+When a later phase creates the final `payments` record, it links back to the checkout attempt and
+copies only the immutable commercial snapshot the attempt itself owns (`commercialSnapshot()`,
+below) — none of the checkout-attempt or decision-snapshot rows are ever deleted or mutated by
+that step, so the full pre-payment history stays available for audit, debugging, abandoned-checkout
+tracking, and admin visibility.
+
+### `checkout_attempts`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK — the internal anchor every snapshot table FKs to |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `client_user_ref` | VARCHAR(120) | yes | opaque caller-supplied user reference; required by `ReserveCheckoutVoucher` iff the voucher needs one |
+| `attempt_reference` | VARCHAR(191) | no | opaque, caller-supplied idempotency key; trimmed only (case preserved) |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `country` | CHAR(2) | no | FK → `countries(code)` RESTRICT; upper-cased on `start()` |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT; upper-cased on `start()` |
+| `purchase_type` | VARCHAR(20) | yes | `PurchaseType` value, set at `start()` |
+| `payment_method` | VARCHAR(20) | yes | set once a provider/method is selected |
+| `subscription_interval` | VARCHAR(20) | yes | set iff the purchase type is recurring/subscription |
+| `status` | VARCHAR(30) | no | `CheckoutAttemptStatus`, default `started` — see lifecycle below |
+| `error_code` / `error_message` | VARCHAR(100) / VARCHAR(500) | yes / yes | set on a `failed` exit |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+| `abandoned_at` / `expired_at` | DATETIME | yes / yes | reserved for the Phase 29 automatic-detection sweep; not yet written by any handler |
+
+`UNIQUE (client_id, attempt_reference)` = `uniq_checkout_attempts_client_ref` (the idempotency
+key — re-`start()` with the same reference returns the existing attempt unchanged);
+`INDEX (client_id, status)` = `idx_checkout_attempts_client_status`;
+`INDEX (package_id)` = `idx_checkout_attempts_package`.
+
+### `pricing_decision_snapshots`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `checkout_attempt_id` | INT UNSIGNED | no | FK → `checkout_attempts(id)` CASCADE; `UNIQUE` |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT |
+| `amount_minor` | BIGINT UNSIGNED | no | the resolved `ResolvedPrice::$amountMinor` |
+| `source` | VARCHAR(20) | no | `ResolvedPrice::$source->value` (`baseline` / `dimension_override` / `price_list`) |
+| `payload` | JSON | no | full `ResolvedPrice::toArray()` — package code/name, base/converted amounts, applied rule/list refs, etc. |
+| `created_at` | DATETIME | no | write-once — **no `updated_at`** |
+
+`UNIQUE (checkout_attempt_id)` = `uniq_pricing_decision_snapshots_attempt`;
+`INDEX (client_id, package_id)` = `idx_pricing_decision_snapshots_client_package`.
+
+### `voucher_decision_snapshots`
+
+Deliberately thin (Phase 18 Q4): the immutable amounts already live on `voucher_redemptions`
+(Phase 17, never mutated after creation), so this only denormalizes the voucher's *identity* at
+decision time, in case a later `UpdateVoucher` renames it.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `checkout_attempt_id` | INT UNSIGNED | no | FK → `checkout_attempts(id)` CASCADE; `UNIQUE` |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `voucher_id` | INT UNSIGNED | no | FK → `vouchers(id)` CASCADE |
+| `voucher_redemption_id` | INT UNSIGNED | no | FK → `voucher_redemptions(id)` CASCADE; `UNIQUE` — the amounts live there |
+| `voucher_code` | VARCHAR(64) | no | denormalized at decision time |
+| `voucher_name` | VARCHAR(150) | no | denormalized at decision time |
+| `created_at` | DATETIME | no | write-once — **no `updated_at`** |
+
+`UNIQUE (checkout_attempt_id)` = `uniq_voucher_decision_snapshots_attempt`;
+`UNIQUE (voucher_redemption_id)` = `uniq_voucher_decision_snapshots_redemption`;
+`INDEX (client_id, voucher_id)` = `idx_voucher_decision_snapshots_client_voucher`. A checkout
+attempt without a voucher simply has no row here — the join is optional.
+
+### `provider_routing_decision_snapshots`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `checkout_attempt_id` | INT UNSIGNED | no | FK → `checkout_attempts(id)` CASCADE; `UNIQUE` |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE — `RoutingDecision::chosen()->accountId` |
+| `payment_method` | VARCHAR(20) | yes | `RoutingDecision::$paymentMethod` |
+| `purchase_type` | VARCHAR(20) | no | `RoutingDecision::$purchaseType` |
+| `payload` | JSON | no | full `RoutingDecision::toArray()` (Phase 10 VO, reused as-is) — candidates considered, chosen account, rejection reasons |
+| `created_at` | DATETIME | no | write-once — **no `updated_at`** |
+
+`UNIQUE (checkout_attempt_id)` = `uniq_provider_routing_decision_snapshots_attempt`;
+`INDEX (client_id, provider_account_id)` = `idx_provider_routing_decision_snapshots_client_account`.
+
+### Lifecycle (`CheckoutAttemptStatus`, Phase 18 Q3)
+
+A monotonic-rank state machine with 9 ranked "happy path" statuses and 4 unranked exit statuses,
+dictated in full by the user:
+
+```text
+1 started
+2 pricing_resolved
+3 voucher_reserved
+4 provider_selected
+5 provider_checkout_created
+6 redirected_to_provider
+7 returned_from_provider
+8 confirmed
+9 converted_to_payment
+```
+
+`transitionTo($new)` allows a move when, in order: (1) the current status is already terminal →
+always **rejected**; (2) `$new === current` → **idempotent no-op**; (3) `$new` is one of the 4
+exits (`failed` / `canceled` / `expired` / `abandoned`) → **allowed** from any non-terminal
+status; (4) `$new === converted_to_payment` → allowed **only if** current is exactly `confirmed`
+(`checkout_attempt.not_confirmed` otherwise); (5) else → allowed only if `rank($new) >
+rank(current)` (`checkout_attempt.invalid_transition` otherwise) — **skipping ranks is allowed**
+(e.g. no voucher used ⇒ `pricing_resolved → provider_selected` directly). Terminal states —
+`converted_to_payment`, `failed`, `canceled`, `expired`, `abandoned` — accept no further
+transition (`checkout_attempt.terminal`).
+
+**Implemented for real in Phase 18:** `started → pricing_resolved`
+(`ResolveCheckoutPricingHandler`); `pricing_resolved → voucher_reserved` when a voucher is used,
+or directly `pricing_resolved → provider_selected` when none is (`ReserveCheckoutVoucherHandler` /
+`SelectCheckoutProviderHandler`); `voucher_reserved → provider_selected`; the same-status no-op;
+any non-terminal → `failed` / `canceled` / `expired` / `abandoned`
+(`ChangeCheckoutAttemptStatusHandler`). **Modelled but not yet driven by a real caller:**
+`provider_checkout_created`, `redirected_to_provider`, `returned_from_provider`, `confirmed`,
+`converted_to_payment` — ready for Payments (Phase 20) and the provider adapters (Phase 21+).
+
+`CheckoutAttempt::commercialSnapshot()` returns only the attempt's own immutable commercial
+context (`checkout_attempt_id`, `client_id`, `client_user_ref`, `attempt_reference`, `package_id`,
+`country`, `currency_code`, `purchase_type`, `payment_method`, `subscription_interval`, `status`)
+— the exact shape a future `payments` row copies from; it does not reach into the decision
+snapshots (those stay linked by `checkout_attempt_id`, not duplicated).
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -1002,6 +1142,7 @@ idempotent and a confirmed redemption can never be released.
 | `src/Database/Migrations/20260910170001_create_voucher_tables.php` | `Gomrok\Database\Migrations\CreateVoucherTables` |
 | `src/Database/Seeds/VouchersSeeder.php` | `Gomrok\Database\Seeds\VouchersSeeder` (env-gated: `local-dev` gets `WELCOME10` [10%, once/user] + `EU5` [`none` default, EUR/USD/GBP fixed overrides, `pro`-only]) |
 | `src/Database/Migrations/20260911130001_create_voucher_redemptions_table.php` | `Gomrok\Database\Migrations\CreateVoucherRedemptionsTable` |
+| `src/Database/Migrations/20260911150001_create_checkout_and_decision_snapshot_tables.php` | `Gomrok\Database\Migrations\CreateCheckoutAndDecisionSnapshotTables` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

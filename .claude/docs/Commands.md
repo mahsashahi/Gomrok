@@ -207,6 +207,15 @@ composer voucher:reserve -- --client=televika --voucher=1 --attempt=order-42 --c
 composer voucher:confirm -- --client=televika --voucher=1 --attempt=order-42
 composer voucher:release -- --client=televika --voucher=1 --attempt=order-42
 composer voucher:list-redemptions -- --client=televika --voucher=1
+
+# Checkout attempts — pre-payment lifecycle (Phase 18)
+composer checkout:create -- --client=televika --attempt=order-42 --package=7 --country=DE --currency=EUR [--client-user=user-1] [--purchase-type=one_time_payment] [--method=card] [--interval=yearly]
+composer checkout:resolve-pricing -- --client=televika --attempt=order-42 [--device=web] [--provider-account=1] [--price-list=1]
+composer checkout:reserve-voucher -- --client=televika --attempt=order-42 --code=WELCOME10 [--client-user=user-1]
+composer checkout:select-provider -- --client=televika --attempt=order-42 --mode=test [--device=web]
+composer checkout:set-status -- --client=televika --attempt=order-42 --status=canceled
+composer checkout:set-status -- --client=televika --attempt=order-42 --status=failed --error-code=provider_declined --error-message="Card declined"
+composer checkout:list-attempts -- --client=televika
 ```
 
 `code` is `^[A-Z0-9][A-Z0-9_-]{2,63}$` (≥3 chars), unique per client, stored upper-case. A
@@ -228,6 +237,20 @@ and reserves it against an `--attempt` reference — repeating the same `--attem
 count once, ever); `voucher:release` frees it after a failed/canceled attempt so the usage cap
 is available again. A confirmed redemption can never be released, and a released one can never
 be confirmed. Full rule set: **`.claude/Voucher.md`**.
+
+`checkout:create` starts (or idempotently replays, by `--attempt`) a `checkout_attempts` row.
+`checkout:resolve-pricing` runs `PriceResolver` and writes a `pricing_decision_snapshots` row,
+advancing status to `pricing_resolved`. `checkout:reserve-voucher` reserves the voucher (same
+`--attempt` string reused as the voucher redemption's own reference) and writes a
+`voucher_decision_snapshots` row, advancing to `voucher_reserved`; skip it entirely and go
+straight to `checkout:select-provider` for a no-voucher checkout — the status machine allows
+`pricing_resolved → provider_selected` directly. `checkout:select-provider` runs `ProviderRouter`
+and writes a `provider_routing_decision_snapshots` row, advancing to `provider_selected`.
+`checkout:set-status` drives any non-terminal → terminal exit (`failed` / `canceled` / `expired`
+/ `abandoned`) directly — useful for manually closing out an attempt without going through the
+rest of the pipeline. `--attempt` accepts either the caller's `attempt_reference` string or the
+numeric `checkout_attempts.id` everywhere it's a parameter (resolved by trying the id first,
+then falling back to a lookup by reference).
 
 `composer db:setup` in `local` / `testing` also seeds a `local-dev` client with a fixed token:
 `gk_test_000000000000dead.localdevsecretlocaldevsecret1234` (dev only — the seeder no-ops in

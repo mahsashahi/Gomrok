@@ -397,6 +397,47 @@ duplicate.
   bp = 0.01%..100.00%), so `1000/100` as a float would risk a rounding artifact `Money::percentage`
   (which takes a `BigRational`) doesn't need.
 
+## Checkout attempts / decision snapshots (Phase 18)
+
+- **`attempt_reference` is reused, not re-invented.** `ReserveCheckoutVoucherHandler` passes the
+  *checkout attempt's own* `attemptReference()` straight through as the voucher redemption's
+  `attempt_reference` (Phase 17). One caller-supplied string threads both records — there is no
+  second idempotency key to generate or keep in sync. A new checkout step that needs its own
+  idempotent child record should reach for this same device before inventing a new one.
+- **Three decision-snapshot repositories, one deliberate omission: no `update()`.** This is not
+  an oversight — it's how "history never changes when rules change" is enforced at the type
+  level, not just by convention. If a future phase needs to *correct* a snapshot (not just add
+  one), that's a new decision, not a mutation: `save()` again against a fresh checkout attempt,
+  never a patch to an existing row. Anyone tempted to add an `update()` method to
+  `PricingDecisionSnapshotRepository` / `VoucherDecisionSnapshotRepository` /
+  `ProviderRoutingDecisionSnapshotRepository` should stop and re-read this note first.
+- **Why `voucher_decision_snapshots` carries no amounts.** The instinct is to snapshot "what the
+  voucher did" the same way `pricing_decision_snapshots` snapshots "what the price resolved to" —
+  but the amounts already live, immutably, on `voucher_redemptions` (Phase 17 never mutates them
+  after creation). Duplicating them here would just be a second copy that could drift. The table
+  exists only because a voucher's *name*/*code* can be renamed later (`UpdateVoucher`) and the
+  decision needs to remember what it was called *at the time*.
+- **`CheckoutAttemptStatus::transitionTo()` check order matters** — terminal-check first, then
+  same-status no-op, then exit, then the `converted_to_payment`-requires-`confirmed` special
+  case, then the general rank comparison last. Reordering these (e.g. checking rank before the
+  exit case) would wrongly reject `confirmed → failed` (rank 8 → null comparison breaks) or wrongly
+  allow a terminal→terminal move. `CheckoutAttemptStatusTest` pins this order with focused cases
+  per branch — extend it, don't just add a new status and assume the existing order still holds.
+- **`CheckoutAttempt::start()` trims but does not case-normalize `attempt_reference`** —
+  deliberately different from `country`/`currency_code`, which *are* upper-cased. A caller's
+  attempt reference is an opaque token (could be a UUID, an order number with mixed case, …);
+  changing its case would break equality against whatever the caller stores on their side. Don't
+  "fix" this to uppercase for consistency with the other fields — it was a specific test failure
+  (`commercialSnapshotReflectsTheAttemptsOwnContext` initially expected the wrong case) that
+  confirmed this is correct, not a bug.
+- **Cross-module snapshot VOs live beside the type they depend on, not in `Checkout`.**
+  `PricingDecisionSnapshot` lives in `Modules\Pricing\Application` (needs `ResolvedPrice`);
+  `ProviderRoutingDecisionSnapshot` lives in `Modules\Providers\Application\Routing` (needs
+  `RoutingDecision`); only `VoucherDecisionSnapshot` lives in `Domain` because it depends only on
+  `Voucher`/`VoucherRedemption`, both Domain types. `Checkout`'s handlers call each module's `of()`
+  factory and its `save()` port — `Checkout` never defines its own copy of any of the three
+  snapshot shapes.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

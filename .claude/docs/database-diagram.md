@@ -14,12 +14,14 @@ flowchart TD
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
     Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
     Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)<br/>price_lists + price_list_packages — A/B (P15)"]
-    Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)<br/>voucher_redemptions — discount calc & redemption lifecycle (P17)"]
+    Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)<br/>voucher_redemptions — discount calc & redemption lifecycle (P17)<br/>voucher_decision_snapshots — Phase 18"]
+    Checkout["Checkout<br/>checkout_attempts — pre-payment lifecycle anchor (P18)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
     Ref -.-> Pricing
     Ref -.-> Vouchers
+    Ref -.-> Checkout
     Clients --> Xc
     Clients --> Packages
     Providers --> Packages
@@ -28,11 +30,17 @@ flowchart TD
     Clients --> Vouchers
     Packages --> Vouchers
     Providers --> Vouchers
+    Clients --> Checkout
+    Packages --> Checkout
+    Pricing --> Checkout
+    Vouchers --> Checkout
+    Providers --> Checkout
     Clients --> Payments
     Providers --> Payments
     Packages --> Payments
     Pricing --> Payments
     Vouchers --> Payments
+    Checkout --> Payments
     Payments --> Subscriptions
     Payments --> Webhooks
     Payments --> Notifications
@@ -40,7 +48,7 @@ flowchart TD
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers done;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout done;
     class Payments,Subscriptions,Webhooks,Notifications,Admin todo;
 ```
 
@@ -714,3 +722,83 @@ touching this table, making it the per-voucher mutex that closes the race on the
 `VoucherDiscountCalculator` computes `nominal_discount_minor` / `applied_discount_minor` /
 `payable_minor` at reserve time; confirm increments `vouchers.redeemed_count` exactly once.
 Full rule set: **`.claude/Voucher.md`**.
+
+## Checkout + decision snapshots (Phase 18)
+
+```mermaid
+erDiagram
+    checkout_attempts {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        varchar client_user_ref "nullable"
+        varchar attempt_reference "caller-supplied; UNIQUE (client_id, attempt_reference)"
+        int package_id FK "-> packages.id (CASCADE)"
+        char country FK "-> countries.code (RESTRICT)"
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        varchar purchase_type "nullable"
+        varchar payment_method "nullable"
+        varchar subscription_interval "nullable"
+        varchar status "CheckoutAttemptStatus, default started"
+        varchar error_code "nullable"
+        varchar error_message "nullable"
+        datetime created_at
+        datetime updated_at "nullable"
+        datetime abandoned_at "nullable, reserved for P29"
+        datetime expired_at "nullable, reserved for P29"
+    }
+    pricing_decision_snapshots {
+        int id PK
+        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); UNIQUE"
+        int client_id FK "-> clients.id (CASCADE)"
+        int package_id FK "-> packages.id (CASCADE)"
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        bigint amount_minor
+        varchar source "baseline | dimension_override | price_list"
+        json payload "full ResolvedPrice::toArray()"
+        datetime created_at "write-once, no updated_at"
+    }
+    voucher_decision_snapshots {
+        int id PK
+        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); UNIQUE"
+        int client_id FK "-> clients.id (CASCADE)"
+        int voucher_id FK "-> vouchers.id (CASCADE)"
+        int voucher_redemption_id FK "-> voucher_redemptions.id (CASCADE); UNIQUE"
+        varchar voucher_code "denormalized"
+        varchar voucher_name "denormalized"
+        datetime created_at "write-once, no updated_at"
+    }
+    provider_routing_decision_snapshots {
+        int id PK
+        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); UNIQUE"
+        int client_id FK "-> clients.id (CASCADE)"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        varchar payment_method "nullable"
+        varchar purchase_type
+        json payload "full RoutingDecision::toArray()"
+        datetime created_at "write-once, no updated_at"
+    }
+
+    clients ||--o{ checkout_attempts : "attempts"
+    packages ||--o{ checkout_attempts : "for"
+    countries ||--o{ checkout_attempts : "in"
+    currencies ||--o{ checkout_attempts : "priced in"
+    checkout_attempts ||--o| pricing_decision_snapshots : "priced by"
+    checkout_attempts ||--o| voucher_decision_snapshots : "discounted by"
+    checkout_attempts ||--o| provider_routing_decision_snapshots : "routed by"
+    voucher_redemptions ||--o| voucher_decision_snapshots : "amounts from"
+    provider_accounts ||--o{ provider_routing_decision_snapshots : "chosen"
+```
+
+`checkout_attempts` is the new `Checkout` module's anchor table — `attempt_reference` is the
+external idempotent key, `id` is the internal FK target for the three decision-snapshot tables
+(one per owning module: Pricing / Vouchers / Providers), each `UNIQUE (checkout_attempt_id)` and
+write-once (no update method on any repository port). Lifecycle is a 9-rank happy path
+(`started` → … → `converted_to_payment`) plus 4 unranked exit statuses
+(`failed`/`canceled`/`expired`/`abandoned`) reachable from any non-terminal status; skipping ranks
+is allowed (no voucher ⇒ `pricing_resolved → provider_selected` directly). Phase 18 drives
+`started → pricing_resolved → (voucher_reserved →) provider_selected` and any non-terminal → exit
+for real; `provider_checkout_created` … `confirmed`/`converted_to_payment` are modelled for
+Payments (Phase 20) and the provider adapters (Phase 21+). When a `payments` row is created later
+it links back and copies only `CheckoutAttempt::commercialSnapshot()`'s immutable fields — no
+checkout-attempt or decision-snapshot row is ever deleted. Full detail:
+`.claude/docs/database-design.md` → "Checkout + decision snapshots (Phase 18)".

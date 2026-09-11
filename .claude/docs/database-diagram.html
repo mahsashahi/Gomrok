@@ -35,12 +35,14 @@ flowchart TD
     Providers["Providers&lt;br/&gt;capabilities + purchase types (P8)&lt;br/&gt;provider_accounts + endpoints/countries/methods (P9)&lt;br/&gt;provider_groups + routing (P10)"]
     Packages["Packages&lt;br/&gt;availability (P11)&lt;br/&gt;purchase capabilities + provider definitions (P12)"]
     Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + group-package rows (P13)&lt;br/&gt;price_rules (P14)&lt;br/&gt;price_lists + price_list_packages (P15)"]
-    Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)&lt;br/&gt;voucher_redemptions (P17)"]
+    Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)&lt;br/&gt;voucher_redemptions (P17)&lt;br/&gt;voucher_decision_snapshots (P18)"]
+    Checkout["Checkout&lt;br/&gt;checkout_attempts — pre-payment anchor (P18)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
     Ref -.-&gt; Pricing
     Ref -.-&gt; Vouchers
+    Ref -.-&gt; Checkout
     Clients --&gt; Xc
     Clients --&gt; Packages
     Providers --&gt; Packages
@@ -49,18 +51,24 @@ flowchart TD
     Clients --&gt; Vouchers
     Packages --&gt; Vouchers
     Providers --&gt; Vouchers
+    Clients --&gt; Checkout
+    Packages --&gt; Checkout
+    Pricing --&gt; Checkout
+    Vouchers --&gt; Checkout
+    Providers --&gt; Checkout
     Clients --&gt; Payments
     Providers --&gt; Payments
     Packages --&gt; Payments
     Pricing --&gt; Payments
     Vouchers --&gt; Payments
+    Checkout --&gt; Payments
     Payments --&gt; Subscriptions
     Payments --&gt; Webhooks
     Payments --&gt; Notifications
     Admin -.-&gt; Payments
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers done;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout done;
     class Payments,Subscriptions,Webhooks,Notifications,Admin todo;
 </pre>
 
@@ -615,6 +623,70 @@ erDiagram
     vouchers ||--o{ voucher_redemptions : "reserves against"
     clients ||--o{ voucher_redemptions : "attempted by"
     currencies ||--o{ voucher_redemptions : "priced in"
+</pre>
+
+<h2>Checkout + decision snapshots (Phase 18)</h2>
+<pre class="mermaid">
+erDiagram
+    checkout_attempts {
+        int id PK
+        int client_id FK
+        varchar client_user_ref
+        varchar attempt_reference
+        int package_id FK
+        char country FK
+        char currency_code FK
+        varchar purchase_type
+        varchar payment_method
+        varchar subscription_interval
+        varchar status
+        varchar error_code
+        varchar error_message
+        datetime created_at
+        datetime updated_at
+        datetime abandoned_at
+        datetime expired_at
+    }
+    pricing_decision_snapshots {
+        int id PK
+        int checkout_attempt_id FK
+        int client_id FK
+        int package_id FK
+        char currency_code FK
+        bigint amount_minor
+        varchar source
+        json payload
+        datetime created_at
+    }
+    voucher_decision_snapshots {
+        int id PK
+        int checkout_attempt_id FK
+        int client_id FK
+        int voucher_id FK
+        int voucher_redemption_id FK
+        varchar voucher_code
+        varchar voucher_name
+        datetime created_at
+    }
+    provider_routing_decision_snapshots {
+        int id PK
+        int checkout_attempt_id FK
+        int client_id FK
+        int provider_account_id FK
+        varchar payment_method
+        varchar purchase_type
+        json payload
+        datetime created_at
+    }
+    clients ||--o{ checkout_attempts : "attempts"
+    packages ||--o{ checkout_attempts : "for"
+    countries ||--o{ checkout_attempts : "in"
+    currencies ||--o{ checkout_attempts : "priced in"
+    checkout_attempts ||--o| pricing_decision_snapshots : "priced by"
+    checkout_attempts ||--o| voucher_decision_snapshots : "discounted by"
+    checkout_attempts ||--o| provider_routing_decision_snapshots : "routed by"
+    voucher_redemptions ||--o| voucher_decision_snapshots : "amounts from"
+    provider_accounts ||--o{ provider_routing_decision_snapshots : "chosen"
 </pre>
 </div>
 

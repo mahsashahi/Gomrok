@@ -7,6 +7,88 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-11 — Phase 18: Decision snapshots
+
+**Summary.** History never changes when rules change. New `Checkout` module anchored by
+`checkout_attempts` — the parent record for the whole pre-payment lifecycle, so Gomrok can see
+how far a customer got before a `payments` row exists, whether they abandoned checkout, and
+which pricing/voucher/routing decisions were made. `attempt_reference` is the external,
+caller-supplied idempotent key; `checkout_attempts.id` is the internal relational anchor that
+three new write-once decision-snapshot tables FK to, one per owning module:
+`pricing_decision_snapshots` (Pricing), `voucher_decision_snapshots` (Vouchers, thin — amounts
+stay on `voucher_redemptions`), `provider_routing_decision_snapshots` (Providers). A new
+`CheckoutAttemptStatus` enum implements a monotonic-rank state machine — 9 ranked happy-path
+statuses plus 4 unranked exit statuses reachable from any non-terminal status, skipping ranks
+allowed, terminal once reached. Decisions (`PhaseResults/PhaseDecisions.md` Phase 18 Q1–Q5 — Q1
+and Q3 were full user-authored designs, not a choice from the presented options): **Q1**
+`checkout_attempts` central anchor table, own status lifecycle, decision tables link to it,
+final payment copies only immutable commercial data · **Q2** new `Checkout` module · **Q3**
+monotonic-rank state machine with allowed skipping, exact transition set dictated by the user ·
+**Q4** three per-module decision-snapshot tables, thin `voucher_decision_snapshots` · **Q5** one
+handler per lifecycle step + `CheckoutAttempt::commercialSnapshot()`. **Schema confirmed by the
+user.**
+
+**Files created**
+- Migration `20260911150001_create_checkout_and_decision_snapshot_tables.php` →
+  `CreateCheckoutAndDecisionSnapshotTables` (4 tables: `checkout_attempts`,
+  `pricing_decision_snapshots`, `voucher_decision_snapshots`, `provider_routing_decision_snapshots`).
+- New `Checkout` module: `Domain/{CheckoutAttemptStatus,CheckoutAttempt,CheckoutAttemptRepository}.php`;
+  `Application/{CheckoutAuditSnapshot,CheckoutAttemptSummary,CheckoutAttemptDirectory}.php`;
+  `Application/CreateCheckoutAttempt/{Command,Result,Handler}.php`;
+  `Application/ChangeCheckoutAttemptStatus/ChangeCheckoutAttemptStatusHandler.php`;
+  `Application/ResolveCheckoutPricing/{Command,Result,Handler}.php`;
+  `Application/ReserveCheckoutVoucher/{Command,Result,Handler}.php`;
+  `Application/SelectCheckoutProvider/{Command,Result,Handler}.php`;
+  `Infrastructure/{PdoCheckoutAttemptRepository,PdoCheckoutAttemptDirectory,definitions}.php`.
+- Pricing: `Application/PricingDecisionSnapshot.php` (+ `of()`),
+  `Application/PricingDecisionSnapshotRepository.php` port,
+  `Infrastructure/PdoPricingDecisionSnapshotRepository.php`.
+- Vouchers: `Domain/VoucherDecisionSnapshot.php`, `Domain/VoucherDecisionSnapshotRepository.php`
+  port, `Infrastructure/PdoVoucherDecisionSnapshotRepository.php`.
+- Providers: `Application/Routing/ProviderRoutingDecisionSnapshot.php` (+ `of()`),
+  `Application/Routing/ProviderRoutingDecisionSnapshotRepository.php` port,
+  `Infrastructure/PdoProviderRoutingDecisionSnapshotRepository.php`.
+- CLI: `bin/{CreateCheckoutAttempt,ResolveCheckoutPricing,ReserveCheckoutVoucher,
+  SelectCheckoutProvider,SetCheckoutAttemptStatus,ListCheckoutAttempts}.php` +
+  `composer checkout:create|resolve-pricing|reserve-voucher|select-provider|set-status|list-attempts`.
+- Tests: `tests/Support/{InMemoryCheckoutAttemptRepository,InMemoryPricingDecisionSnapshotRepository,
+  InMemoryVoucherDecisionSnapshotRepository,InMemoryProviderRoutingDecisionSnapshotRepository}.php`;
+  `tests/Unit/Modules/Checkout/Domain/{CheckoutAttemptStatusTest,CheckoutAttemptTest}.php`;
+  `tests/Unit/Modules/Checkout/Application/CheckoutAttemptHandlersTest.php` (full cross-module
+  wiring, happy path + no-voucher path); `tests/Integration/CheckoutAttemptPersistenceTest.php`
+  (real-MySQL round trip, CI-only).
+- `.claude/PhaseResults/Phase18Result.md`.
+
+**Files changed**
+- `src/Modules/Pricing/Application/ResolvedPrice.php` — gained `toArray()` for the pricing
+  snapshot payload.
+- `src/Modules/Providers/Application/Routing/RoutingDecision.php` — docblock updated to
+  reference `ProviderRoutingDecisionSnapshot` (was stale Phase 17 text); no behavior change.
+- `src/Bootstrap/ContainerFactory.php` — `MODULE_DEFINITIONS` gained
+  `Checkout/Infrastructure/definitions.php`.
+- `src/Modules/Pricing/Infrastructure/definitions.php`,
+  `src/Modules/Vouchers/Infrastructure/definitions.php`,
+  `src/Modules/Providers/Infrastructure/definitions.php` — wired the three new snapshot
+  repositories.
+- `composer.json` / `composer.lock`.
+- `tests/Integration/MigrationRoundTripTest.php` — 4 new tables added.
+- DB docs (`database-design.md` → 46 tables + a new "Checkout + decision snapshots (Phase 18)"
+  section, `database-diagram.md` + `.html` 16/16 mermaid, `db_explain.md`); `Architecture.md`
+  (§3, new §8 Checkout subsection, §9 pipeline, §13 deferred); `Phases.md` (row 18 → ☑, as-built
+  scope); `.claude/Voucher.md` (§ note: `voucher_decision_snapshots` added Phase 18);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D21).
+
+**Reason.** Phase 18 of the 30-phase plan.
+
+**Migration notes.** 4 new tables, additive; no existing-table changes; no backfill. All four
+decision-snapshot tables are write-once by construction (no update method on any repository
+port); `checkout_attempts` is the only mutable one, driven only by `transitionTo()`'s app-enforced
+rules (no DB constraint encodes the state machine).
+
+**Breaking changes.** None. All changes are additive (new module, new tables, one new VO method,
+one stale docblock correction).
+
 ## 2026-09-11 — Phase 17: Voucher validation, discount calc & redemption lifecycle
 
 **Summary.** Applies a voucher safely, exactly once. Added `voucher_redemptions` — a reserve →

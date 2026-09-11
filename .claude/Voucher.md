@@ -269,12 +269,29 @@ Three states — `reserved` → `confirmed` (terminal, permanent) or `reserved` 
 - `attempt_reference` is caller-supplied and opaque to this module (Phase 17 Q1); Phase 20 will
   pass the real payment id once Payments exists — no schema or handler change needed then.
 
-## 8. Decision snapshot (Phase 18 — recorded here for completeness)
+## 8. Decision snapshot (Phase 18 — implemented)
 
-Every payment/subscription that used a voucher preserves a **voucher decision snapshot**: the
-voucher id + code, the resolved discount (type, value, currency, cap), the discount amount
-applied, and the eligibility inputs — so later voucher edits never change historical
-transactions.
+`voucher_decision_snapshots` freezes **which** voucher applied to a checkout attempt — not the
+amounts, which already live immutably on `voucher_redemptions` (§7, never mutated after
+creation). One row per checkout attempt (`UNIQUE (checkout_attempt_id)`), also
+`UNIQUE (voucher_redemption_id)` — at most one voucher decision per attempt, at most one snapshot
+per redemption.
+
+| Column | Notes |
+| --- | --- |
+| `checkout_attempt_id` | FK → `checkout_attempts(id)` CASCADE; `UNIQUE` |
+| `client_id` | FK → `clients(id)` CASCADE |
+| `voucher_id` | FK → `vouchers(id)` CASCADE |
+| `voucher_redemption_id` | FK → `voucher_redemptions(id)` CASCADE; `UNIQUE` — the amounts live there |
+| `voucher_code` / `voucher_name` | denormalized at decision time, so a later `UpdateVoucher` rename never rewrites history |
+| `created_at` | write-once — no `updated_at`, no update method on the repository port |
+
+Written by `ReserveCheckoutVoucherHandler` (`Modules\Checkout`) via `VoucherDecisionSnapshot::of()`,
+in the same transaction that reserves the redemption and advances `checkout_attempts.status` to
+`voucher_reserved`. See `.claude/docs/database-design.md` → "Checkout + decision snapshots
+(Phase 18)" for the full cross-module design (the `checkout_attempts` anchor, and the sibling
+`pricing_decision_snapshots` / `provider_routing_decision_snapshots` tables owned by Pricing and
+Providers respectively).
 
 ## 9. Decisions log
 
@@ -290,8 +307,9 @@ transactions.
 | 17 Q3 | Concurrency safety = `SELECT ... FOR UPDATE` on the `vouchers` row inside every reserve/confirm/release transaction; all cap re-checks happen under that lock before any write. | 2026-09-11 |
 | 17 Q4 | `VoucherDiscountCalculator` always clamps to `[0, price]` (configured cap, then price floor); the result carries both `nominalDiscountMinor` (pre-clamp) and `appliedDiscountMinor` (post-clamp) rather than rejecting or hiding the clamp. | 2026-09-11 |
 | 17 Q5 | Three lifecycle handlers (`ReserveVoucherRedemption`, `ConfirmVoucherRedemption`, `ReleaseVoucherRedemption`) + `VoucherDiscountCalculator` + `PdoVoucherRedemptionRepository` implementing the Phase 16 `VoucherUsagePort` + `voucher:reserve|confirm|release|list-redemptions` CLI. | 2026-09-11 |
+| 18 | `voucher_decision_snapshots` added (thin — identity only, `voucher_code`/`voucher_name`, no amounts; amounts stay on `voucher_redemptions`). `UNIQUE (checkout_attempt_id)` + `UNIQUE (voucher_redemption_id)`. Written by the new `Checkout` module's `ReserveCheckoutVoucherHandler` via `VoucherDecisionSnapshot::of()`. No change to any existing Vouchers table or handler. Full cross-module design: `.claude/docs/database-design.md` → "Checkout + decision snapshots (Phase 18)". | 2026-09-11 |
 
-## 10. Implementation pointers (Phase 16–17 — as built)
+## 10. Implementation pointers (Phase 16–18 — as built)
 
 `src/Modules/Vouchers/{Domain,Application,Infrastructure}`:
 
@@ -310,10 +328,14 @@ transactions.
 - Domain (Phase 17 additions): `RedemptionStatus` enum, `VoucherRedemption` aggregate,
   `VoucherRedemptionRepository` port; `VoucherRepository` gained `findByIdForUpdate` +
   `incrementRedeemedCount`.
+- Domain (Phase 18 addition): `VoucherDecisionSnapshot` (thin VO + `of()`),
+  `VoucherDecisionSnapshotRepository` port (`save(): int` + `findByCheckoutAttemptId()`, no
+  update method).
 - Infrastructure: `PdoVoucherRepository`, `PdoVoucherEligibilityRuleRepository`,
   `PdoVoucherCurrencyDiscountRepository`, `PdoVoucherDirectory`,
   `PdoVoucherRedemptionRepository` (implements both `VoucherRedemptionRepository` and
-  `VoucherUsagePort`), `PdoVoucherRedemptionDirectory`, `definitions.php`.
+  `VoucherUsagePort`), `PdoVoucherRedemptionDirectory`, `PdoVoucherDecisionSnapshotRepository`
+  (Phase 18), `definitions.php`.
 - CLI: `bin/{CreateVoucher,UpdateVoucher,SetVoucherEligibility,SetVoucherCurrencyDiscount,
   RemoveVoucherCurrencyDiscount,SetVoucherUsageLimits,SetVoucherStatus,ListVouchers,
   ReserveVoucherRedemption,ConfirmVoucherRedemption,ReleaseVoucherRedemption,
@@ -329,8 +351,6 @@ transactions.
 
 ## 11. Open questions / future work
 
-- Phase 18: voucher decision snapshot on the payment/subscription record (will use
-  `VoucherDiscountResult` / the confirmed `VoucherRedemption` row as its source).
 - Phase 19: `POST /api/v1/vouchers/validate` endpoint (a non-locking pre-check via the same
   `VoucherEligibilityEvaluator`, without reserving).
 - Phase 29: stale-`reserved`-row sweep (background job) — deferred by Phase 17 Q2.
