@@ -40,9 +40,10 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Pricing — dimension overrides (Phase 14) | `price_rules` — **1** |
 | Pricing — A/B price lists (Phase 15) | `price_lists`, `price_list_packages` — **2** |
 | Vouchers — definitions & eligibility (Phase 16) | `vouchers`, `voucher_eligibility_rules`, `voucher_currency_discounts` — **3** |
-| — | (more business tables land per module from Phase 17) |
+| Vouchers — redemption lifecycle (Phase 17) | `voucher_redemptions` — **1** |
+| — | (more business tables land per module from Phase 18) |
 
-**Total: 41 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 42 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -826,10 +827,9 @@ stored assignment pointing at a now-disabled list drops to control). Then:
 
 ## Vouchers — definitions & eligibility (Phase 16)
 
-Voucher definitions and the eligibility gate. **Not this phase:** discount calculation,
-`voucher_redemptions`, the redemption lifecycle (Phase 17), the voucher decision snapshot
-(Phase 18). **Source of truth for all voucher behaviour: `.claude/Voucher.md`** — read it
-alongside this section; if they ever disagree, `Voucher.md` wins.
+Voucher definitions and the eligibility gate (discount calc + redemption is Phase 17, below).
+**Source of truth for all voucher behaviour: `.claude/Voucher.md`** — read it alongside this
+section; if they ever disagree, `Voucher.md` wins.
 
 ### `vouchers`
 
@@ -850,7 +850,7 @@ alongside this section; if they ever disagree, `Voucher.md` wins.
 | `max_total_redemptions` | INT UNSIGNED | yes | **`NULL` = unlimited globally** (Phase 16 Q3) |
 | `max_per_user` | INT UNSIGNED | yes | **`NULL` = unlimited per client user** |
 | `max_per_client` | INT UNSIGNED | yes | **`NULL` = unlimited per client** |
-| `redeemed_count` | INT UNSIGNED | no | default `0`; global tally, **Phase 17 increments it** |
+| `redeemed_count` | INT UNSIGNED | no | default `0`; global tally, incremented atomically on confirm (Phase 17) |
 | `created_at` / `updated_at` | DATETIME | no / yes | |
 
 `UNIQUE (client_id, code)` = `uniq_vouchers_client_code`; `INDEX (client_id, status)` =
@@ -890,9 +890,59 @@ no row here.
 (`percentage` / `full`) → else (`none`) not applicable in X.
 **Eligibility** (`VoucherEligibilityEvaluator`, Phase 16 Q4): reports **every** unmet condition —
 status, window, client scope, every restricted dimension, discount applicability, minimum
-purchase (same-currency comparison only), first-purchase-only, and the **global** usage cap.
-Per-user / per-client caps need `voucher_redemptions` and are Phase 17 (`VoucherUsagePort` is
-declared, not implemented, this phase). Full detail: `.claude/Voucher.md` §5.
+purchase (same-currency comparison only), first-purchase-only, and the global / per-user /
+per-client usage caps (Phase 17 — see below). Full detail: `.claude/Voucher.md` §5.
+
+---
+
+## Vouchers — redemption lifecycle (Phase 17)
+
+Discount calculation and a concurrency-safe reserve → confirm/release lifecycle. One table.
+
+### `voucher_redemptions`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `voucher_id` | INT UNSIGNED | no | FK → `vouchers(id)` CASCADE |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE (= the voucher's client) |
+| `client_user_ref` | VARCHAR(120) | yes | required at reserve time iff the voucher's `max_per_user` is set |
+| `attempt_reference` | VARCHAR(191) | no | opaque, caller-supplied (Phase 17 Q1); Phase 20 passes the payment id |
+| `status` | VARCHAR(20) | no | `reserved` / `confirmed` / `released`, default `reserved` |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT |
+| `price_minor` | BIGINT UNSIGNED | no | pre-discount price at reservation time |
+| `nominal_discount_minor` | BIGINT UNSIGNED | no | the discount rule's value before any clamping |
+| `applied_discount_minor` | BIGINT UNSIGNED | no | after the configured cap + price-floor clamp |
+| `payable_minor` | BIGINT UNSIGNED | no | `price_minor - applied_discount_minor` |
+| `reserved_at` | DATETIME | no | |
+| `confirmed_at` / `released_at` | DATETIME | yes / yes | set on the matching transition |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (voucher_id, attempt_reference)` = `uniq_voucher_redemptions_attempt` (the idempotency
+key); `INDEX (voucher_id, client_user_ref, status)` = `idx_voucher_redemptions_user`;
+`INDEX (voucher_id, client_id, status)` = `idx_voucher_redemptions_client`;
+`INDEX (status)` = `idx_voucher_redemptions_status` (for a future Phase 29 stale-reservation
+sweep). No change to `vouchers` — `redeemed_count` stays "confirmed, globally"; the live
+`reserved` count is a query over this table.
+
+### Resolution (Phase 17)
+
+**`VoucherDiscountCalculator`** resolves the applicable discount (override → default → `none`)
+against a real price: `nominalDiscountMinor` (pre-clamp) → apply the configured
+`max_discount_minor` cap (percentage only) → clamp to the price → `appliedDiscountMinor` →
+`payableMinor = price - applied`.
+
+**Reserve → confirm/release** (`ReserveVoucherRedemptionHandler` /
+`ConfirmVoucherRedemptionHandler` / `ReleaseVoucherRedemptionHandler`): every handler opens a
+transaction and locks the `vouchers` row (`SELECT ... FOR UPDATE`, Phase 17 Q3) before touching
+`voucher_redemptions` for that voucher — this lock is the per-voucher mutex every writer shares.
+Reserve looks up `(voucher_id, attempt_reference)` first and returns an existing row unchanged
+(idempotent replay); otherwise it re-runs `VoucherEligibilityEvaluator` (now including the
+global/per-user/per-client usage checks via `VoucherUsagePort`) and the discount calculator, then
+inserts a `reserved` row. A `reserved` row counts toward every cap from creation until it's
+`released` (Phase 17 Q2 — no automatic expiry; a stale-reservation sweep is Phase 29). Confirm
+increments `vouchers.redeemed_count` exactly once and is otherwise idempotent; release is
+idempotent and a confirmed redemption can never be released.
 
 ---
 
@@ -951,6 +1001,7 @@ declared, not implemented, this phase). Full detail: `.claude/Voucher.md` §5.
 | `src/Database/Seeds/PricingSeeder.php` | `Gomrok\Database\Seeds\PricingSeeder` (env-gated: `local-dev` gets default/dach/us groups + baselines + EUR→USD rate + two `pro` price rules + a control list per group + a disabled `dach` "List B · -10%" with an exact `pro` €21.00) |
 | `src/Database/Migrations/20260910170001_create_voucher_tables.php` | `Gomrok\Database\Migrations\CreateVoucherTables` |
 | `src/Database/Seeds/VouchersSeeder.php` | `Gomrok\Database\Seeds\VouchersSeeder` (env-gated: `local-dev` gets `WELCOME10` [10%, once/user] + `EU5` [`none` default, EUR/USD/GBP fixed overrides, `pro`-only]) |
+| `src/Database/Migrations/20260911130001_create_voucher_redemptions_table.php` | `Gomrok\Database\Migrations\CreateVoucherRedemptionsTable` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

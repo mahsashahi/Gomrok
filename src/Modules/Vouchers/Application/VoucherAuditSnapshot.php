@@ -7,6 +7,7 @@ namespace Gomrok\Modules\Vouchers\Application;
 use Gomrok\Modules\Vouchers\Domain\Voucher;
 use Gomrok\Modules\Vouchers\Domain\VoucherCurrencyDiscount;
 use Gomrok\Modules\Vouchers\Domain\VoucherEligibilityRule;
+use Gomrok\Modules\Vouchers\Domain\VoucherRedemption;
 
 /**
  * `before` / `after` payloads for `voucher_*` audit rows. No secrets.
@@ -63,6 +64,26 @@ final class VoucherAuditSnapshot
             'percent_bp' => $discount->percentBp,
             'amount_minor' => $discount->amountMinor,
             'max_discount_minor' => $discount->maxDiscountMinor,
+        ];
+    }
+
+    /**
+     * @return array<string, scalar|null>
+     */
+    public static function redemption(VoucherRedemption $redemption): array
+    {
+        return [
+            'id' => $redemption->id(),
+            'voucher_id' => $redemption->voucherId(),
+            'client_id' => $redemption->clientId(),
+            'client_user_ref' => $redemption->clientUserRef(),
+            'attempt_reference' => $redemption->attemptReference(),
+            'status' => $redemption->status()->value,
+            'currency' => $redemption->currencyCode(),
+            'price_minor' => $redemption->priceMinor(),
+            'nominal_discount_minor' => $redemption->nominalDiscountMinor(),
+            'applied_discount_minor' => $redemption->appliedDiscountMinor(),
+            'payable_minor' => $redemption->payableMinor(),
         ];
     }
 }

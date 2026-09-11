@@ -5,14 +5,23 @@ declare(strict_types=1);
 namespace Gomrok\Modules\Vouchers\Application;
 
 /**
- * Per-user / per-client redemption counts (Phase 16 Q4 — declared here as the
- * seam for **Phase 17**, which owns `voucher_redemptions` and implements this
- * port; {@see VoucherEligibilityEvaluator} does not call it yet, so no adapter
- * is bound in Phase 16).
+ * Redemption counts backing the eligibility evaluator's usage checks. Declared
+ * in Phase 16 (unimplemented seam); implemented in Phase 17 by
+ * `PdoVoucherRedemptionRepository` against `voucher_redemptions`.
+ *
+ * "Count" for `redemptionsByUser` / `redemptionsByClient` includes both
+ * `reserved` and `confirmed` rows — a reservation counts toward the cap from
+ * the moment it's created (Phase 17 Q2) until it's released.
  */
 interface VoucherUsagePort
 {
     public function redemptionsByUser(int $voucherId, string $clientUserRef): int;
 
     public function redemptionsByClient(int $voucherId, int $clientId): int;
+
+    /**
+     * Count of currently `reserved` rows for the voucher — added to
+     * `Voucher::redeemedCount()` (confirmed) for the global cap check.
+     */
+    public function activeReservations(int $voucherId): int;
 }

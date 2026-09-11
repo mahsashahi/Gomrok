@@ -7,6 +7,75 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-11 — Phase 17: Voucher validation, discount calc & redemption lifecycle
+
+**Summary.** Applies a voucher safely, exactly once. Added `voucher_redemptions` — a reserve →
+confirm/release lifecycle keyed by a caller-supplied `attempt_reference` (Phase 20 will pass the
+real payment id). `VoucherDiscountCalculator` resolves the applicable discount (override →
+default → inapplicable), rounds HALF_EVEN, clamps to the configured cap then to the price, and
+reports both the pre-clamp (`nominal`) and post-clamp (`applied`) amounts. Concurrency safety:
+every reserve/confirm/release handler `SELECT ... FOR UPDATE`s the parent `vouchers` row first —
+the de facto per-voucher mutex — then re-checks the global/per-user/per-client caps under that
+lock before writing; `ReserveVoucherRedemptionHandler` runs the now usage-aware
+`VoucherEligibilityEvaluator` as the authoritative gate inside the lock. `VoucherUsagePort`
+(declared Phase 16) is implemented by `PdoVoucherRedemptionRepository`, which also backs the new
+`VoucherRedemptionRepository` Domain port. Decisions (`PhaseResults/PhaseDecisions.md` Phase 17
+Q1–Q5): **Q1** opaque `attempt_reference` string · **Q2** three states, `reserved` counts
+immediately, no auto-expiry (Phase 29 sweep) · **Q3** `FOR UPDATE` row-lock + re-check under
+lock · **Q4** always clamp `[0, price]`, carry both nominal + applied amounts · **Q5** three
+lifecycle handlers + calculator + CLI. **Schema confirmed by the user.**
+
+**Files created**
+- Migration `20260911130001_create_voucher_redemptions_table.php` → `CreateVoucherRedemptionsTable`.
+- Vouchers domain: `RedemptionStatus` enum, `VoucherRedemption` aggregate (`reserve`, `confirm`,
+  `release` — both idempotent on their own terminal state, mutually exclusive on the other),
+  `VoucherRedemptionRepository` port.
+- Vouchers application: `VoucherDiscountResult`, `VoucherDiscountCalculator`,
+  `VoucherRedemptionSummary` + `VoucherRedemptionDirectory`; use cases `ReserveVoucherRedemption`
+  (Command/Result/Handler), `ConfirmVoucherRedemption`, `ReleaseVoucherRedemption`.
+- Vouchers infrastructure: `PdoVoucherRedemptionRepository` (implements both
+  `VoucherRedemptionRepository` and `VoucherUsagePort`), `PdoVoucherRedemptionDirectory`.
+- CLI: `bin/{ReserveVoucherRedemption,ConfirmVoucherRedemption,ReleaseVoucherRedemption,
+  ListVoucherRedemptions}.php` + `composer voucher:reserve|confirm|release|list-redemptions`.
+- Tests: `VoucherRedemptionTest`, `VoucherDiscountCalculatorTest`,
+  `VoucherRedemptionHandlersTest` (idempotency, cap exhaustion, release-frees-cap); +5 new cases
+  in `VoucherEligibilityEvaluatorTest` (global-with-reservations, per-user, per-client);
+  `tests/Integration/VoucherRedemptionPersistenceTest.php` (real-MySQL round trip, CI-only);
+  support double `InMemoryVoucherRedemptionRepository`.
+- `.claude/PhaseResults/Phase17Result.md`.
+
+**Files changed**
+- `src/Modules/Vouchers/Application/VoucherEligibilityEvaluator.php` — gained a `VoucherUsagePort`
+  dependency and global/per-user/per-client cap checks (`voucher.client_user_required`,
+  `voucher.user_limit_reached`, `voucher.client_limit_reached`; `voucher.exhausted` now includes
+  live reservations).
+- `src/Modules/Vouchers/Application/VoucherUsagePort.php` — gained `activeReservations()`.
+- `src/Modules/Vouchers/Application/VoucherAuditSnapshot.php` — gained `redemption()`.
+- `src/Modules/Vouchers/Domain/VoucherRepository.php` — gained `findByIdForUpdate()` and
+  `incrementRedeemedCount()`; `Infrastructure/{PdoVoucherRepository,definitions}.php` updated.
+- `tests/Support/{InMemoryVoucherRepository,InMemoryVoucherEligibilityRuleRepository->unchanged}.php`
+  — `InMemoryVoucherRepository` gained the two new methods;
+  `tests/Unit/Modules/Vouchers/Application/VoucherEligibilityEvaluatorTest.php` updated for the
+  new constructor arg.
+- `composer.json` / `composer.lock`.
+- `tests/Integration/MigrationRoundTripTest.php` — `voucher_redemptions` added.
+- DB docs (`database-design.md` → 42 tables, `database-diagram.md` + `.html` 15/15 mermaid,
+  `db_explain.md`); `Architecture.md` (§3, §8 Vouchers, §9 pipeline, §13 deferred); `Phases.md`
+  (row 17 → ☑); `.claude/Voucher.md` (schema, discount rules, eligibility table, usage-limit
+  mechanics, redemption lifecycle, decisions log, implementation pointers — all updated);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D20).
+
+**Reason.** Phase 17 of the 30-phase plan.
+
+**Migration notes.** 1 new table, additive; no existing-table changes; no backfill. Every
+lifecycle transition rule (idempotent-vs-error per terminal state) and the concurrency mechanism
+are app-enforced (a `SELECT ... FOR UPDATE` lock, not a DB constraint).
+
+**Breaking changes.** None. `VoucherEligibilityEvaluator::__construct` gained a required
+`VoucherUsagePort` argument — internal, the only call site (autowired via DI, plus one test) is
+updated.
+
 ## 2026-09-10 — Phase 16: Vouchers module — definitions & eligibility
 
 **Summary.** Voucher definitions and the eligibility gate — not the money math or redemption

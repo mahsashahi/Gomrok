@@ -34,7 +34,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 14 | Pricing overrides & resolution engine | ☑ | 2026-09-10 14:04 | 2026-09-10 16:05 | 6–9h | 2h 01m | N/A |
 | 15 | Price lists (A/B) | ☑ | 2026-09-10 14:57 | 2026-09-10 16:04 | 3–5h | 1h 07m | N/A |
 | 16 | Vouchers module: definitions & eligibility | ☑ | 2026-09-10 16:08 | 2026-09-10 20:01 | 4–6h | 3h 53m | N/A |
-| 17 | Voucher validation, discount calc & redemption lifecycle | ☐ | — | — | 5–8h | — | — |
+| 17 | Voucher validation, discount calc & redemption lifecycle | ☑ | 2026-09-11 12:52 | 2026-09-11 14:03 | 5–8h | 1h 11m | N/A |
 | 18 | Decision snapshots | ☐ | — | — | 2–4h | — | — |
 | 19 | Resolution API endpoints | ☐ | — | — | 3–5h | — | — |
 | 20 | Payments module: aggregate & lifecycle | ☐ | — | — | 4–6h | — | — |
@@ -516,17 +516,32 @@ disable-fallback" exit criteria move to Phase 24 with the deferred decision.)*
 
 **Goal:** apply a voucher safely, exactly once.
 
-**Scope:**
-- Validation service (runs before the provider transaction), discount calculation, and a
-  concurrency-safe redemption lifecycle: reserve → finalise on successful payment → release on
-  failed / cancelled / expired. Idempotent under webhook retries and client retries.
-- The provider only ever receives the final resolved amount (or a provider-supported discount
-  representation).
+**As built (decisions Phase 17 Q1–Q5; full rule set: `.claude/Voucher.md`):**
+- `voucher_redemptions` — reserve → confirm/release, identified by a caller-supplied
+  `attempt_reference` (Q1; Phase 20 will pass the payment id). Three states: `reserved` (counts
+  toward every cap immediately) → terminal `confirmed` or terminal `released` (Q2); **no
+  automatic expiry** of an abandoned reservation — deferred to a Phase 29 background job.
+- Concurrency safety (Q3): every reserve/confirm/release handler opens a transaction and
+  `SELECT ... FOR UPDATE`s the `vouchers` row first — the de facto per-voucher mutex — then
+  re-checks the global/per-user/per-client caps under that lock before writing.
+- `VoucherDiscountCalculator` (Q4) resolves the applicable discount (override → default →
+  inapplicable), rounds HALF_EVEN, clamps to the configured `max_discount_minor` cap then to the
+  price, and reports both `nominalDiscountMinor` (pre-clamp) and `appliedDiscountMinor`
+  (post-clamp) — never rejects, never goes negative.
+- `ReserveVoucherRedemptionHandler` (re-runs the now usage-aware `VoucherEligibilityEvaluator`
+  as the authoritative gate, inside the lock) / `ConfirmVoucherRedemptionHandler` (increments
+  `vouchers.redeemed_count` once) / `ReleaseVoucherRedemptionHandler` (Q5) — all idempotent.
+  `VoucherUsagePort` (declared Phase 16) is implemented by `PdoVoucherRedemptionRepository`.
+- `voucher:reserve|confirm|release|list-redemptions` CLI.
+- The provider only ever receives the final resolved (`payable_minor`) amount — never the
+  voucher itself.
 
-**DB:** `voucher_redemptions` (+ reservation state).
+**DB:** `voucher_redemptions` (1 table, migration `20260911130001`).
 
-**Exit:** concurrent-redemption safety, lifecycle transitions, and "duplicate request does not
-double-redeem" tested.
+**Exit:** concurrent-redemption safety (row-lock design + a sequential proof in
+`VoucherRedemptionHandlersTest` / `VoucherRedemptionPersistenceTest`), lifecycle transitions
+(`VoucherRedemptionTest`), and "duplicate request does not double-redeem" (idempotent replay by
+`attempt_reference`) tested.
 
 ## Phase 18 — Decision snapshots
 

@@ -352,15 +352,50 @@ duplicate.
   `voucher.first_purchase_unknown` (indeterminate); `isFirstPurchase === false` →
   `voucher.not_first_purchase`. Don't collapse them — the evaluator has no purchase-history
   lookup, so "unknown" is a real, different case from "known not first".
-- **`VoucherUsagePort` is declared but never called** in Phase 16 — no adapter is bound in
-  `definitions.php`. Per-user / per-client usage checks are Phase 17's job once
-  `voucher_redemptions` exists. Don't wire a stub "0 redemptions" implementation — that was
-  explicitly rejected (Q4 Option 3) as pretending to check something it doesn't.
+- **`VoucherUsagePort` was declared but not called** in Phase 16 — the seam existed with no
+  adapter bound. **Phase 17 implements it** (`PdoVoucherRedemptionRepository`, doubling as
+  `VoucherRedemptionRepository`) and wires it into `VoucherEligibilityEvaluator`, which now
+  needs a `VoucherUsagePort` constructor arg — any hand-built evaluator (only test code does
+  this) must pass one.
 - **`voucher_eligibility_rules.value` has no DB FK** — `package` / `provider_account` values are
   plain VARCHARs validated against the client at write time
   (`SetVoucherEligibilityHandler::validatePackage/validateProviderAccount`), not by the schema.
 - **`code` must be ≥3 characters**: `^[A-Z0-9][A-Z0-9_-]{2,63}$`. Two-character test codes like
   `"V1"` fail this regex — use 3+ chars (bit us once in `VoucherHandlersTest`).
+
+## Voucher redemption lifecycle (Phase 17)
+
+- **The `vouchers` row is the lock, not a separate mutex.** `ReserveVoucherRedemptionHandler` /
+  `ConfirmVoucherRedemptionHandler` / `ReleaseVoucherRedemptionHandler` all start with
+  `VoucherRepository::findByIdForUpdate` (`SELECT ... FOR UPDATE`) before touching
+  `voucher_redemptions`. Concurrency safety depends entirely on **every** writer doing this
+  first — a new code path that mutates `voucher_redemptions` without locking `vouchers` first
+  would silently reopen the race.
+- **Reserve re-runs the full eligibility evaluator *inside* the lock**, not a hand-rolled
+  duplicate of the cap logic — since the evaluator's `VoucherUsagePort` queries run on the same
+  PDO connection/transaction holding the lock, they see a consistent snapshot. This is also why
+  the evaluator doubles as both the best-effort pre-check (unlocked, e.g. a future
+  `/vouchers/validate`) and the authoritative gate (locked, inside Reserve) — same code, two
+  call sites.
+- **`nominalDiscountMinor` vs. `appliedDiscountMinor`**: nominal is the discount rule's raw
+  value; applied is after *both* the merchant's `max_discount_minor` cap (if any) *and* the hard
+  price-floor clamp. Don't fold the cap into "nominal" — a test (`percentageDiscountRespectsTheCap`)
+  caught exactly this bug: capping too early made nominal and applied indistinguishable, which
+  defeats the point of carrying both.
+- **Idempotency is "return what exists," not "error on repeat."** `Reserve` looks up
+  `(voucher_id, attempt_reference)` **before** running eligibility/discount logic and returns the
+  existing redemption's *current* status verbatim (even if it's since been confirmed or
+  released) — a retry never re-validates or re-inserts. `Confirm`/`Release` are idempotent only
+  on their *own* terminal state; the *other* terminal state is a hard error
+  (`voucher_redemption.already_released` / `voucher_redemption.already_confirmed`), because
+  silently accepting "confirm a released row" would be a real bug, not a benign retry.
+- **No stale-reservation cleanup exists yet.** An abandoned `reserved` row counts against every
+  cap forever until Phase 29 ships the sweep job. `reserved_at` + `idx_voucher_redemptions_status`
+  are already in place for it.
+- **`VoucherDiscountCalculator::basisPointsToPercent`** converts bp → a decimal string by
+  integer div/mod, never float division — `percent_bp` is exact-decimal by construction (1..10000
+  bp = 0.01%..100.00%), so `1000/100` as a float would risk a rounding artifact `Money::percentage`
+  (which takes a `BigRational`) doesn't need.
 
 ## Gotchas
 

@@ -29,6 +29,40 @@ final class InMemoryVoucherRepository implements VoucherRepository
         return $this->byId[$id] ?? null;
     }
 
+    public function findByIdForUpdate(int $id): ?Voucher
+    {
+        return $this->findById($id);
+    }
+
+    public function incrementRedeemedCount(int $id): void
+    {
+        $voucher = $this->byId[$id] ?? null;
+        if ($voucher === null) {
+            return;
+        }
+        $this->byId[$id] = Voucher::fromStorage(
+            $id,
+            $voucher->clientId(),
+            $voucher->code(),
+            $voucher->name(),
+            $voucher->description(),
+            $voucher->status(),
+            $voucher->validFrom(),
+            $voucher->validUntil(),
+            $voucher->firstPurchaseOnly(),
+            $voucher->minPurchaseMinor(),
+            $voucher->minPurchaseCurrency(),
+            $voucher->defaultDiscountType(),
+            $voucher->defaultPercentBp(),
+            $voucher->maxTotalRedemptions(),
+            $voucher->maxPerUser(),
+            $voucher->maxPerClient(),
+            $voucher->redeemedCount() + 1,
+            $voucher->createdAt(),
+            $voucher->updatedAt(),
+        );
+    }
+
     public function findByCode(int $clientId, string $code): ?Voucher
     {
         $code = strtoupper(trim($code));

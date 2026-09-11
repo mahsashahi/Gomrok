@@ -35,7 +35,7 @@ flowchart TD
     Providers["Providers&lt;br/&gt;capabilities + purchase types (P8)&lt;br/&gt;provider_accounts + endpoints/countries/methods (P9)&lt;br/&gt;provider_groups + routing (P10)"]
     Packages["Packages&lt;br/&gt;availability (P11)&lt;br/&gt;purchase capabilities + provider definitions (P12)"]
     Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + group-package rows (P13)&lt;br/&gt;price_rules (P14)&lt;br/&gt;price_lists + price_list_packages (P15)"]
-    Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)"]
+    Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)&lt;br/&gt;voucher_redemptions (P17)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
@@ -589,6 +589,32 @@ erDiagram
     currencies ||--o{ voucher_currency_discounts : "priced in"
     packages ||--o{ voucher_eligibility_rules : "scoped to (value)"
     provider_accounts ||--o{ voucher_eligibility_rules : "scoped to (value)"
+</pre>
+
+<h2>Vouchers — redemption lifecycle (Phase 17)</h2>
+<pre class="mermaid">
+erDiagram
+    voucher_redemptions {
+        int id PK
+        int voucher_id FK
+        int client_id FK
+        varchar client_user_ref
+        varchar attempt_reference
+        varchar status
+        char currency_code FK
+        bigint price_minor
+        bigint nominal_discount_minor
+        bigint applied_discount_minor
+        bigint payable_minor
+        datetime reserved_at
+        datetime confirmed_at
+        datetime released_at
+        datetime created_at
+        datetime updated_at
+    }
+    vouchers ||--o{ voucher_redemptions : "reserves against"
+    clients ||--o{ voucher_redemptions : "attempted by"
+    currencies ||--o{ voucher_redemptions : "priced in"
 </pre>
 </div>
 

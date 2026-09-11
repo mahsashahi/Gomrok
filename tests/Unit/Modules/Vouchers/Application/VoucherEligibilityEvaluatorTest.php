@@ -19,6 +19,7 @@ use Gomrok\Modules\Vouchers\Domain\VoucherEligibilityRule;
 use Gomrok\Modules\Vouchers\Domain\VoucherStatus;
 use Gomrok\Tests\Support\InMemoryVoucherCurrencyDiscountRepository;
 use Gomrok\Tests\Support\InMemoryVoucherEligibilityRuleRepository;
+use Gomrok\Tests\Support\InMemoryVoucherRedemptionRepository;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -32,6 +33,7 @@ final class VoucherEligibilityEvaluatorTest extends TestCase
 
     private InMemoryVoucherEligibilityRuleRepository $rules;
     private InMemoryVoucherCurrencyDiscountRepository $currencyDiscounts;
+    private InMemoryVoucherRedemptionRepository $usage;
     private VoucherEligibilityEvaluator $evaluator;
     private DateTimeImmutable $now;
 
@@ -40,7 +42,8 @@ final class VoucherEligibilityEvaluatorTest extends TestCase
         $this->now = new DateTimeImmutable('2026-09-10T12:00:00+00:00');
         $this->rules = new InMemoryVoucherEligibilityRuleRepository();
         $this->currencyDiscounts = new InMemoryVoucherCurrencyDiscountRepository();
-        $this->evaluator = new VoucherEligibilityEvaluator($this->rules, $this->currencyDiscounts);
+        $this->usage = new InMemoryVoucherRedemptionRepository();
+        $this->evaluator = new VoucherEligibilityEvaluator($this->rules, $this->currencyDiscounts, $this->usage);
     }
 
     #[Test]
@@ -247,6 +250,123 @@ final class VoucherEligibilityEvaluatorTest extends TestCase
         self::assertNotContains('voucher.exhausted', $this->evaluator->evaluate($notYet, $this->context())->reasons);
     }
 
+    #[Test]
+    public function theGlobalCapCountsActiveReservationsToo(): void
+    {
+        $voucher = Voucher::fromStorage(
+            self::VOUCHER_ID,
+            self::CLIENT,
+            'CAP',
+            'Cap',
+            null,
+            VoucherStatus::Active,
+            null,
+            null,
+            false,
+            null,
+            null,
+            DefaultDiscountType::Full,
+            null,
+            2,
+            null,
+            null,
+            1,
+            $this->now,
+            null,
+        );
+
+        // 1 confirmed (redeemedCount) + 0 reserved = 1 < 2 -> still eligible
+        self::assertTrue($this->evaluator->evaluate($voucher, $this->context())->eligible);
+
+        $this->reserve(self::VOUCHER_ID, 'attempt-1', null);
+
+        // 1 confirmed + 1 reserved = 2 >= 2 -> exhausted, even though redeemedCount alone is under the cap
+        self::assertContains('voucher.exhausted', $this->evaluator->evaluate($voucher, $this->context())->reasons);
+    }
+
+    #[Test]
+    public function thePerUserCapRequiresAClientUserRefAndIsEnforced(): void
+    {
+        $voucher = Voucher::fromStorage(
+            self::VOUCHER_ID,
+            self::CLIENT,
+            'ONCE',
+            'Once',
+            null,
+            VoucherStatus::Active,
+            null,
+            null,
+            false,
+            null,
+            null,
+            DefaultDiscountType::Full,
+            null,
+            null,
+            1,
+            null,
+            0,
+            $this->now,
+            null,
+        );
+
+        self::assertContains('voucher.client_user_required', $this->evaluator->evaluate($voucher, $this->context(clientUserRef: null))->reasons);
+        self::assertTrue($this->evaluator->evaluate($voucher, $this->context(clientUserRef: 'user-1'))->eligible);
+
+        $this->reserve(self::VOUCHER_ID, 'attempt-1', 'user-1');
+
+        self::assertContains('voucher.user_limit_reached', $this->evaluator->evaluate($voucher, $this->context(clientUserRef: 'user-1'))->reasons);
+        // a different user is unaffected
+        self::assertTrue($this->evaluator->evaluate($voucher, $this->context(clientUserRef: 'user-2'))->eligible);
+    }
+
+    #[Test]
+    public function thePerClientCapIsEnforced(): void
+    {
+        $voucher = Voucher::fromStorage(
+            self::VOUCHER_ID,
+            self::CLIENT,
+            'CLIENTCAP',
+            'Client cap',
+            null,
+            VoucherStatus::Active,
+            null,
+            null,
+            false,
+            null,
+            null,
+            DefaultDiscountType::Full,
+            null,
+            null,
+            null,
+            1,
+            0,
+            $this->now,
+            null,
+        );
+
+        self::assertTrue($this->evaluator->evaluate($voucher, $this->context())->eligible);
+
+        $this->reserve(self::VOUCHER_ID, 'attempt-1', null);
+
+        self::assertContains('voucher.client_limit_reached', $this->evaluator->evaluate($voucher, $this->context())->reasons);
+    }
+
+    private function reserve(int $voucherId, string $attemptReference, ?string $clientUserRef): void
+    {
+        $this->usage->save(\Gomrok\Modules\Vouchers\Domain\VoucherRedemption::reserve(
+            $voucherId,
+            self::CLIENT,
+            $clientUserRef,
+            $attemptReference,
+            'EUR',
+            1000,
+            0,
+            0,
+            1000,
+            $this->now,
+        ));
+    }
+
     private function voucher(
         ?DateTimeImmutable $validFrom = null,
         ?DateTimeImmutable $validUntil = null,
@@ -282,7 +402,8 @@ final class VoucherEligibilityEvaluatorTest extends TestCase
         ?int $amountMinor = null,
         ?string $amountCurrency = null,
         ?bool $isFirstPurchase = null,
+        ?string $clientUserRef = null,
     ): VoucherContext {
-        return new VoucherContext($clientId, $this->now, $country, $currency, amountMinor: $amountMinor, amountCurrency: $amountCurrency, isFirstPurchase: $isFirstPurchase);
+        return new VoucherContext($clientId, $this->now, $country, $currency, amountMinor: $amountMinor, amountCurrency: $amountCurrency, isFirstPurchase: $isFirstPurchase, clientUserRef: $clientUserRef);
     }
 }

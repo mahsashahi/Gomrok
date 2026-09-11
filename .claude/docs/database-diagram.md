@@ -14,7 +14,7 @@ flowchart TD
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
     Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
     Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)<br/>price_lists + price_list_packages — A/B (P15)"]
-    Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)"]
+    Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)<br/>voucher_redemptions — discount calc & redemption lifecycle (P17)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -672,7 +672,45 @@ rows = unrestricted (`package` / `provider_account` values validated at write ti
 `voucher_currency_discounts` overrides the voucher's default discount per currency; a currency
 using the default has no row. Usage limits are plain nullable columns on `vouchers`
 (`max_total_redemptions` / `max_per_user` / `max_per_client`, `NULL` = unlimited) — no per-scope
-table. `VoucherEligibilityEvaluator` reports every unmet condition; per-user / per-client caps
-need `voucher_redemptions` and are Phase 17. `local-dev` seeds `WELCOME10` (10%, once per user)
-and `EU5` (`none` default, EUR/USD/GBP fixed overrides, restricted to the `pro` package). Full
-rule set: **`.claude/Voucher.md`**.
+table. `VoucherEligibilityEvaluator` reports every unmet condition, including the global / per-user
+/ per-client usage caps implemented in Phase 17 (below). `local-dev` seeds `WELCOME10` (10%,
+once per user) and `EU5` (`none` default, EUR/USD/GBP fixed overrides, restricted to the `pro`
+package). Full rule set: **`.claude/Voucher.md`**.
+
+## Vouchers — redemption lifecycle (Phase 17)
+
+```mermaid
+erDiagram
+    voucher_redemptions {
+        int id PK
+        int voucher_id FK "-> vouchers.id (CASCADE)"
+        int client_id FK "-> clients.id (CASCADE)"
+        varchar client_user_ref "nullable; required iff voucher.max_per_user is set"
+        varchar attempt_reference "caller-supplied, opaque; UNIQUE (voucher_id, attempt_reference)"
+        varchar status "reserved | confirmed | released"
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        bigint price_minor "pre-discount price at reservation"
+        bigint nominal_discount_minor "before any clamping"
+        bigint applied_discount_minor "after cap + price-floor clamp"
+        bigint payable_minor "price - applied"
+        datetime reserved_at
+        datetime confirmed_at "nullable"
+        datetime released_at "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+
+    vouchers ||--o{ voucher_redemptions : "reserves against"
+    clients ||--o{ voucher_redemptions : "attempted by"
+    currencies ||--o{ voucher_redemptions : "priced in"
+```
+
+`reserved -> confirmed` (terminal) or `reserved -> released` (terminal), keyed by `(voucher_id,
+attempt_reference)` — Phase 20 will pass the payment id as `attempt_reference`. A `reserved` row
+counts toward every usage cap immediately and keeps counting until released; there is no
+automatic expiry (a stale-reservation sweep is a Phase 29 background job). Every
+reserve/confirm/release handler locks the `vouchers` row (`SELECT ... FOR UPDATE`) before
+touching this table, making it the per-voucher mutex that closes the race on the caps.
+`VoucherDiscountCalculator` computes `nominal_discount_minor` / `applied_discount_minor` /
+`payable_minor` at reserve time; confirm increments `vouchers.redeemed_count` exactly once.
+Full rule set: **`.claude/Voucher.md`**.

@@ -20,16 +20,21 @@ use Gomrok\Modules\Vouchers\Domain\VoucherEligibilityRuleRepository;
  *   - discount applicability (a `none`-default voucher needs a currency override);
  *   - minimum purchase (same-currency comparison only);
  *   - first-purchase-only;
- *   - the **global** usage cap (`redeemed_count` vs. `max_total_redemptions`).
+ *   - the global, per-user, and per-client usage caps (Phase 17 — via
+ *     {@see VoucherUsagePort}; `reserved` rows count until released, Phase 17 Q2).
  *
- * Per-user / per-client caps need `voucher_redemptions` and are Phase 17 (see
- * {@see VoucherUsagePort}, not called here).
+ * Called both as a best-effort pre-check (no lock — e.g. a future
+ * `/vouchers/validate`) and as the **authoritative** gate inside
+ * `ReserveVoucherRedemptionHandler`'s locked transaction (Phase 17 Q3), where
+ * the usage-port queries run against the same connection and therefore see a
+ * consistent snapshot while the `vouchers` row is held.
  */
 final readonly class VoucherEligibilityEvaluator
 {
     public function __construct(
         private VoucherEligibilityRuleRepository $rules,
         private VoucherCurrencyDiscountRepository $currencyDiscounts,
+        private VoucherUsagePort $usage,
     ) {
     }
 
@@ -83,8 +88,23 @@ final readonly class VoucherEligibilityEvaluator
             }
         }
 
-        if ($voucher->maxTotalRedemptions() !== null && $voucher->redeemedCount() >= $voucher->maxTotalRedemptions()) {
-            $reasons[] = 'voucher.exhausted';
+        if ($voucher->maxTotalRedemptions() !== null) {
+            $active = $voucherId !== null ? $this->usage->activeReservations($voucherId) : 0;
+            if ($voucher->redeemedCount() + $active >= $voucher->maxTotalRedemptions()) {
+                $reasons[] = 'voucher.exhausted';
+            }
+        }
+
+        if ($voucher->maxPerUser() !== null) {
+            if ($context->clientUserRef === null) {
+                $reasons[] = 'voucher.client_user_required';
+            } elseif ($voucherId !== null && $this->usage->redemptionsByUser($voucherId, $context->clientUserRef) >= $voucher->maxPerUser()) {
+                $reasons[] = 'voucher.user_limit_reached';
+            }
+        }
+
+        if ($voucher->maxPerClient() !== null && $voucherId !== null && $this->usage->redemptionsByClient($voucherId, $context->clientId) >= $voucher->maxPerClient()) {
+            $reasons[] = 'voucher.client_limit_reached';
         }
 
         return VoucherEligibility::failing($reasons);

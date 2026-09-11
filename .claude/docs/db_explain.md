@@ -539,18 +539,55 @@ there is no cap on the currency-agnostic default, because a cap is inherently cu
 voucher's default (`percentage`/`full`) → else (`none`) the voucher is inapplicable in X — this
 *is* one of the eligibility checks (`voucher.no_discount_for_currency`), not a separate lookup.
 
-**Eligibility** (`VoucherEligibilityEvaluator`, Phase 16 Q4) reports **every** unmet condition in
-one pass, not just the first: status, validity window, client scope, each restricted dimension,
-discount applicability for the checkout currency, minimum purchase (only compared when the
-checkout currency equals `min_purchase_currency` — no FX conversion in this check), first-purchase
-(an *unknown* `isFirstPurchase` is its own reason, `voucher.first_purchase_unknown`, distinct
-from a *known-false* one), and the global usage cap. Per-user / per-client caps need
-`voucher_redemptions` — **Phase 17** — and are declared-but-unimplemented behind
-`VoucherUsagePort` in Phase 16; the evaluator never calls it.
+**Eligibility** (`VoucherEligibilityEvaluator`, Phase 16 Q4 + Phase 17) reports **every** unmet
+condition in one pass, not just the first: status, validity window, client scope, each
+restricted dimension, discount applicability for the checkout currency, minimum purchase (only
+compared when the checkout currency equals `min_purchase_currency` — no FX conversion in this
+check), first-purchase (an *unknown* `isFirstPurchase` is its own reason,
+`voucher.first_purchase_unknown`, distinct from a *known-false* one), and — since Phase 17 — the
+global, per-user, and per-client usage caps via `VoucherUsagePort`.
 
 - **Set / removed by** `bin/CreateVoucher.php`, `UpdateVoucher.php`, `SetVoucherEligibility.php`,
   `SetVoucherCurrencyDiscount.php`, `RemoveVoucherCurrencyDiscount.php`,
   `SetVoucherUsageLimits.php`, `SetVoucherStatus.php`; listed by `ListVouchers.php`.
-- **Referenced by:** nothing yet (`voucher_redemptions` — Phase 17; `POST
-  /api/v1/vouchers/validate` — Phase 19; the payment/subscription voucher-decision snapshot —
-  Phase 18).
+- **Referenced by:** `voucher_redemptions` (Phase 17, below); `POST /api/v1/vouchers/validate`
+  (Phase 19); the payment/subscription voucher-decision snapshot (Phase 18).
+
+---
+
+## Vouchers — redemption lifecycle (Phase 17)
+
+Discount calculation and the reserve → confirm/release lifecycle. One table.
+
+### `voucher_redemptions`
+
+Identified by `(voucher_id, attempt_reference)` — `attempt_reference` is an opaque,
+caller-supplied string (Phase 17 Q1); Phase 20 will pass the real payment id once Payments
+exists, with no schema or handler change needed then.
+
+- **`status`** — `reserved` (counts toward every cap) → terminal `confirmed` (permanent,
+  increments `vouchers.redeemed_count` once) or terminal `released` (frees the cap; no counter
+  to decrement — a released row simply stops matching the `reserved`/`confirmed` filter every
+  cap query uses). No automatic expiry of an abandoned `reserved` row in this phase — that sweep
+  is a **Phase 29** background job (`reserved_at` / `INDEX (status)` are here for it).
+- **`price_minor` / `nominal_discount_minor` / `applied_discount_minor` / `payable_minor`** — a
+  snapshot from `VoucherDiscountCalculator` at reservation time. `nominal` is the discount rule's
+  raw value; `applied` is after the merchant-configured `max_discount_minor` cap (percentage
+  only) and then the hard price-floor clamp — the two figures differ only when one of those
+  clamps actually fired, which is exactly when you'd want to see it in a later audit/snapshot.
+- **Concurrency** (Phase 17 Q3): `ReserveVoucherRedemptionHandler` / `ConfirmVoucherRedemptionHandler`
+  / `ReleaseVoucherRedemptionHandler` all open a transaction and immediately
+  `VoucherRepository::findByIdForUpdate` the parent `vouchers` row (`SELECT ... FOR UPDATE`)
+  before touching this table — since every writer does this first, the `vouchers` row is a
+  de facto per-voucher mutex. Reserve re-runs `VoucherEligibilityEvaluator` (which now includes
+  the usage checks) **inside** that lock, so the eligibility re-check and the insert are atomic
+  with respect to any other reserve/confirm/release for the same voucher.
+- **Idempotency:** Reserve looks up `(voucher_id, attempt_reference)` first and, if found,
+  returns it unchanged (whatever its current status) instead of re-validating — a client/webhook
+  retry of the same attempt is always a no-op. Confirm/Release are similarly idempotent on their
+  own terminal state, but reject the *other* terminal transition
+  (`voucher_redemption.already_released` / `voucher_redemption.already_confirmed`).
+- **Set / advanced by** `bin/ReserveVoucherRedemption.php`, `ConfirmVoucherRedemption.php`,
+  `ReleaseVoucherRedemption.php`; listed by `ListVoucherRedemptions.php`.
+- **Referenced by:** nothing yet (the payment/subscription voucher-decision snapshot is
+  Phase 18; Payments passing a real payment id as `attempt_reference` is Phase 20).

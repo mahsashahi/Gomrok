@@ -110,6 +110,10 @@
         "voucher:set-limits": "php bin/SetVoucherUsageLimits.php",
         "voucher:set-status": "php bin/SetVoucherStatus.php",
         "voucher:list": "php bin/ListVouchers.php",
+        "voucher:reserve": "php bin/ReserveVoucherRedemption.php",
+        "voucher:confirm": "php bin/ConfirmVoucherRedemption.php",
+        "voucher:release": "php bin/ReleaseVoucherRedemption.php",
+        "voucher:list-redemptions": "php bin/ListVoucherRedemptions.php",
         "ci": [
             "@cs",
             "@stan",
@@ -175,6 +179,10 @@
         "voucher:set-limits": "Set a voucher's usage caps, omit for unlimited (--client --voucher [--max-total --max-per-user --max-per-client])",
         "voucher:set-status": "Enable or disable a voucher (--client --voucher --enable|--disable)",
         "voucher:list": "List a client's vouchers with rules and overrides (--client=<slug|id>)",
+        "voucher:reserve": "Reserve a voucher's usage against a checkout attempt (--client --voucher --attempt --currency --price-minor ...)",
+        "voucher:confirm": "Finalise a reservation after a successful payment (--client --voucher --attempt)",
+        "voucher:release": "Free a reservation after a failed/canceled payment (--client --voucher --attempt)",
+        "voucher:list-redemptions": "List a voucher's redemption history (--client --voucher)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }

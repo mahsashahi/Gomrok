@@ -64,6 +64,7 @@ final class MigrationRoundTripTest extends TestCase
         'vouchers',
         'voucher_eligibility_rules',
         'voucher_currency_discounts',
+        'voucher_redemptions',
     ];
 
     private PDO $pdo;

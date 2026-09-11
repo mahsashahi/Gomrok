@@ -16,6 +16,134 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 17 — Voucher validation, discount calc & redemption lifecycle
+
+### Q5 — Handler surface, `VoucherUsagePort` wiring, CLI
+
+**Question:** How is the lifecycle exposed and tested before Payments (Phase 20) exists?
+
+**Options:**
+
+1. **Three lifecycle handlers + calculator + CLI** — `ReserveVoucherRedemption` (re-evaluates
+   eligibility, computes the discount, locks + re-checks caps, inserts `reserved`, idempotent by
+   `attempt_reference`), `ConfirmVoucherRedemption` (`reserved` → `confirmed`, increments
+   `vouchers.redeemed_count`), `ReleaseVoucherRedemption` (`reserved` → `released`, idempotent
+   no-op once terminal). `PdoVoucherUsagePort` implements the Phase 16 port and gets bound.
+   CLI: `voucher:reserve` / `voucher:confirm` / `voucher:release` / `voucher:list-redemptions`.
+2. Same three handlers, no CLI — tests only.
+3. Merge Reserve+Confirm into one `RedeemVoucher` handler for the synchronous case, keep
+   `Release` separate — reintroduces the race Q2/Q3 avoid for the async-webhook case.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — three handlers (`ReserveVoucherRedemption`, `ConfirmVoucherRedemption`,
+`ReleaseVoucherRedemption`) + `VoucherDiscountCalculator` + `PdoVoucherUsagePort` (implements
+the Phase 16 port) + `voucher:reserve|confirm|release|list-redemptions` CLI.
+
+**Status:** Decided
+
+---
+
+### Q4 — Discount calculation: rounding, clamping, transparency
+
+**Question:** Given the resolved price and the applicable discount (Phase 16's
+override-then-default), what does `VoucherDiscountCalculator` produce?
+
+**Options:**
+
+1. **Always clamp to `[0, price]`; result carries both nominal and applied amounts** —
+   `percentage` via `Money::percentage()` (HALF_EVEN) capped at `max_discount_minor`; `fixed`
+   is the override amount; `full` is the whole price; every result then clamped so discount ≤
+   price. `VoucherDiscountResult` exposes `nominalDiscountMinor` (pre-clamp) +
+   `appliedDiscountMinor` + `payableMinor`.
+2. Same math, but reject (`voucher.discount_exceeds_price`) instead of clamping when a
+   fixed/percentage discount would exceed the price.
+3. Clamp silently with no nominal/applied distinction — just the final numbers.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — clamp to `[0, price]`; `VoucherDiscountResult` carries
+`nominalDiscountMinor`, `appliedDiscountMinor`, and `payableMinor` (+ currency), so clamping is
+visible for later audit/snapshot use, never a hard checkout failure.
+
+**Status:** Decided
+
+---
+
+### Q3 — Concurrency-safety mechanism for the caps
+
+**Question:** Two checkouts racing for the last unit of a limited voucher must not both
+succeed. How is this enforced?
+
+**Options:**
+
+1. **Row-lock the `vouchers` aggregate (`SELECT ... FOR UPDATE`) during reserve/confirm**, then
+   re-check global/per-user/per-client caps inside that transaction before writing.
+2. Atomic conditional `UPDATE` for the global cap only (`reserved_count = reserved_count + 1
+   WHERE ... AND reserved_count < max`); per-user/per-client stay best-effort reads (same
+   TOCTOU race Phase 16 already had).
+3. Unique constraint per redemption "slot" assigned by the caller — still needs a lock or retry
+   loop to assign the slot correctly, just relocates the problem.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `SELECT ... FOR UPDATE` on the `vouchers` row inside the
+reserve/confirm transaction; global/per-user/per-client caps re-checked under that lock before
+any write.
+
+**Status:** Decided
+
+---
+
+### Q2 — Reservation lifecycle states & abandoned reservations
+
+**Question:** `reserved → confirmed` or `reserved → released`. What does a `reserved` row count
+toward, and what happens if it's never confirmed or released?
+
+**Options:**
+
+1. **Three states; `reserved` counts toward caps immediately; no automatic expiry this phase** —
+   a stale reservation sweep is a background job (CLAUDE.md), deferred to **Phase 29**;
+   `reserved_at` stored for that job to use.
+2. Three states with an inline TTL — cap-counting queries filter `reserved_at > now() - TTL` so
+   a stale reservation silently stops counting; still needs a Phase 29 job to clean up rows.
+3. Two states only (`confirmed`/`released`); nothing persisted at reserve time — no early
+   "sold out" signal, all cap safety pushed to confirm-time locking.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `reserved` / `confirmed` / `released`; a `reserved` row counts toward
+all caps from creation until it's `released`; no TTL/expiry logic in this phase —
+`reserved_at` is stored, the sweep job is Phase 29's responsibility.
+
+**Status:** Decided
+
+---
+
+### Q1 — What identifies a redemption attempt?
+
+**Question:** Reserve/confirm/release need to agree on *which attempt* they're talking about,
+and a retry must be a no-op. There is no `payment_id` yet (Payments is Phase 20).
+
+**Options:**
+
+1. **A caller-supplied opaque `attempt_reference` string** — `voucher_redemptions.attempt_reference`,
+   `UNIQUE (voucher_id, attempt_reference)`; reserve/confirm/release all take it; Phase 20 passes
+   the real `payment_id` once it exists, no schema/API change needed then.
+2. Reuse the existing `idempotency_keys` infrastructure directly — couples business-level
+   redemption identity to the transport-level request-dedup mechanism.
+3. No explicit attempt entity; dedupe only by `(voucher_id, client_user_ref, nonce)` — pushes
+   nonce semantics onto every caller, no natural "confirm this reservation" hook.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — opaque `attempt_reference` string, `UNIQUE (voucher_id,
+attempt_reference)`. Phase 20 will pass the payment id as this string.
+
+**Status:** Decided
+
+---
+
 ## Phase 16 — Vouchers module: definitions & eligibility
 
 ### Q5 — Management surface, code rules, seeder

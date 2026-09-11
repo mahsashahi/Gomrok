@@ -201,6 +201,12 @@ composer voucher:remove-currency-discount -- --client=televika --voucher=2 --cur
 composer voucher:set-status -- --client=televika --voucher=1 --disable   # or --enable
 composer voucher:update -- --client=televika --voucher=1 --name="Welcome 15%" --default-type=percentage --default-percent-bp=1500
 composer voucher:list -- --client=televika
+
+# Voucher redemption — reserve / confirm / release (Phase 17)
+composer voucher:reserve -- --client=televika --voucher=1 --attempt=order-42 --currency=EUR --price-minor=2900 [--client-user=user-1] [--country=DE] [--package=7]
+composer voucher:confirm -- --client=televika --voucher=1 --attempt=order-42
+composer voucher:release -- --client=televika --voucher=1 --attempt=order-42
+composer voucher:list-redemptions -- --client=televika --voucher=1
 ```
 
 `code` is `^[A-Z0-9][A-Z0-9_-]{2,63}$` (≥3 chars), unique per client, stored upper-case. A
@@ -212,8 +218,16 @@ not applicable. Usage limits are three nullable columns
 axis; `--max-per-user=1` with the other two unset is "valid for everyone, once per user."
 `voucher:set-eligibility` **full-replaces** the rule set (repeat `--rule=dimension:value`; no
 `--rule` at all clears every restriction). There is no `POST /api/v1/vouchers/validate`
-endpoint yet (Phase 19) and no redemption (Phase 17) — this CLI only manages definitions. Full
-rule set: **`.claude/Voucher.md`**.
+endpoint yet (Phase 19) — the create/update/eligibility/discount/limits/status commands only
+manage definitions.
+
+`voucher:reserve` re-checks eligibility (now including the usage caps), computes the discount,
+and reserves it against an `--attempt` reference — repeating the same `--attempt` for the same
+`--voucher` is a no-op that returns the existing reservation, never a double-redemption.
+`voucher:confirm` finalises it after a successful payment (increments the voucher's global
+count once, ever); `voucher:release` frees it after a failed/canceled attempt so the usage cap
+is available again. A confirmed redemption can never be released, and a released one can never
+be confirmed. Full rule set: **`.claude/Voucher.md`**.
 
 `composer db:setup` in `local` / `testing` also seeds a `local-dev` client with a fixed token:
 `gk_test_000000000000dead.localdevsecretlocaldevsecret1234` (dev only — the seeder no-ops in

@@ -66,6 +66,20 @@ final readonly class PdoVoucherRepository implements VoucherRepository
         return $this->hydrate($statement->fetch());
     }
 
+    public function findByIdForUpdate(int $id): ?Voucher
+    {
+        $statement = $this->pdo->prepare('SELECT * FROM vouchers WHERE id = :id FOR UPDATE');
+        $statement->execute(['id' => $id]);
+
+        return $this->hydrate($statement->fetch());
+    }
+
+    public function incrementRedeemedCount(int $id): void
+    {
+        $statement = $this->pdo->prepare('UPDATE vouchers SET redeemed_count = redeemed_count + 1, updated_at = :now WHERE id = :id');
+        $statement->execute(['id' => $id, 'now' => gmdate(self::DT)]);
+    }
+
     public function findByCode(int $clientId, string $code): ?Voucher
     {
         $statement = $this->pdo->prepare('SELECT * FROM vouchers WHERE client_id = :c AND code = :code');
