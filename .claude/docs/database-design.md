@@ -42,9 +42,11 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Vouchers — definitions & eligibility (Phase 16) | `vouchers`, `voucher_eligibility_rules`, `voucher_currency_discounts` — **3** |
 | Vouchers — redemption lifecycle (Phase 17) | `voucher_redemptions` — **1** |
 | Checkout + decision snapshots (Phase 18) | `checkout_attempts` (Checkout module) + `pricing_decision_snapshots` (Pricing) + `voucher_decision_snapshots` (Vouchers) + `provider_routing_decision_snapshots` (Providers) — **4** |
-| — | (more business tables land per module from Phase 19) |
+| Resolution API endpoints (Phase 19) | (no new tables) |
+| Payments — aggregate & lifecycle (Phase 20) | `payments`, `payment_attempts`, `provider_transactions`, `provider_customers`, `gateway_references` — **5** |
+| — | (more business tables land per module from Phase 21) |
 
-**Total: 46 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 51 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -1086,6 +1088,143 @@ snapshots (those stay linked by `checkout_attempt_id`, not duplicated).
 
 ---
 
+## Payments — aggregate & lifecycle (Phase 20)
+
+The `Payments` module. A payment is created from exactly one confirmed `checkout_attempts` row
+(Phase 20 Q1) — no other creation path exists. Three tables model the provider-facing side as a
+deliberate hierarchy (Q3): `payments` → `payment_attempts` (one per distinct "try" against a
+provider) → `provider_transactions` (one immutable row per raw call/response under an attempt).
+`provider_customers` and `gateway_references` (Q4) are the durable-customer-identity and generic
+reverse-lookup tables the Gateway Reference Lookup Rule calls for. There is no real provider
+adapter yet (Phase 21+) — every status transition in this phase is caller-supplied, not derived
+from a real provider response.
+
+### `payments`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `checkout_attempt_id` | INT UNSIGNED | no | FK → `checkout_attempts(id)` CASCADE; **`UNIQUE`** — one payment per attempt (Q1) |
+| `client_user_ref` | VARCHAR(120) | yes | copied from the checkout attempt |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `country` | CHAR(2) | no | FK → `countries(code)` RESTRICT |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT |
+| `amount_minor` | BIGINT UNSIGNED | no | frozen payable amount at creation — the voucher's `payable_minor` when one was reserved, else the pricing snapshot's `amount_minor`; never re-derived |
+| `purchase_type` | VARCHAR(20) | no | copied from the checkout attempt |
+| `payment_method` | VARCHAR(20) | yes | copied from the checkout attempt |
+| `subscription_interval` | VARCHAR(20) | yes | copied from the checkout attempt |
+| `status` | VARCHAR(20) | no | `PaymentStatus`, default `created` — see lifecycle below |
+| `error_code` / `error_message` | VARCHAR(100) / VARCHAR(500) | yes / yes | set on a `failed` transition |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (checkout_attempt_id)` = `uniq_payments_checkout_attempt`; `INDEX (client_id, status)` =
+`idx_payments_client_status`; `INDEX (package_id)` = `idx_payments_package`.
+
+### `payment_attempts`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `payment_id` | INT UNSIGNED | no | FK → `payments(id)` CASCADE |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
+| `attempt_number` | SMALLINT UNSIGNED | no | 1, 2, 3… per payment, app-assigned |
+| `status` | VARCHAR(20) | no | `PaymentAttemptStatus`: `started` / `succeeded` / `failed` — smaller and separate from `PaymentStatus` |
+| `payment_method` | VARCHAR(20) | yes | |
+| `error_code` / `error_message` | VARCHAR(100) / VARCHAR(500) | yes / yes | |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (payment_id, attempt_number)` = `uniq_payment_attempts_number`;
+`INDEX (provider_account_id)` = `idx_payment_attempts_provider_account`.
+
+### `provider_transactions`
+
+Write-once event log — no `updated_at`, no update method on the repository port.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `payment_attempt_id` | INT UNSIGNED | no | FK → `payment_attempts(id)` CASCADE |
+| `kind` | VARCHAR(30) | no | generic operation label (`authorize`/`capture`/`refund`/`void`/`status_check`/…), not FK'd |
+| `request_payload` / `response_payload` | JSON | yes / yes | redacted before storage by the adapter writing them (Phase 21+) — never card data or secrets |
+| `provider_status_raw` | VARCHAR(100) | no | the **unmapped** provider status string |
+| `created_at` | DATETIME | no | write-once |
+
+`INDEX (payment_attempt_id)` = `idx_provider_transactions_attempt`.
+
+### `provider_customers`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
+| `client_user_ref` | VARCHAR(120) | no | |
+| `provider_customer_id` | VARCHAR(191) | no | the raw external customer id |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (provider_account_id, provider_customer_id)` = `uniq_provider_customers_account_ref`;
+`INDEX (client_id, client_user_ref)` = `idx_provider_customers_client_user`.
+
+### `gateway_references`
+
+The generic, provider-agnostic reverse-lookup table (Q4).
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
+| `reference_type` | VARCHAR(30) | no | `GatewayReferenceType`: `checkout_session` / `payment_intent` / `order` / `transaction` / `subscription` / `customer` / `other` |
+| `reference_value` | VARCHAR(191) | no | the raw provider id string |
+| `payment_id` | INT UNSIGNED | yes | FK → `payments(id)` CASCADE; null when the reference is subscription-only |
+| `created_at` | DATETIME | no | write-once |
+
+`UNIQUE (provider_account_id, reference_type, reference_value)` =
+`uniq_gateway_references_account_type_value`; `INDEX (payment_id)` =
+`idx_gateway_references_payment`. **No `subscription_id` column yet** — `subscriptions` doesn't
+exist until Phase 26; it will be added there as an additive, nullable column.
+
+### Lifecycle (`PaymentStatus`, Phase 20 Q2)
+
+An explicit allowed-next-statuses graph per status, not a single rank — a payment genuinely
+branches, unlike `CheckoutAttemptStatus`'s linear happy path:
+
+```text
+created            → pending, canceled, failed
+pending            → requires_action, authorized, paid, failed, canceled, expired
+requires_action    → authorized, paid, failed, canceled, expired
+authorized         → paid, canceled, expired, failed
+paid               → refunded, partially_refunded, disputed
+partially_refunded → refunded, disputed
+disputed           → chargeback, paid   (resolved in the merchant's favor)
+refunded, canceled, expired, failed, chargeback → (none — terminal)
+```
+
+`transitionTo($new)`: (1) if the current status is terminal → always **rejected**, including a
+repeat of the current terminal status itself; (2) `$new === current` → **idempotent no-op**; (3)
+else → allowed only if `$new` is in `current`'s `allowedNextStatuses()`
+(`payment.invalid_transition` otherwise). `payment_attempts.status` (`started` / `succeeded` /
+`failed`) is a separate, smaller enum — an attempt only answers "did this try work," while the
+parent payment carries the branching lifecycle above.
+
+### Resolution
+
+**Creation** (`CreatePaymentHandler`): requires the checkout attempt's status to be `confirmed`;
+reads the frozen `pricing_decision_snapshots` row for the base amount, and — if a
+`voucher_decision_snapshots` row exists — substitutes the linked `voucher_redemptions.payable_minor`
+instead; copies every other field from `CheckoutAttempt::commercialSnapshot()`; transitions the
+attempt to `converted_to_payment`. Idempotent by `checkout_attempt_id`.
+
+**Provider transactions** (`RecordProviderTransactionHandler`, Phase 20 Q5): reuses the payment's
+latest attempt if it's still `started`, else opens a new one (`attempt_number` incrementing);
+appends one `provider_transactions` row; optionally completes the attempt
+(`succeeded`/`failed`, caller-supplied — never inferred from the new payment status); transitions
+the payment per the graph above. `ChangePaymentStatusHandler` is the escape hatch for any other
+transition (e.g. an admin-driven cancel).
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -1143,6 +1282,7 @@ snapshots (those stay linked by `checkout_attempt_id`, not duplicated).
 | `src/Database/Seeds/VouchersSeeder.php` | `Gomrok\Database\Seeds\VouchersSeeder` (env-gated: `local-dev` gets `WELCOME10` [10%, once/user] + `EU5` [`none` default, EUR/USD/GBP fixed overrides, `pro`-only]) |
 | `src/Database/Migrations/20260911130001_create_voucher_redemptions_table.php` | `Gomrok\Database\Migrations\CreateVoucherRedemptionsTable` |
 | `src/Database/Migrations/20260911150001_create_checkout_and_decision_snapshot_tables.php` | `Gomrok\Database\Migrations\CreateCheckoutAndDecisionSnapshotTables` |
+| `src/Database/Migrations/20260911180001_create_payment_tables.php` | `Gomrok\Database\Migrations\CreatePaymentTables` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

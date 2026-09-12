@@ -16,6 +16,7 @@ flowchart TD
     Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)<br/>price_lists + price_list_packages — A/B (P15)"]
     Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)<br/>voucher_redemptions — discount calc & redemption lifecycle (P17)<br/>voucher_decision_snapshots — Phase 18"]
     Checkout["Checkout<br/>checkout_attempts — pre-payment lifecycle anchor (P18)"]
+    Payments["Payments<br/>payments + payment_attempts + provider_transactions (P20)<br/>provider_customers + gateway_references (P20)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -48,8 +49,8 @@ flowchart TD
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout done;
-    class Payments,Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments done;
+    class Subscriptions,Webhooks,Notifications,Admin todo;
 ```
 
 Green = tables exist. Grey = designed in that module's phase.
@@ -802,3 +803,93 @@ Payments (Phase 20) and the provider adapters (Phase 21+). When a `payments` row
 it links back and copies only `CheckoutAttempt::commercialSnapshot()`'s immutable fields — no
 checkout-attempt or decision-snapshot row is ever deleted. Full detail:
 `.claude/docs/database-design.md` → "Checkout + decision snapshots (Phase 18)".
+
+## Payments — aggregate & lifecycle (Phase 20)
+
+```mermaid
+erDiagram
+    payments {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); UNIQUE"
+        varchar client_user_ref "nullable"
+        int package_id FK "-> packages.id (CASCADE)"
+        char country FK "-> countries.code (RESTRICT)"
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        bigint amount_minor "frozen at creation, never re-derived"
+        varchar purchase_type
+        varchar payment_method "nullable"
+        varchar subscription_interval "nullable"
+        varchar status "PaymentStatus, default created"
+        varchar error_code "nullable"
+        varchar error_message "nullable"
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+    payment_attempts {
+        int id PK
+        int payment_id FK "-> payments.id (CASCADE)"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        smallint attempt_number "UNIQUE (payment_id, attempt_number)"
+        varchar status "started | succeeded | failed"
+        varchar payment_method "nullable"
+        varchar error_code "nullable"
+        varchar error_message "nullable"
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+    provider_transactions {
+        int id PK
+        int payment_attempt_id FK "-> payment_attempts.id (CASCADE)"
+        varchar kind "authorize | capture | refund | void | status_check | ..."
+        json request_payload "nullable, redacted"
+        json response_payload "nullable, redacted"
+        varchar provider_status_raw "unmapped provider status"
+        datetime created_at "write-once, no updated_at"
+    }
+    provider_customers {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        varchar client_user_ref
+        varchar provider_customer_id "UNIQUE (provider_account_id, provider_customer_id)"
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+    gateway_references {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        varchar reference_type "checkout_session | payment_intent | order | transaction | subscription | customer | other"
+        varchar reference_value "UNIQUE (provider_account_id, reference_type, reference_value)"
+        int payment_id FK "-> payments.id (CASCADE); nullable"
+        datetime created_at "write-once"
+    }
+
+    clients ||--o{ payments : "owns"
+    checkout_attempts ||--|| payments : "converts to"
+    packages ||--o{ payments : "purchases"
+    payments ||--o{ payment_attempts : "tries via"
+    provider_accounts ||--o{ payment_attempts : "attempted through"
+    payment_attempts ||--o{ provider_transactions : "raw calls"
+    clients ||--o{ provider_customers : "identifies"
+    provider_accounts ||--o{ provider_customers : "recognises"
+    clients ||--o{ gateway_references : "owns"
+    provider_accounts ||--o{ gateway_references : "issues"
+    payments ||--o{ gateway_references : "referenced by"
+```
+
+A payment is created from exactly one confirmed `checkout_attempts` row (Q1,
+`UNIQUE (checkout_attempt_id)`) — `amount_minor` is frozen from the pricing/voucher decision
+snapshots at that moment, never re-derived. `payment_attempts` → `provider_transactions` is a
+deliberate two-level hierarchy (Q3): an attempt is one distinct "try" against a provider (a
+declined card retried with a different method is a *new* attempt, `attempt_number` incrementing),
+while each raw call/response under that attempt gets its own immutable `provider_transactions`
+row. `provider_customers` and `gateway_references` (Q4) are separate concerns — a durable
+customer identity reused across payments vs. a generic, provider-agnostic reverse-lookup table
+(no `subscription_id` column until Phase 26 adds it additively). Lifecycle: an explicit
+allowed-next-statuses graph per `PaymentStatus` (not a single rank, since a payment genuinely
+branches — `paid` can go to `refunded`, `partially_refunded`, or `disputed`; a dispute can
+resolve back to `paid` or escalate to `chargeback`); terminal once `refunded` / `canceled` /
+`expired` / `failed` / `chargeback`. Full detail: `.claude/docs/database-design.md` →
+"Payments — aggregate & lifecycle (Phase 20)".

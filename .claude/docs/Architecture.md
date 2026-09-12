@@ -89,7 +89,7 @@ Each module lives at `src/Modules/<Name>/` with `Domain/`, `Application/`, `Infr
 | **Pricing** | Pricing groups, default prices, override dimensions, the deterministic price-resolution engine, A/B price lists + visitor assignment. |
 | **Vouchers** | Voucher definitions, eligibility rules, usage limits, discount calculation, and a concurrency-safe redemption lifecycle (Phases 16–17 — implemented). |
 | **Checkout** | The pre-payment lifecycle anchor: `checkout_attempts` and its monotonic-rank status machine, orchestrating pricing resolution, voucher reservation, and provider selection before a payment exists (Phase 18 — implemented). |
-| **Payments** | Payment aggregate, internal status lifecycle, payment attempts, provider transactions, provider customers, gateway references, refunds/captures/cancellations; converts a confirmed `checkout_attempts` row via its `commercialSnapshot()`. |
+| **Payments** | Payment aggregate, internal status lifecycle, payment attempts, provider transactions, provider customers, gateway references, refunds/captures/cancellations; converts a confirmed `checkout_attempts` row via its `commercialSnapshot()` (Phase 20 — implemented; no real provider adapter or HTTP endpoint yet). |
 | **Subscriptions** | Subscription aggregate & ownership model, subscription events, subscription↔payment links, lifecycle from webhooks. |
 | **Webhooks** | Inbound provider webhook ingestion (store-first), signature verification, idempotent processing, replay protection, reverse lookup to internal records. |
 | **Notifications** | Outbound client callbacks per provider account, delivery, retry/backoff, dead-letter, admin retry. |
@@ -359,17 +359,19 @@ price-list layer; Phases 16–17 add vouchers, 18 tax/fee.
   `SetPriceListPackagePrice.php`; listed by `ListPriceLists.php`. **The visitor→list assignment
   itself (persistence, hashing, `visitor_ref` params) is deferred to Phase 24** (Phase 15
   Q4/Q5); until then `$priceListId` is always `null` and every resolve uses control.
-- **HTTP:** `GET /api/v1/packages?country=…` (resolved catalogue, base prices) and
+- **HTTP:** `GET /api/v1/packages?country=…` (resolved catalogue, base prices),
+  `GET /api/v1/packages/{packageId}?country=…` (one package from that same resolved catalogue —
+  Phase 19 Q1/Q2; `{packageId}` accepts either the numeric id or the code, and a package that
+  isn't sellable in the requested context is a `404 package.not_found_in_context`), and
   `GET /api/v1/pricing/resolve?package=…&country=…&method=…&purchase_type=…&interval=…` (one
   price, dimension rules applied) — client-authenticated. Gomrok never trusts a client-supplied
   price.
 
-### Vouchers (Phase 16 — definitions & eligibility, Phase 17 — discount calc & redemption)
+### Vouchers (Phase 16 — definitions & eligibility, Phase 17 — discount calc & redemption, Phase 19 — validate endpoint)
 
 `Modules/Vouchers`. **Source of truth for all voucher behaviour: `.claude/Voucher.md`** — this
 is the architecture-level summary; Phase 18 added the `voucher_decision_snapshots` table (below
-and in §8 Checkout), Phase 19 adds `POST /api/v1/vouchers/validate`, Phase 20 wires real payments
-as the `attempt_reference`.
+and in §8 Checkout); Phase 20 wires real payments as the `attempt_reference`.
 
 - **`vouchers`** — client-scoped (`UNIQUE (client_id, code)`), a validity window, an optional
   minimum purchase, `first_purchase_only`, a **default discount** (`default_discount_type`
@@ -405,8 +407,16 @@ as the `attempt_reference`.
 - Audited handlers (`CreateVoucher`, `UpdateVoucher`, `SetVoucherEligibility` full-replace,
   `SetVoucherCurrencyDiscount` / `RemoveVoucherCurrencyDiscount`, `SetVoucherUsageLimits`,
   `ChangeVoucherStatus`, `ReserveVoucherRedemption`, `ConfirmVoucherRedemption`,
-  `ReleaseVoucherRedemption`) + `voucher:*` CLI + an env-gated seeder. No HTTP endpoint yet
-  (Phase 19).
+  `ReleaseVoucherRedemption`) + `voucher:*` CLI + an env-gated seeder.
+- **`ValidateVoucherHandler` (Phase 19 Q3)** — a non-locking, unlocked pre-check: resolves the
+  package's price via `PriceResolver` (same as `pricing/resolve`, never trusts a client-supplied
+  amount), runs the same `VoucherEligibilityEvaluator` used as `ReserveVoucherRedemptionHandler`'s
+  authoritative gate, and — only when eligible — the Phase 17 `VoucherDiscountCalculator` for a
+  discount preview. Nothing is reserved, redeemed, or written. **HTTP:**
+  `GET /api/v1/vouchers/validate?package=…&country=…&code=…[&device=][&method=][&purchase_type=]
+  [&interval=][&client_user_ref=][&first_purchase=]` — `GET`, not the `POST` CLAUDE.md suggests,
+  for the same reason `pricing/resolve` is a `GET` (Phase 19 Q4): it mutates nothing, so it stays
+  clear of the `/api/v1` write-idempotency requirement.
 
 ### Checkout (Phase 18 — pre-payment lifecycle anchor)
 
@@ -452,7 +462,45 @@ than transient in-memory state.
 - Audited handlers + `checkout:*` CLI (`bin/CreateCheckoutAttempt.php`,
   `ResolveCheckoutPricing.php`, `ReserveCheckoutVoucher.php`, `SelectCheckoutProvider.php`,
   `SetCheckoutAttemptStatus.php`, `ListCheckoutAttempts.php`). No HTTP endpoint yet (mounts with
-  the payment-creation flow, Phase 20/24).
+  the payment-creation flow, Phase 24).
+
+### Payments (Phase 20 — aggregate & lifecycle)
+
+`Modules/Payments`. Built with no real provider adapter yet (Phase 21+) and no HTTP endpoint yet
+(Phase 24) — purely the aggregate, schema, and lifecycle this phase.
+
+- **`payments`** is created from exactly one confirmed `checkout_attempts` row (Q1) —
+  `checkout_attempt_id` is a required, `UNIQUE` FK, never populated any other way. `amount_minor`
+  is frozen at creation from the checkout attempt's pricing/voucher decision snapshots (the
+  voucher's `payable_minor` when one was reserved, else the pricing snapshot's `amount_minor`)
+  and never re-derived later.
+- **`PaymentStatus`** (Q2) is an explicit allowed-next-statuses graph per status, not a single
+  rank — a payment genuinely branches (`paid` → `refunded`/`partially_refunded`/`disputed`;
+  `disputed` → `chargeback` or back to `paid`). The graph was arrived at after a flagged
+  conflict: the option first selected ("no rule engine yet") would have made this phase's own
+  exit criterion ("rejection of illegal transitions tested") impossible to satisfy, so the
+  explicit adjacency-list design was adopted instead. `transitionTo()` checks terminal before
+  same-status, exactly like `CheckoutAttemptStatus` — a repeat of the current terminal status is
+  rejected, not treated as a no-op.
+- **`payment_attempts` → `provider_transactions`** (Q3) is a deliberate two-level hierarchy
+  matching CLAUDE.md's three distinct Required Database Concepts: an attempt is one distinct
+  "try" against a provider (`attempt_number` incrementing on retry), a transaction is one raw
+  provider call/response under that attempt (write-once, `provider_status_raw` unmapped and
+  never leaked into `PaymentStatus`). `payment_attempts.status` (`started`/`succeeded`/`failed`)
+  is a separate, smaller enum from `PaymentStatus`.
+- **`provider_customers` / `gateway_references`** (Q4) — a durable customer identity reused
+  across payments vs. a generic, provider-agnostic reverse-lookup table
+  (`reference_type` ∈ `checkout_session`/`payment_intent`/`order`/`transaction`/`subscription`/
+  `customer`/`other`), the mechanism CLAUDE.md's Gateway Reference Lookup Rule calls for. No
+  `subscription_id` column until Phase 26 adds it additively.
+- **`CreatePaymentHandler`** / **`RecordProviderTransactionHandler`** / **`ChangePaymentStatusHandler`**
+  / **`LinkProviderCustomerHandler`** (Q5) — the same one-handler-per-step pattern as every prior
+  module. `RecordProviderTransactionHandler` reuses the payment's latest attempt while it's still
+  `started`, else opens a new one; the attempt is only completed
+  (`succeeded`/`failed`) via an explicit `attemptOutcome` parameter, never inferred from the
+  payment's own status change. Audited handlers + `payment:*` CLI
+  (`bin/CreatePayment.php`, `RecordProviderTransaction.php`, `SetPaymentStatus.php`,
+  `LinkProviderCustomer.php`, `ListPayments.php`).
 
 ## 9. Resolution pipelines (sketch)
 
@@ -492,6 +540,9 @@ PRICE  (GET /api/v1/pricing/resolve — PriceResolver)
          minimum purchase / first-purchase / global + per-user + per-client usage caps
   6. resolve + apply voucher discount (currency override -> else default,   [Phase 17 — implemented]
      clamp to configured cap then to price -> nominal vs. applied amounts)
+       (steps 1-6, unlocked and without step 6.5, are exactly what          [Phase 19 — implemented]
+        GET /api/v1/vouchers/validate runs as a standalone preview —
+        ValidateVoucherHandler)
   6.5 reserve -> confirm/release the redemption (FOR UPDATE on vouchers,    [Phase 17 — implemented]
       idempotent by attempt_reference; Phase 20 supplies the payment id)
   7. tax / fee rules (if any)                                [deferred — no phase yet]
@@ -507,8 +558,19 @@ CHECKOUT ATTEMPT  (Checkout module — orchestrates the above, Phase 18 — impl
        → voucher_decision_snapshots  → status = voucher_reserved
   4. select provider  → ProviderRouter (PROVIDER pipeline below) → provider_routing_decision_snapshots
        → status = provider_selected (reachable directly from pricing_resolved when no voucher)
-  5. (Phase 20/21+) provider checkout / redirect / return / confirm → converted_to_payment
-       — modelled now, driven once Payments and provider adapters exist
+  5. (Phase 21+) provider checkout / redirect / return / confirm → converted_to_payment
+       — modelled now, driven once the real provider adapters exist
+
+PAYMENT  (Payments module, Phase 20 — implemented; no real provider calls yet)
+  1. create  → CreatePaymentHandler — requires checkout_attempts.status = confirmed (Q1)
+       → amount_minor frozen from pricing_decision_snapshots / voucher_redemptions.payable_minor
+       → checkout_attempts transitions to converted_to_payment  → payments row, status = created
+  2. record a provider transaction (repeatable)  → RecordProviderTransactionHandler
+       → reuses the payment's open attempt or starts a new one (attempt_number++)
+       → appends a provider_transactions row  → payment transitions per the PaymentStatus graph (Q2)
+  3. (Phase 21+) real provider adapter calls replace the caller-supplied newStatus/providerStatusRaw
+       with values actually mapped from the provider's response
+  4. any other transition  → ChangePaymentStatusHandler (the escape hatch, e.g. admin cancel)
 
 PROVIDER
   1. client default provider config
@@ -567,14 +629,23 @@ and flagged, never dropped.
   disable-fallback, `visitor_ref` params) — deferred from Phase 15 (Q4/Q5) to **Phase 24**
   (Payment creation flow); the `price_lists` data model + resolver hook exist from Phase 15.
 - Voucher **stale-reservation sweep** — an abandoned `reserved` row never auto-expires in
-  Phase 17 (Q2); deferred to **Phase 29** (background jobs). `POST /api/v1/vouchers/validate` —
-  **Phase 19**. Payments passing a real payment id as `attempt_reference` — **Phase 20**.
+  Phase 17 (Q2); deferred to **Phase 29** (background jobs). The originally-planned "Payments
+  passes a real payment id as `attempt_reference`" idea is superseded — Phase 18 already reused
+  the checkout attempt's own `attempt_reference` for the voucher redemption, and Phase 20's
+  `payments.checkout_attempt_id` FK gives full traceability without a second identifier.
 - Checkout attempt **automatic abandonment/expiry detection** — `abandoned_at` / `expired_at`
   columns exist on `checkout_attempts` (Phase 18) but no handler writes them yet; deferred to
   **Phase 29** (background jobs), same sweep as the voucher reservation cleanup.
-- `checkout_attempts → payments` conversion (`converted_to_payment`, `commercialSnapshot()`
-  consumption) and the `provider_checkout_created` / `redirected_to_provider` /
-  `returned_from_provider` / `confirmed` transitions — modelled in Phase 18, driven for real once
-  Payments (**Phase 20**) and the provider adapters (**Phase 21+**) exist.
+- `checkout_attempts → payments` conversion is now implemented end to end
+  (`CreatePaymentHandler`, **Phase 20**); the `provider_checkout_created` / `redirected_to_provider`
+  / `returned_from_provider` / `confirmed` transitions on `checkout_attempts` remain modelled but
+  undriven until the provider adapters exist (**Phase 21+**).
+- Payments module leftovers from Phase 20: a real `PaymentProviderPort` and status mapping
+  (**Phase 21** — the port — then per-provider adapters, Phases 21–23); any HTTP endpoint for
+  payments (**Phase 24**, the payment-creation flow); a `gateway_references` writer wired to a
+  real caller (repository + schema exist; no handler writes to it yet — the same "ahead of a real
+  caller" pattern as `checkout_attempts.abandoned_at`); `gateway_references.subscription_id`
+  (**Phase 26**, additive column once `subscriptions` exists); a `refunds` table for actual
+  capture/refund action records (**Phase 24**).
 - Queue technology choice (DB-backed vs Redis vs …) — Phase 29 (a `Jobs` port is defined earlier).
 - `mkdocs` site + DB docs location convention (repo-root vs `.claude/docs/`) — Phase 4.

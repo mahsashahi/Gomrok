@@ -673,5 +673,108 @@ built out ahead of the phases that need them.
   `SelectCheckoutProviderHandler` — each runs inside the same `Transactions::run()` call that
   advances the parent `checkout_attempts.status`, so a snapshot row and its status transition
   commit or roll back together.
-- **Referenced by:** nothing yet outside `checkout_attempts` — a future `payments` row (Phase 20)
-  is expected to read these for its own audit trail rather than take ownership of them.
+- **Referenced by:** `payments` (Phase 20) reads `pricing_decision_snapshots` and
+  `voucher_decision_snapshots` at creation time to derive `payments.amount_minor` — it takes only
+  the number, never ownership of the rows themselves.
+
+---
+
+## Payments — aggregate & lifecycle (Phase 20)
+
+The `Payments` module. No real provider adapter exists yet (Phase 21+), so every status
+transition here is caller-supplied, not derived from an actual provider response — this phase is
+purely the aggregate, schema, and lifecycle.
+
+### `payments`
+
+- **Why it can only come from a confirmed checkout attempt** (Q1): the user was explicit that
+  every payment should be able to answer "which checkout attempt produced you" the same
+  unambiguous way, and `checkout_attempts.status = confirmed` → `converted_to_payment` was
+  designed in Phase 18 specifically for this hand-off — `payments.checkout_attempt_id` is a
+  required, `UNIQUE` FK, never nullable, never populated any other way.
+- **`amount_minor` is frozen, not re-derived** — `CreatePaymentHandler` reads
+  `pricing_decision_snapshots.amount_minor` for the base case, or
+  `voucher_redemptions.payable_minor` (via the linked `voucher_decision_snapshots` row) when a
+  voucher was used, and copies that one number onto the payment permanently. A later pricing or
+  voucher-discount rule change must never change what a customer already paid.
+- **`status`** — see the lifecycle section below. `error_code` / `error_message` are only ever
+  set on a `failed` transition.
+- **Set / advanced by** `CreatePaymentHandler`, `RecordProviderTransactionHandler`,
+  `ChangePaymentStatusHandler`; listed by `bin/ListPayments.php`.
+- **Referenced by:** `payment_attempts.payment_id`, `gateway_references.payment_id` (nullable).
+
+### Lifecycle (`PaymentStatus`, Phase 20 Q2)
+
+Unlike `CheckoutAttemptStatus`'s single linear rank, a payment's lifecycle genuinely branches —
+`paid` can move to `refunded`, `partially_refunded`, *or* `disputed`, and a dispute can resolve
+back to `paid` or escalate to `chargeback` — so each status carries its own explicit set of legal
+next-statuses (`PaymentStatus::allowedNextStatuses()`) instead of a rank number.
+
+This decision had a real back-and-forth worth recording: when first asked, the option initially
+selected was "no rule engine yet — `transitionTo()` accepts anything, validation deferred to
+Phase 21+." That was flagged immediately as self-defeating, because this phase's own exit
+criterion is "the state machine and rejection of illegal transitions tested" — with no rule at
+all, there is nothing to reject and the criterion becomes unsatisfiable. The explicit
+adjacency-list design (below) was adopted instead once that conflict was raised.
+
+```text
+created            → pending, canceled, failed
+pending            → requires_action, authorized, paid, failed, canceled, expired
+requires_action    → authorized, paid, failed, canceled, expired
+authorized         → paid, canceled, expired, failed
+paid               → refunded, partially_refunded, disputed
+partially_refunded → refunded, disputed
+disputed           → chargeback, paid   (resolved in the merchant's favor)
+refunded, canceled, expired, failed, chargeback → terminal
+```
+
+`transitionTo()` checks terminal *before* same-status, exactly like `CheckoutAttemptStatus` (Phase
+18) — so even a repeat call of the current status is rejected once a payment is terminal, not
+treated as a no-op. This mirrors the Phase 18 precedent deliberately, for consistency across the
+two state machines in the codebase.
+
+### `payment_attempts` / `provider_transactions`
+
+- **Why two tables, not one** (Q3): CLAUDE.md names `payments`, `payment attempts`, and `provider
+  transactions` as three distinct Required Database Concepts, and merging the last two would blur
+  "the customer retried with a different card" (a new attempt) from "the provider made two calls
+  for one try" (two transactions under the same attempt, e.g. a separate authorize and capture).
+  `payment_attempts.status` is a small, separate enum (`started`/`succeeded`/`failed`) from the
+  parent `PaymentStatus` — an attempt only ever answers "did this try work."
+- **`attempt_number`** is app-assigned, not a DB auto-increment scoped per payment —
+  `RecordProviderTransactionHandler` reuses the payment's latest attempt while it's still
+  `started`, and only opens `attempt_number + 1` once the previous one has been explicitly
+  completed (`succeeded`/`failed`, via the `attemptOutcome` parameter — never inferred from the
+  payment's own status change, since a still-in-progress attempt can legitimately see several
+  status-advancing transactions in a row).
+- **`provider_transactions` is write-once** — no `updated_at`, no update method on the repository
+  port; it is the immutable log of what the provider actually said, kind by kind
+  (`authorize`/`capture`/`refund`/`void`/`status_check`/…, a generic label, not FK'd to any
+  provider-specific type). `provider_status_raw` is the **unmapped** provider status string,
+  stored safely and never leaked into `PaymentStatus` — each Phase 21+ adapter owns translating
+  it into a `newStatus` value the handler can validate.
+- **Set / advanced by** `RecordProviderTransactionHandler` only.
+
+### `provider_customers` / `gateway_references`
+
+- **Why two tables, not one** (Q4): a `provider_customers` row is a *durable identity* — reused
+  across many future payments/subscriptions for the same `(client, client user, provider
+  account)` — while a `gateway_references` row points at one specific transaction/session/order.
+  Conflating them would mean a customer id and a one-off checkout-session id living in the same
+  table with very different lifetimes and reuse patterns.
+- **`gateway_references` is deliberately generic** — `reference_type` is a small, provider-agnostic
+  enum (`checkout_session`/`payment_intent`/`order`/`transaction`/`subscription`/`customer`/`other`)
+  rather than one column per provider's id kind. This is exactly what CLAUDE.md's Gateway
+  Reference Lookup Rule asks for: given *any* provider webhook's raw reference string, find the
+  client/payment it belongs to via one `findByReference(providerAccountId, type, value)` call,
+  with no schema change needed when Phase 22/23 bring Mollie/PayPal/Ziraat's differently-shaped
+  ids.
+- **No `subscription_id` column yet** — `subscriptions` doesn't exist until Phase 26; per the
+  project's incremental-schema strategy, it's added there as an additive, nullable column rather
+  than reserved now against a table that doesn't exist.
+- **Set / advanced by** `LinkProviderCustomerHandler` (idempotent by `(provider_account_id,
+  provider_customer_id)`, `conflict` if the same provider customer id is claimed by a different
+  client); `gateway_references` rows are expected to be written by `RecordProviderTransactionHandler`
+  once Phase 21+'s adapters actually return reference ids to record (no dedicated handler yet in
+  Phase 20 — the repository and schema exist ahead of a real caller, the same pattern used for
+  `checkout_attempts.abandoned_at`/`expired_at` in Phase 18).

@@ -438,6 +438,85 @@ duplicate.
   factory and its `save()` port — `Checkout` never defines its own copy of any of the three
   snapshot shapes.
 
+## Resolution API endpoints (Phase 19)
+
+- **A pure `GET` read overrides CLAUDE.md's suggested `POST` whenever nothing is mutated.**
+  `pricing/resolve` set this precedent in Phase 14; `vouchers/validate` (Phase 19 Q4) follows it
+  again rather than requiring an `Idempotency-Key` for a call that reserves nothing. If a future
+  endpoint is tempted to add a per-route exemption to `IdempotencyMiddleware` instead, check
+  whether it's a pure read first — `GET` is almost always the simpler, already-established fix.
+- **Business logic composing multiple Application-layer services never lives in an Http Action**
+  — even when, on the surface, it looks like it could (compare `PricingResolveAction`, which
+  *does* compose `PackageDirectory` + `PriceResolver` directly, both pure Application types with
+  no further logic to hide). `VouchersValidateAction` does **not** do the equivalent for
+  vouchers, because `VoucherEligibilityEvaluator::evaluate()` needs the actual Domain `Voucher`
+  aggregate, not a read-only `VoucherSummary` — injecting `VoucherRepository` (a Domain port)
+  into an Http Action would leak the Domain layer past Application. The fix was a new
+  `Vouchers\Application\ValidateVoucher\ValidateVoucherHandler` that owns the package lookup +
+  price resolve + eligibility + discount composition; the Action just maps `Command`/`Result` to
+  JSON. Rule of thumb: an Http Action may compose Application-layer read services with no further
+  branching, but the moment a Domain aggregate needs to be loaded and interrogated, that
+  composition belongs in a Handler, not the Action.
+- **`GET /api/v1/packages/{packageId}` deliberately reuses `PriceCatalog::resolve()` — the exact
+  same call `PackagesAction` (the list endpoint) makes — rather than writing a second,
+  single-package resolution path.** This is why the two endpoints can never disagree: a package
+  missing from the list for a given context is, by construction, also a 404 from the detail
+  endpoint (`package.not_found_in_context`), because both ask literally the same question. Do not
+  "optimize" the detail endpoint into a leaner single-package query — it would reintroduce the
+  exact class of drift this design avoids.
+- **Testing a package's country restriction requires restricting the *package* (`Package::
+  setAvailability(['DE'], …)`), not the pricing group.** A `PricingGroup`'s own `countryCodes`
+  are only consulted when `isDefault() === false` (`PriceResolver::resolveGroup` only checks
+  `coversCountry()` on non-default groups; a default group is picked as the unconditional
+  fallback regardless of its own country list). A test that wants "a valid price resolves for
+  country X, but this specific package still isn't available there" needs a `isDefault: true`
+  group (so every country resolves *a* group) plus a package-level availability restriction —
+  restricting the group's countries instead would make the *group itself* fail to resolve for the
+  disallowed country, producing a `pricing.no_pricing_group` error instead of the intended
+  `package.not_found_in_context`.
+
+## Payments — aggregate & lifecycle (Phase 20)
+
+- **A decision question can surface a real design flaw — catch it before implementing, not
+  after.** When Phase 20 Q2 was first answered "no rule engine yet," the conflict with this same
+  phase's own exit criterion ("rejection of illegal transitions tested") was flagged immediately,
+  before any code was written, rather than implemented as answered and only discovered at test
+  time. The fix: when a recorded answer would make the phase's own stated exit criterion
+  impossible to satisfy, say so and ask for a resolution before proceeding — don't silently
+  substitute the recommended option, and don't implement a self-contradicting decision either.
+- **`PaymentStatus` uses an explicit per-status adjacency list, not a rank, because the graph
+  really does branch.** `CheckoutAttemptStatus`'s single-rank-plus-exits design (Phase 18) only
+  works because its happy path is genuinely linear. A payment's `paid` status has *three*
+  legitimate next states (`refunded`, `partially_refunded`, `disputed`), and `disputed` itself
+  can go two ways (`chargeback`, or back to `paid` when a dispute resolves in the merchant's
+  favor). Forcing that onto a single rank number was never going to be cleaner than just listing
+  `allowedNextStatuses()` per case — don't try to retrofit a rank scheme onto a lifecycle that
+  branches; check whether the real state machine is a DAG before reaching for the linear pattern
+  just because a linear pattern exists in the codebase.
+- **`Payment::transitionTo()` copies Checkout's terminal-before-same-status check order
+  deliberately** — a repeat call of the *current* terminal status is rejected
+  (`payment.terminal`), not silently accepted as a no-op, mirroring
+  `CheckoutAttemptStatus::transitionTo()`'s exact behavior from Phase 18. This is a real
+  precedent to preserve, not an arbitrary choice re-derived per module: once *any* status machine
+  in this codebase decides terminal-wins-over-same-status, every other one should too, so a
+  caller never has to remember which module's terminal check fires first.
+- **An attempt's own completion (`succeeded`/`failed`) is never inferred from the payment's new
+  status** — `RecordProviderTransactionCommand::$attemptOutcome` is a separate, explicit,
+  optional parameter. The temptation is to say "if the new payment status is `paid`, the attempt
+  must have succeeded" — but a single attempt can see several status-advancing calls in a row
+  while still legitimately "in progress" (e.g. `pending` → `authorized`, two calls, one open
+  attempt), and only the caller (eventually, a real Phase 21+ adapter) actually knows when the
+  provider is truly done with that specific attempt. Don't add status-based inference here even
+  though it looks convenient — it would silently mark attempts complete based on the wrong
+  signal.
+- **`payments.amount_minor` is computed once, at `CreatePaymentHandler` time, from
+  `pricing_decision_snapshots` and (if present) the linked `voucher_redemptions.payable_minor` —
+  never from `CheckoutAttempt::commercialSnapshot()` itself**, because `commercialSnapshot()`
+  deliberately does not carry a price (see its Phase 18 docblock — it only returns fields the
+  Checkout module can "honestly state on its own"). Reaching for `commercialSnapshot()` expecting
+  an amount there is a dead end; the price always comes from the sibling decision-snapshot
+  tables, found via the same `checkout_attempt_id`.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

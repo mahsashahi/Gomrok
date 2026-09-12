@@ -1,130 +1,113 @@
-# Q: Phase 18 — Decision snapshots (completion summary)
+# Q: Phase 20 — Payments module: aggregate & lifecycle (completion summary)
 
-Phase 18 is complete. Here's what was built, verified, and documented.
+Phase 20 is complete. Here's what was built, verified, and documented.
 
 ## What was implemented
 
-A new **`Checkout` module** anchored by **`checkout_attempts`** — the parent record for the whole
-pre-payment lifecycle (Phase 18 Q1, a substantial expansion of the originally proposed design,
-fully specified by you). `attempt_reference` is the external, caller-supplied idempotent key;
-`checkout_attempts.id` is the internal relational anchor. Three write-once decision-snapshot
-tables sit beside it, one per owning module (Q4): `pricing_decision_snapshots` (Pricing),
-`voucher_decision_snapshots` (Vouchers, thin — identity only, no amounts), and
-`provider_routing_decision_snapshots` (Providers) — each `UNIQUE (checkout_attempt_id)`, and none
-of the three repository ports expose an update method.
+A new `Payments` module: the payment record and its internal status state machine, with no real
+provider adapter yet (Phase 21+) and no HTTP endpoint yet (Phase 24) — purely the aggregate,
+schema, and lifecycle.
 
-A new `CheckoutAttemptStatus` enum (Q3, fully dictated by you rather than picked from an option
-letter) implements a monotonic-rank state machine: 9 ranked happy-path statuses (`started` →
-`pricing_resolved` → `voucher_reserved` → `provider_selected` → `provider_checkout_created` →
-`redirected_to_provider` → `returned_from_provider` → `confirmed` → `converted_to_payment`) plus
-4 unranked exit statuses (`failed`/`canceled`/`expired`/`abandoned`) reachable from any
-non-terminal status. Skipping ranks is allowed (no voucher used ⇒ `pricing_resolved →
-provider_selected` directly); `converted_to_payment` requires `confirmed` first; terminal once
-reached. Only the transitions you named as "needed now" are wired to real handlers; the rest are
-modelled (rank + guards + tests) for Payments (Phase 20) and the provider adapters (Phase 21+).
+`payments` is created from exactly one confirmed `checkout_attempts` row (Q1), realizing the
+hand-off Phase 18 was built for. `checkout_attempt_id` is a required, `UNIQUE` FK;
+`amount_minor` is frozen at creation from the checkout attempt's pricing/voucher decision
+snapshots and never re-derived. `PaymentStatus` (Q2) is an explicit allowed-next-statuses graph
+per status — `paid` branches to `refunded`/`partially_refunded`/`disputed`, `disputed` resolves
+to `chargeback` or back to `paid`. `payment_attempts` → `provider_transactions` is a three-tier
+model (Q3): one row per distinct "try" against a provider, one immutable row per raw call/response
+under that try. `provider_customers` and `gateway_references` (Q4) round out the schema — a
+durable customer identity vs. a generic, provider-agnostic reverse-lookup table. Four handlers
+(Q5) — `CreatePaymentHandler`, `RecordProviderTransactionHandler`, `ChangePaymentStatusHandler`,
+`LinkProviderCustomerHandler` — implement the lifecycle.
 
-Five handlers (Q5) — `CreateCheckoutAttemptHandler`, `ResolveCheckoutPricingHandler`,
-`ReserveCheckoutVoucherHandler`, `SelectCheckoutProviderHandler`,
-`ChangeCheckoutAttemptStatusHandler` — each advance the status and write the owning module's
-snapshot inside one transaction. `CheckoutAttempt::commercialSnapshot()` returns the attempt's own
-immutable commercial context, the exact shape a future `payments` row will copy at conversion.
+**A real mid-phase correction:** Q2's first answer ("no rule engine yet") was flagged
+immediately as conflicting with this phase's own exit criterion ("rejection of illegal
+transitions tested") — with no rule, there's nothing to reject. This was raised back to you
+before any code was written; you switched to the explicit allowed-transitions graph, which is
+what got implemented. The full back-and-forth is recorded in `PhaseDecisions.md`.
 
 ## Files created
 
-- Migration `20260911150001_create_checkout_and_decision_snapshot_tables.php` (4 tables).
-- New `Checkout` module: `Domain/{CheckoutAttemptStatus,CheckoutAttempt,CheckoutAttemptRepository}.php`;
-  `Application/{CheckoutAuditSnapshot,CheckoutAttemptSummary,CheckoutAttemptDirectory}.php`;
-  `Application/CreateCheckoutAttempt/`, `Application/ChangeCheckoutAttemptStatus/`,
-  `Application/ResolveCheckoutPricing/`, `Application/ReserveCheckoutVoucher/`,
-  `Application/SelectCheckoutProvider/`; `Infrastructure/{PdoCheckoutAttemptRepository,
-  PdoCheckoutAttemptDirectory,definitions}.php`.
-- Pricing: `PricingDecisionSnapshot` (+`of()`), `PricingDecisionSnapshotRepository`,
-  `PdoPricingDecisionSnapshotRepository`.
-- Vouchers: `VoucherDecisionSnapshot` (+`of()`), `VoucherDecisionSnapshotRepository`,
-  `PdoVoucherDecisionSnapshotRepository`.
-- Providers: `ProviderRoutingDecisionSnapshot` (+`of()`), `ProviderRoutingDecisionSnapshotRepository`,
-  `PdoProviderRoutingDecisionSnapshotRepository`.
-- CLI: `bin/{CreateCheckoutAttempt,ResolveCheckoutPricing,ReserveCheckoutVoucher,
-  SelectCheckoutProvider,SetCheckoutAttemptStatus,ListCheckoutAttempts}.php`.
-- Tests: 4 new in-memory test doubles, `CheckoutAttemptStatusTest`, `CheckoutAttemptTest`,
-  `CheckoutAttemptHandlersTest` (full cross-module wiring), `CheckoutAttemptPersistenceTest`
-  (CI-only real-MySQL round trip).
-- `.claude/PhaseResults/Phase18Result.md`.
+- Migration `20260911180001_create_payment_tables.php` (5 tables).
+- New `Payments` module: `Domain/{PaymentStatus,Payment,PaymentRepository,PaymentAttemptStatus,
+  PaymentAttempt,PaymentAttemptRepository,ProviderTransaction,ProviderTransactionRepository,
+  ProviderCustomer,ProviderCustomerRepository,GatewayReferenceType,GatewayReference,
+  GatewayReferenceRepository}.php`; `Application/{PaymentAuditSnapshot,PaymentSummary,
+  PaymentDirectory}.php` + 4 use-case folders; `Infrastructure/` (6 `Pdo*` adapters).
+- CLI: `bin/{CreatePayment,RecordProviderTransaction,SetPaymentStatus,LinkProviderCustomer,
+  ListPayments}.php`.
+- Tests: 5 new in-memory doubles, 3 domain test files, 4 application test files, 1 integration
+  test (`PaymentPersistenceTest`, CI-only) — 34 new tests total.
+- `.claude/PhaseResults/Phase20Result.md`.
 
 ## Files updated
 
-`ResolvedPrice::toArray()` added; `RoutingDecision` docblock corrected; `ContainerFactory`
-wired the new module; 3 modules' `Infrastructure/definitions.php` wired their new snapshot
-repositories; `composer.json` gained the `checkout:*` scripts; `MigrationRoundTripTest` extended.
-Every governance doc updated in lock-step: `database-design.md` (46 tables + new section),
-`database-diagram.md`/`.html` (16/16 mermaid blocks, new module + ER section),
-`db_explain.md`, `Architecture.md` (§3/§8/§9/§13), `Phases.md` (row 18 ☑ + as-built scope),
-`Changelog.md`, `FileIndex.md`, `Knowledge.md`, `Commands.md`, `Orders.md` (D21), `Voucher.md`
-(§8 as-built + §9/§10/§11).
+`ContainerFactory` wired the new module; `composer.json` gained the `payment:*` scripts;
+`MigrationRoundTripTest` extended. Every governance doc updated in lock-step: `database-design.md`
+(51 tables + new section), `database-diagram.md`/`.html` (17/17 mermaid blocks), `db_explain.md`
+(including the Q2 back-and-forth), `Architecture.md` (§3/§8/§9/§13), `Phases.md` (row 20 ☑),
+`Changelog.md`, `FileIndex.md`, `Knowledge.md`, `Commands.md`, `Orders.md` (D23). Also fixed a
+pre-existing doc-accuracy slip noticed in passing: `checkout:*` CLI names were mis-documented as
+`checkout:create`/`checkout:list-attempts` in several live docs (actual names: `checkout:start`/
+`checkout:list`) — corrected in `FileIndex.md`, `Commands.md`, `Phases.md`; historical entries
+(Changelog's Phase 18 entry, `Phase18Result.md`) left untouched per the no-rewrite rule.
 
 ## Database changes
 
-4 new tables, all additive, no existing-table changes: `checkout_attempts`,
-`pricing_decision_snapshots`, `voucher_decision_snapshots`, `provider_routing_decision_snapshots`.
-Full column/index/FK detail in `.claude/docs/database-design.md` → "Checkout + decision snapshots
-(Phase 18)".
+5 new tables, all additive, no existing-table changes: `payments`, `payment_attempts`,
+`provider_transactions`, `provider_customers`, `gateway_references`. Full detail in
+`.claude/docs/database-design.md` → "Payments — aggregate & lifecycle (Phase 20)".
 
 ## Tests — how to run and real results
 
 ```
 composer ci
 ```
-→ PHPStan: 592 files, **0 errors**. PHPUnit: **332 tests, 1354 assertions, OK**.
+→ PHPStan: 652 files, **0 errors**. PHPUnit: **376 tests, 1507 assertions, OK** (+34 new).
 
 ```
 composer test:integration
 ```
-→ **35 tests, 0 assertions, 35 skipped** (no local MySQL — every integration test, including the
-new `CheckoutAttemptPersistenceTest`, self-skips via the `try/catch(PDOException)` guard; these
-run for real in GitHub Actions CI).
+→ **36 tests, 36 skipped** (no local MySQL; the new `PaymentPersistenceTest` self-skips too —
+runs for real in GitHub Actions CI).
 
-`php -l` was run on every new file — all clean. All 6 new CLI scripts' usage strings were
-captured by invoking each with no arguments (real output, in `Phase18Result.md`).
+`php -l` clean on every new file. `composer validate` → valid; `composer update --lock
+--no-install` → nothing to modify.
 
 ## Captured evidence
 
-A standalone scratchpad script wiring real `PriceResolver` / `ProviderRouter` /
-`ReserveVoucherRedemptionHandler` instances drove the full pre-payment lifecycle end-to-end; real
-captured output:
+CLI usage strings captured for all 5 new scripts. A standalone scratchpad script drove two full
+payment lifecycles through the real handlers (in-memory repositories); real captured output:
 
 ```
-=== Phase 18 — checkout attempt: pre-payment lifecycle ===
+create payment from confirmed checkout attempt              -> #1 [created] amount=2900 EUR
+create payment again, same attempt (idempotent)              -> OK
+record: authorize call -> pending                            -> OK
+record: authorize succeeds -> authorized                     -> OK (attempt #1, same attempt reused)
+record: capture call -> paid                                 -> OK
+invalid: paid -> pending (backward)                           -> ERROR  payment.invalid_transition
+valid: paid -> refunded                                       -> OK
+invalid: any further move once terminal                       -> ERROR  payment.terminal
+final payment status                                          -> refunded
 
-start (order-1)                                      -> #1 [started]
-start again, same attempt (idempotent)               -> OK
-resolve pricing                                      -> OK
-reserve voucher WELCOME10                            -> OK
-select provider (mode=test)                          -> OK
-attempt status after full happy path                 -> provider_selected
-invalid: move backward to pricing_resolved           -> ERROR  checkout_attempt.invalid_transition
-valid: move to failed (an exit, from any non-terminal) -> OK
-invalid: any further move once terminal              -> ERROR  checkout_attempt.terminal
-final state                                          -> failed (provider_declined: Card declined)
-
-=== No-voucher path: skips voucher_reserved ===
-
-select provider directly (pricing_resolved -> provider_selected) -> OK
-attempt #2 status                                    -> provider_selected
+=== Second payment: dispute resolves back to paid ===
+paid -> disputed                                              -> OK
+disputed -> paid (resolved in merchant favor)                 -> OK
+payment #2 final status                                       -> paid
 ```
 
-This is a CLI/domain-logic phase with no admin panel or HTTP view — there is no screenshot to
-capture; the real terminal output above and in `Phase18Result.md` is the evidence for this
-phase's outputs, per the Visual and Output Verification Rule.
+This is a domain/CLI phase with no admin UI — the real captured output above and in
+`Phase20Result.md` is the evidence for this phase, per the Visual and Output Verification Rule.
 
 ## Known limitations
 
-- `abandoned_at`/`expired_at` and their automatic-detection sweep are reserved columns only —
-  no handler writes them yet (Phase 29).
-- `provider_checkout_created` → `converted_to_payment` transitions are modelled but have no real
-  caller until Payments (Phase 20) and the provider adapters (Phase 21+) exist.
-- No HTTP endpoint for checkout yet — CLI only, mounts with the payment-creation flow.
+- No real `PaymentProviderPort` or status mapping yet — every transition this phase is
+  caller-supplied (Phase 21+).
+- No HTTP endpoint yet (Phase 24).
+- `gateway_references` has no real writer yet (schema + repository exist ahead of a caller,
+  same pattern as `checkout_attempts.abandoned_at` in Phase 18); `subscription_id` column
+  deferred to Phase 26; a dedicated `refunds` table deferred to Phase 24.
 
 ## Next recommended phase
 
-**Phase 19 — Resolution API endpoints** (`POST /api/v1/vouchers/validate` + mounting the
-package/pricing resolution endpoints for real client consumption).
+**Phase 21 — Provider adapter port & Stripe adapter.**

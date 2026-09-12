@@ -293,7 +293,29 @@ in the same transaction that reserves the redemption and advances `checkout_atte
 `pricing_decision_snapshots` / `provider_routing_decision_snapshots` tables owned by Pricing and
 Providers respectively).
 
-## 9. Decisions log
+## 9. Validate endpoint (Phase 19 — implemented)
+
+`GET /api/v1/vouchers/validate?package=…&country=…&code=…[&device=][&method=][&purchase_type=]
+[&interval=][&client_user_ref=][&first_purchase=]` — a non-locking eligibility + discount
+**preview**, not a reservation. `Vouchers\Application\ValidateVoucher\ValidateVoucherHandler`:
+
+1. Looks up the package (`PackageDirectory`) and resolves its price via Pricing's
+   `PriceResolver` — the exact same resolution `pricing/resolve` performs (baseline → price list
+   → dimension rules). The client never supplies a price.
+2. Looks up the voucher by code (`VoucherRepository::findByCode`).
+3. Runs `VoucherEligibilityEvaluator::evaluate()` — the same evaluator
+   `ReserveVoucherRedemptionHandler` uses as its **authoritative**, locked gate (§7) — here
+   **unlocked**, as a best-effort pre-check. Every unmet reason is returned, not just the first.
+4. Only when eligible, runs `VoucherDiscountCalculator::calculate()` for the nominal/applied
+   discount and payable amount.
+
+Nothing is reserved, redeemed, or written — repeat calls are always safe. `GET`, not the `POST`
+CLAUDE.md suggests (Phase 19 Q4): it mutates nothing, so it stays clear of the `/api/v1`
+write-idempotency rule, the same reasoning already applied to `pricing/resolve` (Phase 14).
+Unknown package/voucher → `404`; an unknown enum value (`method`/`purchase_type`/`interval`) →
+`422 voucher_validate.unknown_*`.
+
+## 10. Decisions log
 
 | Phase / Q | Decision | Date |
 | --- | --- | --- |
@@ -308,8 +330,10 @@ Providers respectively).
 | 17 Q4 | `VoucherDiscountCalculator` always clamps to `[0, price]` (configured cap, then price floor); the result carries both `nominalDiscountMinor` (pre-clamp) and `appliedDiscountMinor` (post-clamp) rather than rejecting or hiding the clamp. | 2026-09-11 |
 | 17 Q5 | Three lifecycle handlers (`ReserveVoucherRedemption`, `ConfirmVoucherRedemption`, `ReleaseVoucherRedemption`) + `VoucherDiscountCalculator` + `PdoVoucherRedemptionRepository` implementing the Phase 16 `VoucherUsagePort` + `voucher:reserve|confirm|release|list-redemptions` CLI. | 2026-09-11 |
 | 18 | `voucher_decision_snapshots` added (thin — identity only, `voucher_code`/`voucher_name`, no amounts; amounts stay on `voucher_redemptions`). `UNIQUE (checkout_attempt_id)` + `UNIQUE (voucher_redemption_id)`. Written by the new `Checkout` module's `ReserveCheckoutVoucherHandler` via `VoucherDecisionSnapshot::of()`. No change to any existing Vouchers table or handler. Full cross-module design: `.claude/docs/database-design.md` → "Checkout + decision snapshots (Phase 18)". | 2026-09-11 |
+| 19 Q3 | `GET /api/v1/vouchers/validate` is an eligibility + discount **preview**: resolves the price internally via `PriceResolver` (never client-supplied), runs the unlocked `VoucherEligibilityEvaluator`, and — only if eligible — `VoucherDiscountCalculator`. No reservation, no write. New `ValidateVoucherHandler` in Vouchers `Application/`. | 2026-09-11 |
+| 19 Q4 | The endpoint is `GET`, not the `POST` CLAUDE.md suggests — it mutates nothing, so it stays clear of the `/api/v1` write-idempotency rule, the same reasoning already applied to `pricing/resolve` (Phase 14). | 2026-09-11 |
 
-## 10. Implementation pointers (Phase 16–18 — as built)
+## 11. Implementation pointers (Phase 16–19 — as built)
 
 `src/Modules/Vouchers/{Domain,Application,Infrastructure}`:
 
@@ -324,7 +348,8 @@ Providers respectively).
   cases `CreateVoucher`, `UpdateVoucher`, `SetVoucherEligibility`, `SetVoucherCurrencyDiscount`,
   `RemoveVoucherCurrencyDiscount`, `SetVoucherUsageLimits`, `ChangeVoucherStatus`,
   `ReserveVoucherRedemption`, `ConfirmVoucherRedemption`, `ReleaseVoucherRedemption`
-  (Phase 17).
+  (Phase 17); `ValidateVoucher` (Command/Result/Handler, Phase 19 — composes
+  `Pricing\Application\PriceResolver` + `Packages\Application\PackageDirectory`).
 - Domain (Phase 17 additions): `RedemptionStatus` enum, `VoucherRedemption` aggregate,
   `VoucherRedemptionRepository` port; `VoucherRepository` gained `findByIdForUpdate` +
   `incrementRedeemedCount`.
@@ -346,13 +371,13 @@ Providers respectively).
   `VoucherCurrencyDiscountTest`, `VoucherEligibilityEvaluatorTest` (the exit criterion — every
   dimension + the Phase 17 usage checks), `VoucherHandlersTest`, `VoucherRedemptionTest`,
   `VoucherDiscountCalculatorTest`, `VoucherRedemptionHandlersTest` (reserve/confirm/release,
-  idempotency, cap exhaustion); `tests/Integration/VoucherRedemptionPersistenceTest.php`
-  (real-MySQL round trip, CI-only).
+  idempotency, cap exhaustion), `ValidateVoucherHandlerTest` (Phase 19 — eligible/ineligible,
+  unknown package/voucher, unknown enum values); `tests/Unit/Http/VouchersValidateActionTest.php`
+  (Phase 19 — HTTP shape); `tests/Integration/VoucherRedemptionPersistenceTest.php` (real-MySQL
+  round trip, CI-only).
 
-## 11. Open questions / future work
+## 12. Open questions / future work
 
-- Phase 19: `POST /api/v1/vouchers/validate` endpoint (a non-locking pre-check via the same
-  `VoucherEligibilityEvaluator`, without reserving).
 - Phase 29: stale-`reserved`-row sweep (background job) — deferred by Phase 17 Q2.
 - Not yet modelled: stacking / combinability with other vouchers (assume **one voucher per
   payment** until a phase says otherwise), auto-apply vs. code-entry, referral vouchers.

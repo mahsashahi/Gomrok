@@ -173,6 +173,13 @@ its own amount in the group currency; `status=disabled` hides the package in tha
 # Client-facing catalogue (Phase 13)
 curl -s '.../api/v1/packages?country=DE&device=ios' -H 'Authorization: Bearer gk_...'
 curl -s '.../api/v1/pricing/resolve?package=pro&country=DE&method=card&purchase_type=subscription&interval=yearly' -H 'Authorization: Bearer gk_...'
+
+# One package's detail (Phase 19) — {packageId} accepts either the numeric id or the code
+curl -s '.../api/v1/packages/pro?country=DE' -H 'Authorization: Bearer gk_...'
+curl -s '.../api/v1/packages/1?country=DE' -H 'Authorization: Bearer gk_...'
+
+# Voucher eligibility + discount preview (Phase 19) — GET, reserves nothing
+curl -s '.../api/v1/vouchers/validate?package=pro&country=DE&code=WELCOME10' -H 'Authorization: Bearer gk_...'
 ```
 
 `GET /api/v1/packages` returns the availability + purchase capabilities + **resolved base price**
@@ -183,6 +190,21 @@ An unavailable combination returns `422 pricing.combination_unavailable`. Gomrok
 client-supplied price. (Phase 15 added `price_lists` between the base and the rules, but every
 resolve uses each group's control list until visitor→list assignment lands in the checkout phase
 — the API responses are unchanged.)
+
+`GET /api/v1/packages/{packageId}` (Phase 19) returns the exact same shape as one item of
+`GET /api/v1/packages` — same `country` / `method` / `device` params — for one package, found by
+either its numeric id or its code. A package that exists but isn't available/sellable in the
+requested context is `404 package.not_found_in_context`, same as an unknown id/code being
+`404 package.not_found`.
+
+`GET /api/v1/vouchers/validate` (Phase 19) resolves the package's price internally (same as
+`pricing/resolve`, plus the optional `method` / `purchase_type` / `interval` / `device` params),
+then runs the Phase 16 eligibility evaluator against `code`. Add `client_user_ref` when the
+voucher has a per-user cap, and `first_purchase=true|false` for a `first_purchase_only` voucher.
+The response is `{"eligible": bool, "reasons": [...], "voucher": {...}, "price": {...}}` plus a
+`discount` object (`nominal_minor` / `applied_minor` / `payable_minor`) only when `eligible` is
+`true`. Nothing is reserved — repeat calls are always safe, and it is deliberately `GET`, not
+`POST`, so it never needs an `Idempotency-Key`.
 
 Provider secrets are encrypted with `APP_ENCRYPTION_KEY` — set it before creating accounts
 (`php -r 'echo base64_encode(random_bytes(32));'`). Secrets are printed once at most, never by
@@ -209,13 +231,21 @@ composer voucher:release -- --client=televika --voucher=1 --attempt=order-42
 composer voucher:list-redemptions -- --client=televika --voucher=1
 
 # Checkout attempts — pre-payment lifecycle (Phase 18)
-composer checkout:create -- --client=televika --attempt=order-42 --package=7 --country=DE --currency=EUR [--client-user=user-1] [--purchase-type=one_time_payment] [--method=card] [--interval=yearly]
+composer checkout:start -- --client=televika --attempt=order-42 --package=7 --country=DE --currency=EUR [--client-user=user-1] [--purchase-type=one_time_payment] [--method=card] [--interval=yearly]
 composer checkout:resolve-pricing -- --client=televika --attempt=order-42 [--device=web] [--provider-account=1] [--price-list=1]
 composer checkout:reserve-voucher -- --client=televika --attempt=order-42 --code=WELCOME10 [--client-user=user-1]
 composer checkout:select-provider -- --client=televika --attempt=order-42 --mode=test [--device=web]
 composer checkout:set-status -- --client=televika --attempt=order-42 --status=canceled
 composer checkout:set-status -- --client=televika --attempt=order-42 --status=failed --error-code=provider_declined --error-message="Card declined"
-composer checkout:list-attempts -- --client=televika
+composer checkout:list -- --client=televika
+
+# Payments — aggregate & lifecycle (Phase 20); no real provider adapter yet
+composer payment:create -- --client=televika --attempt=order-42
+composer payment:record-transaction -- --client=televika --payment=1 --provider-account=1 --kind=authorize --status-raw=requires_action --new-status=pending [--method=card]
+composer payment:record-transaction -- --client=televika --payment=1 --provider-account=1 --kind=authorize --status-raw=succeeded --new-status=authorized --attempt-outcome=succeeded
+composer payment:set-status -- --client=televika --payment=1 --status=refunded
+composer payment:link-customer -- --client=televika --provider-account=1 --client-user=user-1 --provider-customer-id=cus_abc123
+composer payment:list -- --client=televika
 ```
 
 `code` is `^[A-Z0-9][A-Z0-9_-]{2,63}$` (≥3 chars), unique per client, stored upper-case. A
@@ -226,9 +256,9 @@ not applicable. Usage limits are three nullable columns
 (`--max-total` / `--max-per-user` / `--max-per-client`) — omit a flag for "unlimited" on that
 axis; `--max-per-user=1` with the other two unset is "valid for everyone, once per user."
 `voucher:set-eligibility` **full-replaces** the rule set (repeat `--rule=dimension:value`; no
-`--rule` at all clears every restriction). There is no `POST /api/v1/vouchers/validate`
-endpoint yet (Phase 19) — the create/update/eligibility/discount/limits/status commands only
-manage definitions.
+`--rule` at all clears every restriction). The create/update/eligibility/discount/limits/status
+commands manage definitions only — `GET /api/v1/vouchers/validate` (Phase 19, above) is the
+non-locking eligibility + discount preview.
 
 `voucher:reserve` re-checks eligibility (now including the usage caps), computes the discount,
 and reserves it against an `--attempt` reference — repeating the same `--attempt` for the same
@@ -238,7 +268,7 @@ count once, ever); `voucher:release` frees it after a failed/canceled attempt so
 is available again. A confirmed redemption can never be released, and a released one can never
 be confirmed. Full rule set: **`.claude/Voucher.md`**.
 
-`checkout:create` starts (or idempotently replays, by `--attempt`) a `checkout_attempts` row.
+`checkout:start` starts (or idempotently replays, by `--attempt`) a `checkout_attempts` row.
 `checkout:resolve-pricing` runs `PriceResolver` and writes a `pricing_decision_snapshots` row,
 advancing status to `pricing_resolved`. `checkout:reserve-voucher` reserves the voucher (same
 `--attempt` string reused as the voucher redemption's own reference) and writes a
@@ -251,6 +281,20 @@ and writes a `provider_routing_decision_snapshots` row, advancing to `provider_s
 rest of the pipeline. `--attempt` accepts either the caller's `attempt_reference` string or the
 numeric `checkout_attempts.id` everywhere it's a parameter (resolved by trying the id first,
 then falling back to a lookup by reference).
+
+`payment:create` requires the checkout attempt's status to be `confirmed` — it copies the
+checkout attempt's commercial context plus the already-resolved payable amount (the voucher's
+amount if one was reserved, else the pricing snapshot's) onto a new `payments` row and converts
+the attempt. Repeating it for the same `--attempt` is a no-op that returns the existing payment.
+`payment:record-transaction` appends one raw provider call/response under the payment's current
+attempt (opening a new one if the last is already `succeeded`/`failed`) and transitions the
+payment per the `PaymentStatus` graph — `--attempt-outcome=succeeded|failed` explicitly completes
+the attempt (never inferred from `--new-status`). `payment:set-status` is the escape hatch for
+any other legal transition (e.g. an admin cancel). `payment:link-customer` records a durable
+customer identity for later reuse; repeating the same `--provider-account`/`--provider-customer-id`
+pair is a no-op. There is no real provider adapter yet (Phase 21+), so every `--status-raw` /
+`--new-status` here is supplied by the caller, not derived from an actual provider response — and
+no HTTP endpoint yet (Phase 24).
 
 `composer db:setup` in `local` / `testing` also seeds a `local-dev` client with a fixed token:
 `gk_test_000000000000dead.localdevsecretlocaldevsecret1234` (dev only — the seeder no-ops in

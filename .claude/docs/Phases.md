@@ -36,8 +36,8 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 16 | Vouchers module: definitions & eligibility | ☑ | 2026-09-10 16:08 | 2026-09-10 20:01 | 4–6h | 3h 53m | N/A |
 | 17 | Voucher validation, discount calc & redemption lifecycle | ☑ | 2026-09-11 12:52 | 2026-09-11 14:03 | 5–8h | 1h 11m | N/A |
 | 18 | Decision snapshots | ☑ | 2026-09-11 14:19 | 2026-09-11 15:44 | 2–4h | 1h 25m | N/A |
-| 19 | Resolution API endpoints | ☐ | — | — | 3–5h | — | — |
-| 20 | Payments module: aggregate & lifecycle | ☐ | — | — | 4–6h | — | — |
+| 19 | Resolution API endpoints | ☑ | 2026-09-11 15:50 | 2026-09-11 16:40 | 3–5h | 50m | N/A |
+| 20 | Payments module: aggregate & lifecycle | ☑ | 2026-09-11 16:50 | 2026-09-11 18:34 | 4–6h | 1h 44m | N/A |
 | 21 | Provider adapter port & Stripe adapter | ☐ | — | — | 6–9h | — | — |
 | 22 | Mollie & PayPal adapters | ☐ | — | — | 6–9h | — | — |
 | 23 | Ziraat adapter | ☐ | — | — | 4–7h | — | — |
@@ -583,7 +583,7 @@ proposed options, not a choice from the presented list):**
   only the attempt's own immutable commercial context, the exact shape a future `payments` row
   (Phase 20) will copy at conversion — no checkout-attempt or decision-snapshot row is ever
   deleted or mutated by that step.
-- `checkout:create|resolve-pricing|reserve-voucher|select-provider|set-status|list-attempts` CLI.
+- `checkout:start|resolve-pricing|reserve-voucher|select-provider|set-status|list` CLI.
 
 **DB:** `checkout_attempts`, `pricing_decision_snapshots`, `voucher_decision_snapshots`,
 `provider_routing_decision_snapshots` (4 tables, migration `20260911150001`).
@@ -596,34 +596,83 @@ happy-path + no-voucher-path wiring (`CheckoutAttemptHandlersTest`), and a real-
 
 ## Phase 19 — Resolution API endpoints
 
-**Goal:** clients ask Gomrok for packages and prices; they never send a price.
+**Goal:** clients ask Gomrok for packages, prices, and voucher eligibility; they never send a
+price.
 
-**Scope:**
-- `GET /api/v1/packages` and `GET /api/v1/packages/{packageId}` with resolved context
-  (client, country, currency, payment method, purchase type, client user when needed).
-- `POST /api/v1/pricing/resolve`, `POST /api/v1/vouchers/validate`.
-- Package response can include resolved price, currency, available providers, payment methods,
-  purchase types, and voucher eligibility when safe to expose.
+**As built (decisions Phase 19 Q1–Q5):** `GET /api/v1/packages` and
+`GET /api/v1/pricing/resolve` already existed from Phases 13–14 (both `GET`, not the `POST`
+CLAUDE.md suggests, since neither mutates anything). This phase added:
 
-**DB:** none new.
+- **`GET /api/v1/packages/{packageId}?country=…[&method=][&device=]`** (`PackageDetailAction`) —
+  one package from the exact same resolved catalogue `GET /api/v1/packages` returns
+  (`PriceCatalog::resolve`), so the two endpoints can never disagree. `{packageId}` accepts
+  either the numeric `packages.id` or the package `code` (Q1). A package that exists but isn't
+  available/sellable in the requested context is reported as `404 package.not_found_in_context`
+  — the same fail-closed posture as an unresolvable `pricing/resolve` combination (Q2).
+- **`GET /api/v1/vouchers/validate?package=…&country=…&code=…[&device=][&method=][&purchase_type=]
+  [&interval=][&client_user_ref=][&first_purchase=]`** (`VouchersValidateAction` +
+  `Vouchers\Application\ValidateVoucher\ValidateVoucherHandler`) — a non-locking eligibility +
+  discount preview (Q3): resolves the package's price via `PriceResolver` (never trusts a
+  client-supplied amount), runs the same `VoucherEligibilityEvaluator` used as
+  `ReserveVoucherRedemptionHandler`'s authoritative gate, and — only when eligible — the Phase 17
+  `VoucherDiscountCalculator`. Nothing is reserved or written. `GET`, not `POST` (Q4), for the
+  same write-idempotency-avoidance reason as `pricing/resolve`.
+- HTTP-level tests via action-level direct-invoke (Q5), matching the existing
+  `MeActionTest`/`HealthActionTest` convention — no new full-app test harness.
 
-**Exit:** HTTP-level resolution tested end to end; client scoping enforced; client-supplied
-prices ignored.
+Package-list "voucher eligibility when safe to expose" (an optional CLAUDE.md field) is not
+implemented this phase — `GET /api/v1/vouchers/validate` is the mechanism CLAUDE.md actually
+names for checking one voucher, and evaluating every active voucher against every catalogue
+package on every list call was judged out of scope for this phase.
+
+**DB:** no database changes.
+
+**Exit:** HTTP-level resolution tested end to end (action-level tests + a captured live-request
+evidence script); client scoping enforced (`ClientContext::clientId()` scopes every lookup;
+another client's package by numeric id is `404`, never leaked); client-supplied prices ignored
+(both endpoints resolve price internally, never from a request parameter).
 
 ## Phase 20 — Payments module: aggregate & lifecycle
 
 **Goal:** the payment record and its state machine.
 
-**Scope:**
-- `payments`, `payment_attempts`, `provider_transactions`, `provider_customers`,
-  `gateway_references` (indexed for reverse lookup from any provider id).
-- Internal status enum (`created`, `pending`, `requires_action`, `authorized`, `paid`, `failed`,
-  `canceled`, `expired`, `refunded`, `partially_refunded`, `disputed`, `chargeback`) + transition
-  rules; unknown provider statuses stored safely, never leaked into core logic.
+**As built (decisions Phase 20 Q1–Q5 — Q2 had a flagged conflict, resolved before proceeding):**
+- **`payments`** (Q1) is created from exactly one confirmed `checkout_attempts` row —
+  `checkout_attempt_id` a required `UNIQUE` FK, never populated any other way, realizing the
+  hand-off Phase 18's `commercialSnapshot()`/`converted_to_payment` were built for.
+  `amount_minor` is frozen at creation from the checkout attempt's pricing/voucher decision
+  snapshots and never re-derived.
+- **`PaymentStatus`** (Q2) is an explicit allowed-next-statuses graph per status (not a single
+  rank) — `created`/`pending`/`requires_action`/`authorized`/`paid`/`failed`/`canceled`/`expired`/
+  `refunded`/`partially_refunded`/`disputed`/`chargeback`, with `paid` branching to
+  `refunded`/`partially_refunded`/`disputed` and `disputed` resolving to `chargeback` or back to
+  `paid`. **The first answer to this question ("no rule engine yet") was flagged as conflicting
+  with this phase's own exit criterion** (nothing to reject with no rule at all) and the
+  explicit-graph design was adopted instead before implementation began.
+- **`payment_attempts` → `provider_transactions`** (Q3): a deliberate three-tier model (with
+  `payments` as the top tier) matching CLAUDE.md's three distinct Required Database Concepts — an
+  attempt is one "try" against a provider (`attempt_number` incrementing on retry), a transaction
+  is one immutable raw call/response under an attempt.
+- **`provider_customers`** / **`gateway_references`** (Q4): a durable customer identity vs. a
+  generic, provider-agnostic reverse-lookup table (`reference_type` enum, not one column per
+  provider's id kind) — the mechanism the Gateway Reference Lookup Rule calls for. No
+  `subscription_id` column yet (Phase 26 adds it additively).
+- **`CreatePaymentHandler`** / **`RecordProviderTransactionHandler`** / **`ChangePaymentStatusHandler`**
+  / **`LinkProviderCustomerHandler`** (Q5) — one handler per step, matching every prior module's
+  pattern, + `payment:*` CLI. No real provider adapter exists yet (Phase 21+), so every status
+  transition is caller-supplied, not derived from an actual provider response.
 
-**DB:** payment tables, gateway references.
+**DB:** `payments`, `payment_attempts`, `provider_transactions`, `provider_customers`,
+`gateway_references` (5 tables, migration `20260911180001`).
 
-**Exit:** the state machine and rejection of illegal transitions tested.
+**Exit:** the state machine and rejection of illegal transitions tested
+(`PaymentStatusTest`, `PaymentTest` — happy path, dispute-resolves-to-paid branch, illegal
+transition, terminal-lock including a repeat of the current terminal status), full cross-module
+creation wiring (`CreatePaymentHandlerTest` — confirmed-attempt requirement, voucher-adjusted
+amount, idempotent replay), attempt/transaction recording (`RecordProviderTransactionHandlerTest`
+— new vs. reused attempt, illegal-transition rejection persists nothing), and a real-MySQL
+round-trip (`PaymentPersistenceTest`, CI-only) all tested; `composer ci` green (376 unit tests,
+1507 assertions).
 
 ## Phase 21 — Provider adapter port & Stripe adapter
 

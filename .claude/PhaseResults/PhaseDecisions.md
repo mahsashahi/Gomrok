@@ -16,6 +16,258 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 20 — Payments module: aggregate & lifecycle
+
+### Q1 — Payment creation entry point
+
+**Question:** How does a `Payment` come into existence in this phase?
+
+**Options:**
+
+1. **Require a confirmed `checkout_attempts` row** — `CreatePayment` requires the attempt's
+   status to be `confirmed`, copies `CheckoutAttempt::commercialSnapshot()` onto the new
+   `Payment` (status `created`), and transitions the attempt to `converted_to_payment`
+   (`payments.checkout_attempt_id` FK, `UNIQUE`). Realizes the Phase 18 design's stated purpose.
+2. Standalone payment creation (client/package/price fields directly, no checkout attempt); the
+   checkout-attempt↔payment link deferred to Phase 24.
+3. Both, via a nullable `checkout_attempt_id` FK.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — require a confirmed `checkout_attempts` row; `checkout_attempt_id` is a
+required, `UNIQUE` FK on `payments`.
+
+**Status:** Decided
+
+---
+
+### Q2 — Status transition rules
+
+**Question:** What shape should the payment status transition rules take, and what's the actual
+transition graph?
+
+**Options:**
+
+1. **Explicit allowed-transitions adjacency list per status** — each status gets its own set of
+   legal next-statuses (a payment lifecycle genuinely branches, unlike Checkout's linear
+   happy-path). Proposed graph:
+   ```
+   created            → pending, canceled, failed
+   pending            → requires_action, authorized, paid, failed, canceled, expired
+   requires_action    → authorized, paid, failed, canceled, expired
+   authorized         → paid, canceled, expired, failed
+   paid               → refunded, partially_refunded, disputed
+   partially_refunded → refunded, disputed
+   disputed           → chargeback, paid   (resolved in the merchant's favor)
+   refunded, canceled, expired, failed, chargeback → (none — terminal)
+   ```
+   Same-status is an idempotent no-op; anything else not listed is rejected.
+2. Reuse Checkout's monotonic-rank approach, adapted for payments.
+3. No rule engine yet — `transitionTo()` accepts anything; validation deferred to Phase 21+.
+
+**Recommended:** Option 1
+
+**Selected (after a flagged conflict — Option 3 was initially chosen but conflicts with this
+phase's own exit criterion "rejection of illegal transitions tested"; the user then switched to):**
+Option 1 — the explicit allowed-transitions adjacency list above, as originally recommended.
+
+**Status:** Decided
+
+---
+
+### Q3 — `payment_attempts` / `provider_transactions` relationship
+
+**Question:** How should these two tables relate to each other and to `payments`?
+
+**Options:**
+
+1. **Three-tier: `payments` → `payment_attempts` → `provider_transactions`** — one `payments` row
+   per purchase; one `payment_attempts` row per distinct "try" against a provider (a retry with a
+   different method is a new attempt on the same payment); one or more `provider_transactions`
+   rows per attempt for each raw provider call/response. Matches CLAUDE.md's three distinct
+   Required Database Concepts.
+2. Two-tier: merge attempts into `provider_transactions`, dropping the separate attempt concept.
+3. One-tier: `payment_attempts` always 1:1 with `payments` (no real retry support yet).
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — three-tier `payments` → `payment_attempts` → `provider_transactions`.
+
+**Status:** Decided
+
+---
+
+### Q4 — `gateway_references` / `provider_customers` shape
+
+**Question:** How should these be shaped so any provider webhook/callback can be reverse-mapped
+to the correct client/payment/subscription?
+
+**Options:**
+
+1. **A generic, provider-agnostic `gateway_references` table** —
+   `(id, client_id, provider_account_id, reference_type, reference_value, payment_id nullable,
+   subscription_id nullable, created_at)`, `reference_type` an enum-like string, `UNIQUE
+   (provider_account_id, reference_type, reference_value)`. `provider_customers` is its own small
+   table (`client_id`, `client_user_ref`, `provider_account_id`, `provider_customer_id`,
+   `created_at`, `UNIQUE (provider_account_id, provider_customer_id)`).
+2. Provider-specific columns directly on `payments`/`provider_transactions`.
+3. `gateway_references` with fixed typed columns (`session_id`/`intent_id`/`customer_id`/…)
+   instead of a generic type/value pair.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — generic `gateway_references` (type/value pair) + a separate
+`provider_customers` table.
+
+**Status:** Decided
+
+---
+
+### Q5 — Application/CLI surface
+
+**Question:** What Application-layer/CLI surface should this phase build, given there's no real
+provider adapter yet?
+
+**Options:**
+
+1. **One handler per step + CLI, matching every prior module's pattern** — `CreatePayment` (from
+   a confirmed checkout attempt, Q1), `RecordProviderTransaction` (appends a
+   `payment_attempts`/`provider_transactions` row and advances status per the Q2 graph),
+   `ChangePaymentStatus` (generic escape hatch, mirroring `ChangeCheckoutAttemptStatusHandler`),
+   `PaymentDirectory`, `payment:*` CLI.
+2. Domain-and-repository only this phase, no Application layer or CLI — all use cases deferred to
+   Phase 24.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — one handler per step + `PaymentDirectory` + `payment:*` CLI.
+
+**Status:** Decided
+
+---
+
+## Phase 19 — Resolution API endpoints
+
+### Q5 — HTTP test strategy
+
+**Question:** What test strategy satisfies "HTTP-level resolution tested end to end" for the new/
+changed actions (`PackagesAction` detail lookup, the new vouchers-validate action)?
+
+**Options:**
+
+1. **Action-level direct-invoke tests** — instantiate the Action class directly with hand-built
+   dependencies and dispatch a real Slim PSR-7 request/response through `__invoke()`, exactly
+   like the existing `MeActionTest` / `HealthActionTest` in `tests/Unit/Http/`. The middleware
+   stack (auth, idempotency, correlation id) already has its own dedicated unit tests, so this
+   doesn't duplicate that coverage.
+2. Full-app dispatch tests — build the real Slim `App` via `ContainerFactory` + `routes.php` and
+   send requests through the entire middleware stack. Catches route-wiring mistakes but needs new
+   test-harness infrastructure and duplicates the existing middleware unit tests.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — action-level direct-invoke tests, matching the existing
+`MeActionTest`/`HealthActionTest` convention.
+
+**Status:** Decided
+
+---
+
+### Q4 — HTTP method for the validate endpoint vs. the write-idempotency rule
+
+**Question:** The endpoint mutates nothing (no reservation, no DB write), but `/api/v1` requires
+an `Idempotency-Key` on every `POST`/`PUT`/`PATCH`/`DELETE` (Phase 7 Q5). Should it be exempt?
+
+**Options:**
+
+1. **Make it a `GET`** (`GET /api/v1/vouchers/validate`) — extends the exact precedent already
+   documented on `PricingResolveAction` ("a pure read; a GET keeps it clear of the
+   write-idempotency rule"). No new middleware logic.
+2. Keep `POST`, require `Idempotency-Key` anyway — matches CLAUDE.md's literal suggested method,
+   but forces a key for a call that reserves nothing.
+3. Keep `POST`, add a per-route exemption to `IdempotencyMiddleware` — preserves the verb but
+   adds new middleware configuration surface for one route.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `GET /api/v1/vouchers/validate`, no idempotency key required.
+
+**Status:** Decided
+
+---
+
+### Q3 — Scope of `POST /api/v1/vouchers/validate`
+
+**Question:** What should this endpoint actually compute and return?
+
+**Options:**
+
+1. **Eligibility + discount preview, resolved internally** — request carries package + country
+   (+ optional device/method/purchase_type/interval/client_user_ref) + voucher code, same shape
+   as `pricing/resolve`'s inputs plus `code`. The endpoint resolves the price itself via
+   `PriceResolver` (never trusts a client-supplied amount), runs `VoucherEligibilityEvaluator`,
+   and — if eligible — runs `VoucherDiscountCalculator` too, returning the nominal/applied
+   discount and final payable amount as a preview only (no reservation, no DB write). Ineligible
+   → `eligible: false` + every unmet reason.
+2. Eligibility only, no discount numbers — same inputs/check, but never computes or returns a
+   discount preview.
+3. Caller supplies the already-resolved price (`price_minor` + `currency`) instead of the
+   endpoint resolving it — simpler wiring but a price-manipulation surface.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — eligibility + discount preview, price resolved internally via
+`PriceResolver`, never supplied by the caller.
+
+**Status:** Decided
+
+---
+
+### Q2 — Package not available in the requested context
+
+**Question:** What happens when `GET /api/v1/packages/{packageId}` is asked for a package that
+exists (active, belongs to this client) but isn't available/sellable in the requested
+country/currency/method/purchase-type context?
+
+**Options:**
+
+1. **`404 package.not_found_in_context`** — treat "exists but not sellable here" the same as
+   "doesn't exist" for this request, matching the fail-closed posture `PackageCatalog` /
+   `PriceResolver` already take, and what `pricing/resolve` already does for an unresolvable
+   combo.
+2. `200` with `available: false` and no `price` object — lets a UI branch on a field instead of
+   HTTP status, but introduces a response shape not used anywhere else in this API.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `404 package.not_found_in_context`.
+
+**Status:** Decided
+
+---
+
+### Q1 — `GET /api/v1/packages/{packageId}` identifier
+
+**Question:** `{packageId}` needs a value a client can actually pass. What should it accept?
+
+**Options:**
+
+1. **Accept either the numeric `packages.id` or the package `code`** — tries numeric first, else
+   looks up by code, the same "id-or-reference" convention already used by the Phase 18 Checkout
+   CLI (`--attempt=<ref|id>`).
+2. Numeric `packages.id` only — matches the literal `{packageId}` route name, but forces every
+   caller to already have the id (typically from a prior list call).
+3. Package `code` only — codes are the client-facing handle per the package-catalog spirit, but
+   breaks the literal `{packageId}` naming and drops numeric-id lookup entirely.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — accept either the numeric id or the code.
+
+**Status:** Decided
+
+---
+
 ## Phase 18 — Decision snapshots
 
 ### Q5 — Handler/CLI surface, and the payment hand-off contract

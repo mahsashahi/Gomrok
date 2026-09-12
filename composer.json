@@ -120,6 +120,11 @@
         "checkout:select-provider": "php bin/SelectCheckoutProvider.php",
         "checkout:set-status": "php bin/SetCheckoutAttemptStatus.php",
         "checkout:list": "php bin/ListCheckoutAttempts.php",
+        "payment:create": "php bin/CreatePayment.php",
+        "payment:record-transaction": "php bin/RecordProviderTransaction.php",
+        "payment:set-status": "php bin/SetPaymentStatus.php",
+        "payment:link-customer": "php bin/LinkProviderCustomer.php",
+        "payment:list": "php bin/ListPayments.php",
         "ci": [
             "@cs",
             "@stan",
@@ -195,6 +200,11 @@
         "checkout:select-provider": "Route a checkout attempt to a provider account (--client --attempt --mode)",
         "checkout:set-status": "Manually transition a checkout attempt's status (--client --attempt --status)",
         "checkout:list": "List a client's checkout attempts (--client=<slug|id>)",
+        "payment:create": "Create the final payment from a confirmed checkout attempt (--client --attempt)",
+        "payment:record-transaction": "Record a raw provider call/response and transition the payment (--client --payment --provider-account --kind --status-raw --new-status ...)",
+        "payment:set-status": "Manually transition a payment's status (--client --payment --status)",
+        "payment:link-customer": "Link a client user to a provider customer id (--client --provider-account --client-user --provider-customer-id)",
+        "payment:list": "List a client's payments (--client=<slug|id>)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }

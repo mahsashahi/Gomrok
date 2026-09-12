@@ -37,6 +37,7 @@ flowchart TD
     Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + group-package rows (P13)&lt;br/&gt;price_rules (P14)&lt;br/&gt;price_lists + price_list_packages (P15)"]
     Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)&lt;br/&gt;voucher_redemptions (P17)&lt;br/&gt;voucher_decision_snapshots (P18)"]
     Checkout["Checkout&lt;br/&gt;checkout_attempts — pre-payment anchor (P18)"]
+    Payments["Payments&lt;br/&gt;payments + payment_attempts + provider_transactions (P20)&lt;br/&gt;provider_customers + gateway_references (P20)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
@@ -68,8 +69,8 @@ flowchart TD
     Admin -.-&gt; Payments
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout done;
-    class Payments,Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments done;
+    class Subscriptions,Webhooks,Notifications,Admin todo;
 </pre>
 
 <h2>Reference data (Phase 4)</h2>
@@ -687,6 +688,79 @@ erDiagram
     checkout_attempts ||--o| provider_routing_decision_snapshots : "routed by"
     voucher_redemptions ||--o| voucher_decision_snapshots : "amounts from"
     provider_accounts ||--o{ provider_routing_decision_snapshots : "chosen"
+</pre>
+
+<h2>Payments — aggregate & lifecycle (Phase 20)</h2>
+<pre class="mermaid">
+erDiagram
+    payments {
+        int id PK
+        int client_id FK
+        int checkout_attempt_id FK
+        varchar client_user_ref
+        int package_id FK
+        char country FK
+        char currency_code FK
+        bigint amount_minor
+        varchar purchase_type
+        varchar payment_method
+        varchar subscription_interval
+        varchar status
+        varchar error_code
+        varchar error_message
+        datetime created_at
+        datetime updated_at
+    }
+    payment_attempts {
+        int id PK
+        int payment_id FK
+        int provider_account_id FK
+        smallint attempt_number
+        varchar status
+        varchar payment_method
+        varchar error_code
+        varchar error_message
+        datetime created_at
+        datetime updated_at
+    }
+    provider_transactions {
+        int id PK
+        int payment_attempt_id FK
+        varchar kind
+        json request_payload
+        json response_payload
+        varchar provider_status_raw
+        datetime created_at
+    }
+    provider_customers {
+        int id PK
+        int client_id FK
+        int provider_account_id FK
+        varchar client_user_ref
+        varchar provider_customer_id
+        datetime created_at
+        datetime updated_at
+    }
+    gateway_references {
+        int id PK
+        int client_id FK
+        int provider_account_id FK
+        varchar reference_type
+        varchar reference_value
+        int payment_id FK
+        datetime created_at
+    }
+    clients ||--o{ payments : "owns"
+    checkout_attempts ||--|| payments : "converts to"
+    packages ||--o{ payments : "purchases"
+    payments ||--o{ payment_attempts : "tries via"
+    provider_accounts ||--o{ payment_attempts : "attempted through"
+    payment_attempts ||--o{ provider_transactions : "raw calls"
+    clients ||--o{ provider_customers : "identifies"
+    provider_accounts ||--o{ provider_customers : "recognises"
+    clients ||--o{ gateway_references : "owns"
+    provider_accounts ||--o{ gateway_references : "issues"
+    payments ||--o{ gateway_references : "referenced by"
 </pre>
 </div>
 

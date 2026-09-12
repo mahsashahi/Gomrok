@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use Gomrok\Http\Api\MeAction;
+use Gomrok\Http\Api\PackageDetailAction;
 use Gomrok\Http\Api\PackagesAction;
 use Gomrok\Http\Api\PricingResolveAction;
+use Gomrok\Http\Api\VouchersValidateAction;
 use Gomrok\Http\HealthAction;
 use Gomrok\Shared\Http\AuthenticationMiddleware;
 use Gomrok\Shared\Http\IdempotencyMiddleware;
@@ -19,8 +21,11 @@ return static function (App $app): void {
     $app->group('/api/v1', function (RouteCollectorProxy $group): void {
         $group->get('/me', MeAction::class);
         $group->get('/packages', PackagesAction::class);
+        $group->get('/packages/{packageId}', PackageDetailAction::class);
         // A pure read (no side effects); GET so it isn't caught by the write-idempotency rule.
         $group->get('/pricing/resolve', PricingResolveAction::class);
+        // Same reasoning (Phase 19 Q4): a non-locking preview, never a reservation.
+        $group->get('/vouchers/validate', VouchersValidateAction::class);
     })
         ->add(IdempotencyMiddleware::class)   // inner: runs after auth has set authClientId
         ->add(AuthenticationMiddleware::class); // outer: runs first

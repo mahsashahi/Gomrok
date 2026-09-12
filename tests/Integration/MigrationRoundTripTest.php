@@ -69,6 +69,11 @@ final class MigrationRoundTripTest extends TestCase
         'pricing_decision_snapshots',
         'voucher_decision_snapshots',
         'provider_routing_decision_snapshots',
+        'payments',
+        'payment_attempts',
+        'provider_transactions',
+        'provider_customers',
+        'gateway_references',
     ];
 
     private PDO $pdo;

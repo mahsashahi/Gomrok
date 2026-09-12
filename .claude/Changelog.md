@@ -7,6 +7,115 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-11 — Phase 20: Payments module: aggregate & lifecycle
+
+**Summary.** The payment record and its internal status state machine. New `Payments` module:
+`payments` is created from exactly one confirmed `checkout_attempts` row (`checkout_attempt_id`
+required `UNIQUE` FK, realizing the Phase 18 `commercialSnapshot()`/`converted_to_payment`
+hand-off), with `amount_minor` frozen at creation from the checkout attempt's pricing/voucher
+decision snapshots. `PaymentStatus` is an explicit allowed-next-statuses graph per status (not a
+rank) — `paid` branches to `refunded`/`partially_refunded`/`disputed`, `disputed` resolves to
+`chargeback` or back to `paid`. `payment_attempts` → `provider_transactions` is a three-tier
+model (one "try" per attempt, one immutable raw call/response per transaction);
+`provider_customers` (durable customer identity) and `gateway_references` (generic
+provider-agnostic reverse lookup) round out the schema. No real provider adapter exists yet
+(Phase 21+) — every status transition this phase is caller-supplied. Decisions
+(`PhaseResults/PhaseDecisions.md` Phase 20 Q1–Q5): **Q1** payment requires a confirmed checkout
+attempt · **Q2** explicit allowed-transitions graph (the first answer, "no rule engine yet," was
+flagged as conflicting with this phase's own exit criterion and replaced with the graph before
+implementation) · **Q3** three-tier `payments`→`payment_attempts`→`provider_transactions` ·
+**Q4** generic `gateway_references` + separate `provider_customers` · **Q5** one handler per
+step + `payment:*` CLI. **Schema confirmed by the user.**
+
+**Files created**
+- Migration `20260911180001_create_payment_tables.php` → `CreatePaymentTables` (5 tables).
+- Payments module: `Domain/{PaymentStatus,Payment,PaymentRepository,PaymentAttemptStatus,
+  PaymentAttempt,PaymentAttemptRepository,ProviderTransaction,ProviderTransactionRepository,
+  ProviderCustomer,ProviderCustomerRepository,GatewayReferenceType,GatewayReference,
+  GatewayReferenceRepository}.php`; `Application/{PaymentAuditSnapshot,PaymentSummary,
+  PaymentDirectory}.php`; `Application/CreatePayment/`, `Application/RecordProviderTransaction/`,
+  `Application/ChangePaymentStatus/`, `Application/LinkProviderCustomer/` (Command/Result/Handler
+  each); `Infrastructure/{PdoPaymentRepository,PdoPaymentAttemptRepository,
+  PdoProviderTransactionRepository,PdoProviderCustomerRepository,PdoGatewayReferenceRepository,
+  PdoPaymentDirectory,definitions}.php`.
+- CLI: `bin/{CreatePayment,RecordProviderTransaction,SetPaymentStatus,LinkProviderCustomer,
+  ListPayments}.php` + `composer payment:create|record-transaction|set-status|link-customer|list`.
+- Tests: 5 new in-memory test doubles (`tests/Support/InMemory{Payment,PaymentAttempt,
+  ProviderTransaction,ProviderCustomer,GatewayReference}Repository.php`);
+  `tests/Unit/Modules/Payments/Domain/{PaymentStatusTest,PaymentTest,PaymentAttemptTest}.php`;
+  `tests/Unit/Modules/Payments/Application/{CreatePaymentHandlerTest,
+  RecordProviderTransactionHandlerTest,ChangePaymentStatusHandlerTest,
+  LinkProviderCustomerHandlerTest}.php`; `tests/Integration/PaymentPersistenceTest.php`
+  (real-MySQL round trip, CI-only).
+- `.claude/PhaseResults/Phase20Result.md`.
+
+**Files changed**
+- `src/Bootstrap/ContainerFactory.php` — `MODULE_DEFINITIONS` gained
+  `Payments/Infrastructure/definitions.php`.
+- `composer.json` / `composer.lock`.
+- `tests/Integration/MigrationRoundTripTest.php` — 5 new tables added.
+- DB docs (`database-design.md` → 51 tables + new "Payments — aggregate & lifecycle (Phase 20)"
+  section, `database-diagram.md` + `.html` 17/17 mermaid, `db_explain.md`); `Architecture.md`
+  (§3, new §8 Payments subsection, §9 pipeline, §13 deferred); `Phases.md` (row 20 → ☑, as-built
+  scope); `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D23).
+- Minor doc-accuracy fix noticed in passing: `checkout:*` CLI script names were mistakenly
+  written as `checkout:create`/`checkout:list-attempts` in several Phase 19-and-earlier "live"
+  docs (`FileIndex.md`, `Commands.md`, `Phases.md`); corrected to the actual `composer.json`
+  names, `checkout:start`/`checkout:list`. Historical entries (`Changelog.md`'s Phase 18 entry,
+  `PhaseResults/Phase18Result.md`) are left as originally written per the no-rewrite rule.
+
+**Reason.** Phase 20 of the 30-phase plan.
+
+**Migration notes.** 5 new tables, additive; no existing-table changes; no backfill. Every
+lifecycle transition rule (the `PaymentStatus` graph, the `PaymentAttempt` complete-once guard)
+is app-enforced, not a DB constraint.
+
+**Breaking changes.** None. All changes are additive (new module, new tables, new CLI scripts).
+
+## 2026-09-11 — Phase 19: Resolution API endpoints
+
+**Summary.** Clients can now ask Gomrok for one package's resolved detail and check a voucher's
+eligibility + discount over HTTP, without ever supplying a price. `GET /api/v1/packages` and
+`GET /api/v1/pricing/resolve` already existed (Phases 13–14); this phase added
+`GET /api/v1/packages/{packageId}` (`PackageDetailAction`, reusing `PriceCatalog::resolve` so it
+can never disagree with the list endpoint; `{packageId}` accepts id or code) and
+`GET /api/v1/vouchers/validate` (`VouchersValidateAction` + new
+`Vouchers\Application\ValidateVoucher\ValidateVoucherHandler` — a non-locking preview composing
+`PriceResolver`, `VoucherEligibilityEvaluator`, and `VoucherDiscountCalculator`, reserving
+nothing). Both new endpoints are `GET`, matching the existing `pricing/resolve` precedent of
+staying clear of the `/api/v1` write-idempotency rule for pure reads. Decisions
+(`PhaseResults/PhaseDecisions.md` Phase 19 Q1–Q5): **Q1** `{packageId}` accepts numeric id or
+code · **Q2** unavailable-in-context → `404 package.not_found_in_context` · **Q3** eligibility +
+discount preview, price resolved internally · **Q4** `GET`, no idempotency key · **Q5**
+action-level direct-invoke tests, matching `MeActionTest`/`HealthActionTest`. **No database
+changes.**
+
+**Files created**
+- `src/Modules/Vouchers/Application/ValidateVoucher/{ValidateVoucherCommand,ValidateVoucherResult,ValidateVoucherHandler}.php`.
+- `src/Http/Api/PackageDetailAction.php`, `src/Http/Api/VouchersValidateAction.php`.
+- Tests: `tests/Unit/Http/PackageDetailActionTest.php` (6 tests), `tests/Unit/Http/VouchersValidateActionTest.php`
+  (3 tests), `tests/Unit/Modules/Vouchers/Application/ValidateVoucherHandlerTest.php` (5 tests).
+- `.claude/PhaseResults/Phase19Result.md`.
+
+**Files changed**
+- `src/Config/routes.php` — registered `GET /api/v1/packages/{packageId}` and
+  `GET /api/v1/vouchers/validate` in the authenticated `/api/v1` group.
+- DB docs unchanged (no schema change this phase). `Architecture.md` (§3 Payments row untouched;
+  §8 Pricing/Vouchers HTTP bullets updated, §9 pipeline note, §13 deferred-work trimmed);
+  `Phases.md` (row 19 → ☑, as-built scope); `.claude/FileIndex.md` (new Http actions, new
+  `ValidateVoucher` use case, updated Vouchers module row); `.claude/knowledge/Knowledge.md` (new
+  Phase 19 gotchas section); `.claude/Orders.md` (D22); `.claude/Voucher.md` (new §9 "Validate
+  endpoint (Phase 19 — implemented)", §10 decisions log, §11 implementation pointers, §12 open
+  questions — renumbered from the old §9–§11).
+
+**Reason.** Phase 19 of the 30-phase plan.
+
+**Migration notes.** None — no schema change.
+
+**Breaking changes.** None. Both new routes are additive; no existing endpoint's behavior or
+response shape changed.
+
 ## 2026-09-11 — Phase 18: Decision snapshots
 
 **Summary.** History never changes when rules change. New `Checkout` module anchored by
