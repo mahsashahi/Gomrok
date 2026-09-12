@@ -22,6 +22,12 @@ interface ProviderAccountDirectory
     public function find(int $clientId, string $slug): ?ProviderAccountSummary;
 
     /**
+     * By id alone, no client scoping — used by {@see \Gomrok\Modules\Providers\Application\Adapter\ProviderAdapterFactory}
+     * (Phase 21) to resolve which adapter to build for a given `provider_account_id`.
+     */
+    public function findById(int $id): ?ProviderAccountSummary;
+
+    /**
      * Active accounts of the given provider type + mode — the router's candidate
      * set before country / method / capability filtering.
      *

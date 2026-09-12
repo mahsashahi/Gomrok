@@ -18,6 +18,7 @@
         "robmorgan/phinx": "^0.16.6",
         "slim/psr7": "^1.7",
         "slim/slim": "^4.14",
+        "stripe/stripe-php": "^17.0",
         "vlucas/phpdotenv": "^5.6"
     },
     "require-dev": {
@@ -125,6 +126,8 @@
         "payment:set-status": "php bin/SetPaymentStatus.php",
         "payment:link-customer": "php bin/LinkProviderCustomer.php",
         "payment:list": "php bin/ListPayments.php",
+        "stripe:create-checkout-session": "php bin/StripeCreateCheckoutSession.php",
+        "stripe:get-payment-status": "php bin/StripeGetPaymentStatus.php",
         "ci": [
             "@cs",
             "@stan",
@@ -205,6 +208,8 @@
         "payment:set-status": "Manually transition a payment's status (--client --payment --status)",
         "payment:link-customer": "Link a client user to a provider customer id (--client --provider-account --client-user --provider-customer-id)",
         "payment:list": "List a client's payments (--client=<slug|id>)",
+        "stripe:create-checkout-session": "Create a real Stripe Checkout Session (--client --account --attempt --amount-minor --currency --description --success-url --cancel-url ...)",
+        "stripe:get-payment-status": "Look up a Stripe Checkout Session's status (--client --account --reference)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }

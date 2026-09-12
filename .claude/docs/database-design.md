@@ -44,7 +44,8 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Checkout + decision snapshots (Phase 18) | `checkout_attempts` (Checkout module) + `pricing_decision_snapshots` (Pricing) + `voucher_decision_snapshots` (Vouchers) + `provider_routing_decision_snapshots` (Providers) — **4** |
 | Resolution API endpoints (Phase 19) | (no new tables) |
 | Payments — aggregate & lifecycle (Phase 20) | `payments`, `payment_attempts`, `provider_transactions`, `provider_customers`, `gateway_references` — **5** |
-| — | (more business tables land per module from Phase 21) |
+| Provider adapter port & Stripe adapter (Phase 21) | (no new tables) |
+| — | (more business tables land per module from Phase 22) |
 
 **Total: 51 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).

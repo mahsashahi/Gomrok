@@ -517,6 +517,55 @@ duplicate.
   an amount there is a dead end; the price always comes from the sibling decision-snapshot
   tables, found via the same `checkout_attempt_id`.
 
+## Provider adapter port & Stripe adapter (Phase 21)
+
+- **Test a real Stripe SDK integration with a fake transport, not a mocked adapter.** Stripe's
+  PHP SDK accepts a swappable `\Stripe\HttpClient\ClientInterface` (`\Stripe\ApiRequestor::
+  setHttpClient()`, process-global). `tests/Support/FakeStripeHttpClient.php` implements it as a
+  queued-response double, so `StripeAdapterTest` runs the **real** `StripeClient` /
+  `\Stripe\Webhook::constructEvent()` / exception-mapping logic — a genuine 401 body really
+  produces a real `AuthenticationException`, a genuine HMAC signature really verifies — with zero
+  network and zero real credentials. This is strictly better evidence than hand-mocking
+  `StripeAdapter`'s own dependencies would have been (which would only prove *our* code calls
+  *our* mocks correctly, not that it correctly drives the actual SDK). Always reset
+  `ApiRequestor::setHttpClient(new CurlClient())` in `tearDown()` — it's a static/global swap, so
+  a test that forgets to reset it leaks the fake into every test that runs after it in the same
+  process.
+- **A Stripe webhook signature is pure local HMAC-SHA256 — no network needed to test it either.**
+  The header format is `t=<unix ts>,v1=<hex hmac_sha256(secret, "{ts}.{payload}")>`
+  (`\Stripe\WebhookSignature::verifyHeader`). Tests construct a real, valid header the same way
+  Stripe itself would, rather than mocking signature verification away — this is what actually
+  exercises the "does our secret-resolution wiring work" question, not just "does our code call a
+  boolean-returning function correctly."
+- **`getCapabilities()` reads the Phase 8 seeded declaration; it does not hardcode a second copy**
+  of what Stripe supports. `StripeAdapter::getCapabilities()` calls
+  `ProviderTypeDeclarations::findByCode('stripe')` — the exact same source `ProviderCapabilityResolver`
+  and `ProviderRouter` already use. If Stripe's declared capabilities in `data/ProviderTypeDeclarations.json`
+  ever change, `getCapabilities()` changes with them automatically; there is no adapter-side list
+  to remember to keep in sync.
+- **Checkout Sessions and PaymentIntents are two different Stripe status vocabularies** —
+  `checkout.session.status` is `open`/`complete`/`expired`, while `payment_intent.status` is a
+  much richer state machine (`requires_payment_method`, `requires_action`, `requires_capture`,
+  `processing`, `succeeded`, `canceled`, …). `StripeStatusMapper` has two separate methods
+  (`fromCheckoutSession()`, `fromPaymentIntent()`) rather than one that tries to guess which
+  vocabulary a string belongs to — `getPaymentStatus()` prefers the PaymentIntent mapping when one
+  has been expanded (more precise), falling back to the session mapping otherwise. Don't merge
+  these into one `match` — the two vocabularies share some string values (`canceled` appears in
+  both, meaning different things) with different semantics.
+- **An unrecognised raw status always maps to `PaymentStatus::Pending`, never `Failed` or any
+  terminal status.** This is a deliberate reading of CLAUDE.md's "unknown provider statuses must
+  be stored safely and handled carefully" — `Pending` asserts nothing false (unlike `Paid`,
+  `Failed`, or `Refunded`, which would all be claims the mapper can't back up for a string it
+  doesn't recognise) and keeps the payment open for a human or a later webhook to resolve. The raw
+  string is *always* preserved separately (`ProviderPaymentStatus::$rawStatus`,
+  `provider_transactions.provider_status_raw`) regardless of how confident the mapping is.
+- **`ProviderAdapterFactory` builds a fresh adapter instance per call; it does not cache or reuse
+  one.** Given a client can have multiple accounts of the same provider type (live/test, or
+  several merchant sub-accounts), and each needs its own decrypted secret, caching would risk
+  serving one account's credentialed client to a request meant for another. The cost of a fresh
+  `new StripeClient($secret)` per call is negligible (no I/O happens at construction — the SDK is
+  lazy until a method call actually issues a request).
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

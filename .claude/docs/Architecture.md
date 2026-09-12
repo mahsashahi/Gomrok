@@ -84,7 +84,7 @@ Each module lives at `src/Modules/<Name>/` with `Domain/`, `Application/`, `Infr
 | Module | Owns |
 | --- | --- |
 | **Clients** | Client applications, API keys (hashed), client settings, authentication & per-request scoping. |
-| **Providers** | Provider types, provider accounts (per client, multiple per type), the capability model & capability resolution, country/group provider routing, provider adapters. |
+| **Providers** | Provider types, provider accounts (per client, multiple per type), the capability model & capability resolution, country/group provider routing, provider adapters (`PaymentProviderPort` + optional capability interfaces; Stripe implemented — Phase 21). |
 | **Packages** | Client-scoped package catalogue, availability rules, purchase-type capabilities, package↔provider definitions (remote id + sync state). |
 | **Pricing** | Pricing groups, default prices, override dimensions, the deterministic price-resolution engine, A/B price lists + visitor assignment. |
 | **Vouchers** | Voucher definitions, eligibility rules, usage limits, discount calculation, and a concurrency-safe redemption lifecycle (Phases 16–17 — implemented). |
@@ -217,31 +217,58 @@ Q3). Plain numeric IDs, no abstraction:
 
 ## 8. Providers & capabilities
 
-**Adapter shape (hybrid).**
+**Adapter shape (hybrid — designed Phase 1 Q5, implemented Phase 21).**
+`Modules\Providers\Application\Adapter\`:
 
 ```php
 // Required of every provider adapter:
 interface PaymentProviderPort {
-    createPayment(CreatePaymentCommand): ProviderPaymentResult;      // hosted checkout / redirect
-    getPaymentStatus(ProviderPaymentRef): ProviderPaymentStatus;
+    createPayment(CreatePaymentCommand): ProviderPaymentResult;      // the one hosted-flow entry point (Phase 21 Q1)
+    getPaymentStatus(string $providerReference): ProviderPaymentStatus;
     verifyWebhookSignature(RawWebhook): bool;
     parseWebhook(RawWebhook): ParsedWebhookEvent;
-    mapProviderStatusToInternalStatus(string): PaymentStatus;
+    mapProviderStatusToInternalStatus(string): PaymentStatus;        // Payments\Domain\PaymentStatus — a cross-module enum dependency, same as PurchaseType/PaymentMethod already are
     getCapabilities(): ProviderCapabilities;
 }
 
 // Optional — implemented only when the provider really supports it:
 interface SupportsSubscriptions   { createSubscription(...); getSubscriptionStatus(...); cancelSubscription(...); mapProviderSubscriptionStatusToInternalStatus(...); }
-interface SupportsRefunds         { refundPayment(...); }            // partial vs full flagged in capabilities
+interface SupportsRefunds         { refundPayment(string $providerReference, ?int $amountMinor = null): ProviderRefundResult; }
 interface SupportsAuthCapture     { authorizePayment(...); capturePayment(...); cancelPayment(...); }
 interface SupportsCustomerPortal  { createBillingPortalSession(...); }
-interface SupportsManualPolling   { pollPaymentStatus(...); }        // e.g. Ziraat
+interface SupportsManualPolling   { pollPaymentStatus(...): ProviderPaymentStatus; }        // e.g. Ziraat
 ```
 
-- `StripeAdapter` implements the core + subscriptions + refunds + auth/capture + portal.
-  `MollieAdapter` core + subscriptions + refunds (method-dependent). `PayPalAdapter` core +
-  subscriptions + refunds. `ZiraatAdapter` core + manual polling **only** — it doesn't implement
-  `SupportsSubscriptions`, so "subscribe via Ziraat" is impossible at the type level, not a
+Every method may throw a `ProviderAdapterException` (`ProviderRequestFailed` /
+`ProviderAuthenticationFailed` / `ProviderWebhookVerificationFailed` / `UnsupportedProviderType`)
+for a transport/provider-level fault (Phase 21 Q2) — adapters are Infrastructure, so this follows
+the Phase 3 Q3 "Hybrid" error model exactly (infra faults throw, they don't return `Result`),
+matching how this codebase's DB adapters already behave. An unsupported *capability* is never a
+runtime throw from inside these methods — it's prevented at the type level (which interfaces an
+adapter implements) and by the caller checking `getCapabilities()` first. DTOs carry amounts as
+raw `int` minor units + `string` currency code (Phase 21 Q3), matching `Payment`, not `Money`.
+
+- **`StripeAdapter`** (Phase 21 — implemented) implements the core + `SupportsSubscriptions` +
+  `SupportsRefunds` + `SupportsAuthCapture` + `SupportsCustomerPortal`. The Stripe PHP SDK
+  (`stripe/stripe-php`) is used **only** inside this class (Hexagonal Architecture Rule 5) and its
+  factory. `createPayment()`/`createSubscription()` create a Stripe Checkout Session (hosted UI);
+  `getPaymentStatus()` reads the session back, preferring the underlying PaymentIntent's status
+  when one has been expanded, for a more precise mapping. `getCapabilities()` delegates to the
+  Phase 8 seeded `ProviderTypeDeclarations::findByCode('stripe')` rather than hardcoding a second
+  copy of what Stripe supports. Status mapping is a pure, dependency-free `StripeStatusMapper` —
+  an unrecognised raw status always falls back to `PaymentStatus::Pending`, never a false "paid"
+  or "failed" claim (CLAUDE.md: "unknown provider statuses must be stored safely").
+- **`DefaultProviderAdapterFactory`** (Phase 21 Q4) implements
+  `ProviderAdapterFactory::for(int $providerAccountId): PaymentProviderPort` — resolves the
+  account's provider type via `ProviderAccountDirectory::findById()` (added this phase), its
+  decrypted secret via `ProviderAccountCredentials::secretFor()` (Phase 9), and `match`es the type
+  code to a concrete adapter, building a fresh, stateless instance per call. One `match` arm per
+  provider type; Mollie/PayPal (Phase 22) and Ziraat (Phase 23) add arms here — an account whose
+  type has no arm yet throws `UnsupportedProviderType`.
+- `MollieAdapter` (Phase 22) is expected to implement core + subscriptions + refunds
+  (method-dependent). `PayPalAdapter` (Phase 22) core + subscriptions + refunds. `ZiraatAdapter`
+  (Phase 23) core + `SupportsManualPolling` **only** — it will not implement
+  `SupportsSubscriptions`, so "subscribe via Ziraat" stays impossible at the type level, not a
   runtime throw.
 
 **Capability descriptor (runtime gating).** *Implemented Phase 8 — `Modules/Providers`.*
@@ -640,12 +667,19 @@ and flagged, never dropped.
   (`CreatePaymentHandler`, **Phase 20**); the `provider_checkout_created` / `redirected_to_provider`
   / `returned_from_provider` / `confirmed` transitions on `checkout_attempts` remain modelled but
   undriven until the provider adapters exist (**Phase 21+**).
-- Payments module leftovers from Phase 20: a real `PaymentProviderPort` and status mapping
-  (**Phase 21** — the port — then per-provider adapters, Phases 21–23); any HTTP endpoint for
-  payments (**Phase 24**, the payment-creation flow); a `gateway_references` writer wired to a
-  real caller (repository + schema exist; no handler writes to it yet — the same "ahead of a real
-  caller" pattern as `checkout_attempts.abandoned_at`); `gateway_references.subscription_id`
-  (**Phase 26**, additive column once `subscriptions` exists); a `refunds` table for actual
-  capture/refund action records (**Phase 24**).
+- Payments module leftovers from Phase 20: any HTTP endpoint for payments (**Phase 24**, the
+  payment-creation flow); a `gateway_references` writer wired to a real caller (repository +
+  schema exist; no handler writes to it yet — the same "ahead of a real caller" pattern as
+  `checkout_attempts.abandoned_at`); `gateway_references.subscription_id` (**Phase 26**, additive
+  column once `subscriptions` exists); a `refunds` table for actual capture/refund action records
+  (**Phase 24**).
+- Provider-adapter leftovers from Phase 21: `StripeAdapter` is built and unit-tested (a real
+  Stripe 401/error response, and a real HMAC webhook signature, both verified through the actual
+  SDK via a fake transport) but not wired into any Payments-module handler yet — that orchestration
+  is **Phase 24**'s job by design (Phase 21 Q5). Mollie and PayPal adapters — **Phase 22**; Ziraat
+  — **Phase 23**. `SupportsManualPolling` has no implementer yet (Ziraat is the first, Phase 23).
+  `mapProviderSubscriptionStatusToInternalStatus()`'s return type is a provisional `string`
+  pass-through — the real `Subscriptions` module and its own status enum don't exist until
+  **Phase 26**, expected to formalize this method's return type then.
 - Queue technology choice (DB-backed vs Redis vs …) — Phase 29 (a `Jobs` port is defined earlier).
 - `mkdocs` site + DB docs location convention (repo-root vs `.claude/docs/`) — Phase 4.

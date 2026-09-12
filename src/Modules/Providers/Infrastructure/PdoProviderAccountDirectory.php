@@ -51,6 +51,15 @@ final readonly class PdoProviderAccountDirectory implements ProviderAccountDirec
         return \is_array($row) ? $this->toSummary($row) : null;
     }
 
+    public function findById(int $id): ?ProviderAccountSummary
+    {
+        $statement = $this->pdo->prepare(self::BASE . ' WHERE pa.id = :id');
+        $statement->execute(['id' => $id]);
+        $row = $statement->fetch();
+
+        return \is_array($row) ? $this->toSummary($row) : null;
+    }
+
     public function candidates(int $clientId, string $providerTypeCode, ProviderAccountMode $mode): array
     {
         $statement = $this->pdo->prepare(

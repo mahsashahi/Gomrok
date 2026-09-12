@@ -16,6 +16,133 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 21 — Provider adapter port & Stripe adapter
+
+**Note:** the adapter shape itself (required core `PaymentProviderPort` + optional capability
+interfaces `SupportsSubscriptions`/`SupportsRefunds`/`SupportsAuthCapture`/
+`SupportsCustomerPortal`/`SupportsManualPolling`) was already decided in Phase 1 Q5 and sketched
+in `Architecture.md` §8 — not re-asked here. This phase's questions cover what that sketch left
+open.
+
+### Q1 — Core hosted-flow method shape
+
+**Question:** CLAUDE.md names both `createPayment` and `createCheckoutSession`; the existing
+`Architecture.md` §8 sketch has only `createPayment` ("hosted checkout / redirect"). How should
+the core port's hosted-flow method(s) be shaped?
+
+**Options:**
+
+1. **One core method, `createPayment()`, that is the hosted-checkout entry point** — matches the
+   existing sketch; for Stripe it creates a Checkout Session internally and returns a generic
+   `ProviderPaymentResult` (redirect URL + reference). `createCheckoutSession` was CLAUDE.md's
+   illustrative name for the hosted-checkout action, not a second required method.
+2. Two core methods — `createPayment()` for a direct/programmatic charge and
+   `createCheckoutSession()` for the hosted-redirect flow. Matches CLAUDE.md's literal list, but
+   every provider in this project (Stripe/Mollie/PayPal Checkout, Ziraat's bank-hosted page) is
+   hosted-redirect-only per the Provider-Hosted Payment UI Rule — a direct-charge method would
+   have no caller.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — one core `createPayment()` method as the hosted-flow entry point.
+
+**Status:** Decided
+
+---
+
+### Q2 — Error/exception model for adapter methods
+
+**Question:** What should adapter methods return/throw on failure — a genuine Stripe API failure
+vs. a capability that's type-unsupported (already prevented, Phase 1 Q5) or config-disabled?
+
+**Options:**
+
+1. **Adapters throw; the calling Application handler catches and converts** — matches the
+   already-decided Phase 3 Q3 "Hybrid" error model (infra/transport faults throw, not `Result`)
+   and the existing DB-adapter convention (a `PdoXRepository` throws `PDOException`). A
+   config-disabled capability is checked by the caller *before* invoking the adapter (already how
+   `ProviderCapabilityResolver`/`ProviderRouter` work), not re-validated inside the adapter.
+2. Adapter methods return `Result`, including transport failures mapped into a generic
+   `provider.request_failed` domain error.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — adapters throw typed exceptions; callers convert.
+
+**Status:** Decided
+
+---
+
+### Q3 — Money representation in port DTOs
+
+**Question:** Should `CreatePaymentCommand`/`ProviderPaymentResult`/etc. carry amounts as `Money`
+or as raw `int` minor units + `string` currency code?
+
+**Options:**
+
+1. **Raw `int` minor units + `string` currency code** — matches `Payment`, `CheckoutAttempt`,
+   `ResolvedPrice`, `PricingDecisionSnapshot` — every DTO along this exact data path already uses
+   plain scalars; `Money` is reserved for arithmetic-heavy contexts (`VoucherDiscountCalculator`).
+2. `Money` VO — free validation at the port boundary, but breaks the established convention and
+   adds a conversion step with no calculation happening between.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — raw `int` minor units + `string` currency code.
+
+**Status:** Decided
+
+---
+
+### Q4 — Adapter instantiation / credentials
+
+**Question:** A client can have multiple provider accounts of the same type. How does a caller
+get an adapter instance configured with the right account's decrypted credentials?
+
+**Options:**
+
+1. **`ProviderAdapterFactory::for(int $providerAccountId): PaymentProviderPort`** — resolves the
+   account's provider type, fetches its secret via `ProviderAccountCredentials`, returns a
+   freshly-built adapter instance for that one call. The adapter itself stays stateless; the
+   factory is the one place that grows a `match` arm per provider type as Phases 22–23 add more.
+2. Stateless adapter, credentials passed per method call — avoids a factory but pollutes every
+   port method's signature with a credentials parameter unrelated to what it conceptually does.
+3. A DI-registered adapter reconfigured per request via `withAccount(int $id): self` — avoids
+   constructing a new object per call, but introduces mutable state and a silent
+   wrong-credentials risk if a caller forgets to call it first.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `ProviderAdapterFactory::for($providerAccountId)`.
+
+**Status:** Decided
+
+---
+
+### Q5 — Integration scope this phase
+
+**Question:** Standalone Stripe adapter only, or also wire it into the existing Payments
+handlers (`RecordProviderTransactionHandler`)?
+
+**Options:**
+
+1. **Standalone adapter + CLI + tests only; full wiring waits for Phase 24** — matches this
+   phase's own exit criteria exactly ("unit tests for status mapping; integration tests against
+   Stripe test mode," nothing about end-to-end wiring); Phase 24 ("Payment creation flow") is the
+   phase built to own that orchestration. Ships `StripeAdapter` + `ProviderAdapterFactory` behind
+   a CLI that creates a real Checkout Session in Stripe test mode and prints the redirect URL.
+2. Also add a handler wiring the real adapter into `RecordProviderTransactionHandler` now —
+   closes the Phase 20 "ahead of a real caller" gap immediately, but risks building orchestration
+   Phase 24 would likely reshape anyway.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — standalone adapter + CLI + tests; full wiring deferred to Phase 24.
+
+**Status:** Decided
+
+---
+
 ## Phase 20 — Payments module: aggregate & lifecycle
 
 ### Q1 — Payment creation entry point

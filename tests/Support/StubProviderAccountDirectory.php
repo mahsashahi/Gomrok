@@ -67,6 +67,17 @@ final class StubProviderAccountDirectory implements ProviderAccountDirectory
         return null;
     }
 
+    public function findById(int $id): ?ProviderAccountSummary
+    {
+        foreach ($this->summaries as $summary) {
+            if ($summary->id === $id) {
+                return $summary;
+            }
+        }
+
+        return null;
+    }
+
     public function candidates(int $clientId, string $providerTypeCode, ProviderAccountMode $mode): array
     {
         return array_values(array_filter(

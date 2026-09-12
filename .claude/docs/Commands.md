@@ -41,8 +41,9 @@ header (missing → `400 idempotency_key_required`).
 ## Tests
 
 ```bash
-composer test                 # unit suite (no DB)
-composer test:integration     # integration suite — needs `docker compose up -d mysql`
+composer test                 # unit suite (no DB, no network)
+composer test:integration     # integration suite — needs `docker compose up -d mysql`;
+                               # StripeAdapterLiveTest also needs STRIPE_TEST_SECRET_KEY set (Phase 21) — self-skips without it
 composer test:all             # every suite
 vendor/bin/phpunit --filter SettingsTest      # a single test class
 vendor/bin/phpunit tests/Unit/Config/SettingsTest.php::readsEnvironmentVariables   # one method
@@ -239,13 +240,20 @@ composer checkout:set-status -- --client=televika --attempt=order-42 --status=ca
 composer checkout:set-status -- --client=televika --attempt=order-42 --status=failed --error-code=provider_declined --error-message="Card declined"
 composer checkout:list -- --client=televika
 
-# Payments — aggregate & lifecycle (Phase 20); no real provider adapter yet
+# Payments — aggregate & lifecycle (Phase 20); the payment-creation flow doesn't call a real
+# adapter yet (Phase 24) — every --status-raw / --new-status here is caller-supplied
 composer payment:create -- --client=televika --attempt=order-42
 composer payment:record-transaction -- --client=televika --payment=1 --provider-account=1 --kind=authorize --status-raw=requires_action --new-status=pending [--method=card]
 composer payment:record-transaction -- --client=televika --payment=1 --provider-account=1 --kind=authorize --status-raw=succeeded --new-status=authorized --attempt-outcome=succeeded
 composer payment:set-status -- --client=televika --payment=1 --status=refunded
 composer payment:link-customer -- --client=televika --provider-account=1 --client-user=user-1 --provider-customer-id=cus_abc123
 composer payment:list -- --client=televika
+
+# Stripe adapter (Phase 21) — needs a real Stripe test/live secret key on the provider account
+composer stripe:create-checkout-session -- --client=televika --account=stripe-live --attempt=order-42 \
+    --amount-minor=2900 --currency=EUR --description="Pro package" \
+    --success-url=https://example.com/success --cancel-url=https://example.com/cancel
+composer stripe:get-payment-status -- --client=televika --account=stripe-live --reference=cs_test_...
 ```
 
 `code` is `^[A-Z0-9][A-Z0-9_-]{2,63}$` (≥3 chars), unique per client, stored upper-case. A
@@ -292,9 +300,17 @@ payment per the `PaymentStatus` graph — `--attempt-outcome=succeeded|failed` e
 the attempt (never inferred from `--new-status`). `payment:set-status` is the escape hatch for
 any other legal transition (e.g. an admin cancel). `payment:link-customer` records a durable
 customer identity for later reuse; repeating the same `--provider-account`/`--provider-customer-id`
-pair is a no-op. There is no real provider adapter yet (Phase 21+), so every `--status-raw` /
-`--new-status` here is supplied by the caller, not derived from an actual provider response — and
-no HTTP endpoint yet (Phase 24).
+pair is a no-op. The real `StripeAdapter` (Phase 21) exists but isn't wired into these handlers
+yet — that orchestration is Phase 24 (the payment-creation flow); until then every `--status-raw`
+/ `--new-status` on `payment:record-transaction` is supplied by the caller.
+
+`stripe:create-checkout-session` requires `--account` to already hold a real Stripe secret key
+(`provider-account:create --provider-type=stripe --secret-key=sk_test_...` or `sk_live_...`) —
+it makes a genuine call to the Stripe API and prints the real Checkout Session redirect URL.
+`stripe:get-payment-status` reads a session back by its id and prints both the raw Stripe status
+and the internal `PaymentStatus` it maps to (preferring the underlying PaymentIntent's status
+once one exists, for a more precise mapping). Neither command is wired to a `payments` row yet —
+they exercise `StripeAdapter` directly, standalone, per Phase 21 Q5.
 
 `composer db:setup` in `local` / `testing` also seeds a `local-dev` client with a fixed token:
 `gk_test_000000000000dead.localdevsecretlocaldevsecret1234` (dev only — the seeder no-ops in

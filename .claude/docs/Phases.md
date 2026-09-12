@@ -38,7 +38,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 18 | Decision snapshots | ☑ | 2026-09-11 14:19 | 2026-09-11 15:44 | 2–4h | 1h 25m | N/A |
 | 19 | Resolution API endpoints | ☑ | 2026-09-11 15:50 | 2026-09-11 16:40 | 3–5h | 50m | N/A |
 | 20 | Payments module: aggregate & lifecycle | ☑ | 2026-09-11 16:50 | 2026-09-11 18:34 | 4–6h | 1h 44m | N/A |
-| 21 | Provider adapter port & Stripe adapter | ☐ | — | — | 6–9h | — | — |
+| 21 | Provider adapter port & Stripe adapter | ☑ | 2026-09-11 18:45 | 2026-09-11 20:11 | 6–9h | 1h 26m | N/A |
 | 22 | Mollie & PayPal adapters | ☐ | — | — | 6–9h | — | — |
 | 23 | Ziraat adapter | ☐ | — | — | 4–7h | — | — |
 | 24 | Payment creation flow | ☐ | — | — | 5–8h | — | — |
@@ -678,20 +678,48 @@ round-trip (`PaymentPersistenceTest`, CI-only) all tested; `composer ci` green (
 
 **Goal:** the one interface all providers implement, plus the first real provider.
 
-**Scope:**
-- `PaymentProviderPort`: `createPayment`, `createCheckoutSession`, `createSubscription`,
-  `createBillingPortalSession`, `authorizePayment`, `capturePayment`, `cancelPayment`,
-  `refundPayment`, `getPaymentStatus`, `getSubscriptionStatus`, `verifyWebhookSignature`,
-  `parseWebhook`, `mapProviderStatusToInternalStatus`,
-  `mapProviderSubscriptionStatusToInternalStatus`, `getCapabilities`. Adapters are the only place
-  a provider SDK is used. An adapter is not forced to implement an unsupported capability —
-  unsupported ops are rejected via capability validation.
-- Stripe adapter: hosted Checkout, Billing Portal, payment + subscription status, webhook
-  verify/parse, status mapping, declared capabilities.
+**As built (decisions Phase 21 Q1–Q5; the adapter shape itself — required core
+`PaymentProviderPort` + optional capability interfaces — was already decided in Phase 1 Q5 and
+sketched in `Architecture.md` §8, not re-asked):**
+- **`PaymentProviderPort`** (core, required): `createPayment` (Q1 — the one hosted-flow entry
+  point; CLAUDE.md's `createCheckoutSession` is this same method under Stripe's own product name,
+  not a second one), `getPaymentStatus`, `verifyWebhookSignature`, `parseWebhook`,
+  `mapProviderStatusToInternalStatus`, `getCapabilities`. Optional capability interfaces
+  (`SupportsSubscriptions`, `SupportsRefunds`, `SupportsAuthCapture`, `SupportsCustomerPortal`,
+  `SupportsManualPolling`) implemented only where a provider really supports them.
+- **Error model (Q2):** adapters throw a typed `ProviderAdapterException` subclass
+  (`ProviderRequestFailed` / `ProviderAuthenticationFailed` / `ProviderWebhookVerificationFailed`
+  / `UnsupportedProviderType`) for transport/provider faults — matching the already-decided
+  Phase 3 Q3 error model and the existing DB-adapter convention. An unsupported capability is
+  never a runtime throw from inside a method — prevented at the type level.
+- **DTOs (Q3)** carry amounts as raw `int` minor units + `string` currency code, matching
+  `Payment`, not `Money`.
+- **`ProviderAdapterFactory::for(int $providerAccountId): PaymentProviderPort`** (Q4) resolves
+  the account's provider type + decrypted secret and builds a fresh, stateless adapter instance
+  per call — one `match` arm per provider type, growing in Phases 22–23.
+- **Stripe adapter**: hosted Checkout (`createPayment`/`authorizePayment`/`createSubscription`
+  all create a Checkout Session), Billing Portal, payment + subscription status (preferring the
+  underlying PaymentIntent's status when expanded), webhook verify/parse (real Stripe SDK HMAC
+  verification), status mapping (a pure `StripeStatusMapper` — unrecognised statuses fall back to
+  `Pending`, never a false "paid"/"failed" claim), declared capabilities (delegates to the
+  Phase 8 seeded declaration, no duplicate hardcoded list).
+- **Scope (Q5):** standalone adapter + CLI (`stripe:create-checkout-session`,
+  `stripe:get-payment-status`) + tests only this phase — wiring the real adapter into the
+  Payments module's `RecordProviderTransactionHandler` is explicitly deferred to **Phase 24**
+  (the payment-creation flow), matching this phase's own exit criteria.
 
-**DB:** none new.
+**DB:** no database changes. (`ProviderAccountDirectory` gained `findById()` — an additive
+Application-port method, not a schema change — needed by the factory.)
 
-**Exit:** unit tests for status mapping; integration tests against Stripe test mode.
+**Exit:** unit tests for status mapping — `StripeStatusMapperTest` (16 cases, pure, no SDK/network)
+— and integration-style tests against the real Stripe PHP SDK's request-building and exception
+mapping via a fake HTTP transport (`StripeAdapterTest`, 6 tests: a real Checkout Session response
+parsed, a real Stripe 401 genuinely producing `ProviderAuthenticationFailed`, a real HMAC webhook
+signature genuinely verified and a tampered one genuinely rejected) — no real network call, no
+real Stripe account needed. A true "Stripe test mode" integration test
+(`tests/Integration/StripeAdapterLiveTest.php`) also exists, self-skipping without a real
+`STRIPE_TEST_SECRET_KEY` configured — the same self-skip convention every MySQL-dependent
+integration test already uses — and is expected to run for real wherever that key is set.
 
 ## Phase 22 — Mollie & PayPal adapters
 

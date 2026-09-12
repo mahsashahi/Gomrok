@@ -7,6 +7,69 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-11 — Phase 21: Provider adapter port & Stripe adapter
+
+**Summary.** The one interface every provider implements, plus the first real provider. New
+`Modules\Providers\Application\Adapter\` namespace: the core `PaymentProviderPort`
+(`createPayment`, `getPaymentStatus`, `verifyWebhookSignature`, `parseWebhook`,
+`mapProviderStatusToInternalStatus`, `getCapabilities`) plus 5 optional capability interfaces
+(`SupportsSubscriptions`, `SupportsRefunds`, `SupportsAuthCapture`, `SupportsCustomerPortal`,
+`SupportsManualPolling`) — the hybrid shape already decided in Phase 1 Q5, now real code. New
+`StripeAdapter` (`Modules\Providers\Infrastructure\Adapter\Stripe\`) implements the core + 4
+capability interfaces using the new `stripe/stripe-php` SDK dependency — the SDK is used only
+here, per Hexagonal Architecture Rule 5. A new `DefaultProviderAdapterFactory` resolves a
+`provider_account_id` to a fresh, credentialed adapter instance. Decisions
+(`PhaseResults/PhaseDecisions.md` Phase 21 Q1–Q5): **Q1** one core `createPayment()` hosted-flow
+method (CLAUDE.md's `createCheckoutSession` is the same method under Stripe's own product name)
+· **Q2** adapters throw a typed `ProviderAdapterException`, matching the Phase 3 Q3 error model ·
+**Q3** raw `int` minor units + `string` currency in port DTOs, matching `Payment` · **Q4**
+`ProviderAdapterFactory::for($providerAccountId)` · **Q5** standalone adapter + CLI + tests only
+this phase — wiring into the Payments module waits for Phase 24. **No database changes** (added
+`ProviderAccountDirectory::findById()`, an additive Application-port method the factory needs).
+
+**Files created**
+- `src/Modules/Providers/Application/Adapter/{PaymentProviderPort,SupportsSubscriptions,
+  SupportsRefunds,SupportsAuthCapture,SupportsCustomerPortal,SupportsManualPolling,
+  ProviderAdapterFactory}.php` — the port interfaces.
+- `src/Modules/Providers/Application/Adapter/{CreatePaymentCommand,ProviderPaymentResult,
+  ProviderPaymentStatus,CreateSubscriptionCommand,ProviderSubscriptionResult,
+  ProviderSubscriptionStatus,ProviderRefundResult,ProviderBillingPortalSession,RawWebhook,
+  ParsedWebhookEvent}.php` — the port DTOs.
+- `src/Modules/Providers/Application/Adapter/{ProviderAdapterException,ProviderRequestFailed,
+  ProviderAuthenticationFailed,ProviderWebhookVerificationFailed,UnsupportedProviderType}.php` —
+  the exception hierarchy.
+- `src/Modules/Providers/Infrastructure/Adapter/Stripe/{StripeAdapter,StripeStatusMapper}.php`.
+- `src/Modules/Providers/Infrastructure/DefaultProviderAdapterFactory.php`.
+- CLI: `bin/{StripeCreateCheckoutSession,StripeGetPaymentStatus}.php` +
+  `composer stripe:create-checkout-session|get-payment-status`.
+- Tests: `tests/Unit/Modules/Providers/Infrastructure/Adapter/Stripe/{StripeStatusMapperTest,
+  StripeAdapterTest}.php`, `tests/Unit/Modules/Providers/Infrastructure/DefaultProviderAdapterFactoryTest.php`,
+  `tests/Integration/StripeAdapterLiveTest.php` (real Stripe test-mode call, self-skips without
+  `STRIPE_TEST_SECRET_KEY`); `tests/Support/{FakeStripeHttpClient,StubProviderAccountCredentials}.php`.
+- `.claude/PhaseResults/Phase21Result.md`.
+
+**Files changed**
+- `composer.json` — added `stripe/stripe-php:^17.0`; added `stripe:*` scripts + descriptions;
+  `composer.lock` refreshed.
+- `src/Modules/Providers/Application/ProviderAccountDirectory.php` — gained `findById(int $id):
+  ?ProviderAccountSummary` (additive); implemented in `PdoProviderAccountDirectory` and
+  `tests/Support/StubProviderAccountDirectory.php`.
+- `src/Modules/Providers/Infrastructure/definitions.php` — wired `ProviderAdapterFactory` to
+  `DefaultProviderAdapterFactory`.
+- `.env.example` — documented the optional `STRIPE_TEST_SECRET_KEY`.
+- DB docs (`database-design.md` — table-count summary only, no new tables; `database-diagram.md`/
+  `.html` and `db_explain.md` unchanged — no schema change this phase); `Architecture.md` (§3, §8
+  rewritten from sketch to as-built, §13 deferred); `Phases.md` (row 21 → ☑, as-built scope);
+  `.claude/FileIndex.md`; `.claude/knowledge/Knowledge.md`; `.claude/docs/Commands.md`;
+  `.claude/Orders.md` (D24).
+
+**Reason.** Phase 21 of the 30-phase plan.
+
+**Migration notes.** None — no schema change.
+
+**Breaking changes.** None. `ProviderAccountDirectory::findById()` is an additive interface
+method; both existing implementers (production and test double) were updated in the same change.
+
 ## 2026-09-11 — Phase 20: Payments module: aggregate & lifecycle
 
 **Summary.** The payment record and its internal status state machine. New `Payments` module:
