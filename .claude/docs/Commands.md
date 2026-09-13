@@ -261,6 +261,12 @@ composer mollie:create-checkout-session -- --client=televika --account=mollie-li
     --success-url=https://example.com/success --cancel-url=https://example.com/cancel \
     [--payment-method=card|paypal|ideal|bancontact|sepa_direct_debit]
 composer mollie:get-payment-status -- --client=televika --account=mollie-live --reference=tr_...
+
+# PayPal adapter (Phase 22) — needs a real PayPal REST API {client_id,client_secret} JSON secret
+composer paypal:create-checkout-session -- --client=televika --account=paypal-live --attempt=order-42 \
+    --amount-minor=2900 --currency=EUR --description="Pro package" \
+    --success-url=https://example.com/success --cancel-url=https://example.com/cancel
+composer paypal:get-payment-status -- --client=televika --account=paypal-live --reference=<order-id>
 ```
 
 `code` is `^[A-Z0-9][A-Z0-9_-]{2,63}$` (≥3 chars), unique per client, stored upper-case. A
@@ -327,6 +333,16 @@ showing Mollie's own method picker — pass whichever method Gomrok's own routin
 `mollie:get-payment-status` reads a payment back by its id and prints both the raw Mollie status
 and the internal `PaymentStatus` it maps to. Neither command is wired to a `payments` row yet,
 same as the Stripe pair, per Phase 21 Q5 / Phase 22's own scope.
+
+`paypal:create-checkout-session` requires `--account` to hold a real PayPal REST API secret,
+stored as a JSON pair (`provider-account:create --provider-type=paypal
+--secret-key='{"client_id":"...","client_secret":"..."}' ...`, Phase 22 Q4) — it creates a real
+CAPTURE-intent order and prints the approve URL. `paypal:get-payment-status` reads an order back
+by its id and prints both the raw PayPal status and the internal `PaymentStatus` it maps to.
+Capturing funds after the customer approves, authorizing instead of immediate-capturing, and
+refunding all go through `PayPalAdapter`'s `SupportsAuthCapture`/`SupportsRefunds` methods
+directly (Phase 22 Q7) — no CLI wraps those yet, same standalone-adapter scope as the other two
+provider pairs.
 
 `composer db:setup` in `local` / `testing` also seeds a `local-dev` client with a fixed token:
 `gk_test_000000000000dead.localdevsecretlocaldevsecret1234` (dev only — the seeder no-ops in

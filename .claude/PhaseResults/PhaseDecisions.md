@@ -18,6 +18,98 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ## Phase 22 — Mollie & PayPal adapters
 
+### Q8 — PayPal subscriptions and the Billing Plans dependency
+
+**Question:** PayPal Subscriptions require a persisted "Plan" resource (via PayPal's Billing
+Plans API) before you can subscribe a customer to it — unlike Stripe's ad-hoc `price_data`,
+PayPal can't create a subscription with an inline, one-off price. How should
+`PayPalAdapter::createSubscription()` handle this?
+
+**Options:**
+
+1. Create an ephemeral Product+Plan per subscription — internally create a throwaway Product and
+   a Plan scoped to this exact price/interval immediately before creating the Subscription, then
+   subscribe against that just-created plan and return its approve redirect. Gomrok's resolved
+   amount stays authoritative — the Plan is created fresh every time, never cached or reused.
+2. **Defer PayPal subscriptions this phase** — `PayPalAdapter` does not implement
+   `SupportsSubscriptions` yet, despite the seeded capability list including
+   `subscription_cancel`/`subscription` purchase type. Defer to a later phase once a decision is
+   made about pre-provisioning or caching PayPal Plans per package rather than creating one per
+   attempt.
+
+**Recommended:** Option 1
+
+**Selected:** Option 2 — defer PayPal subscriptions this phase; `PayPalAdapter` implements core +
+`SupportsAuthCapture` + `SupportsRefunds` only.
+
+**Status:** Decided
+
+---
+
+### Q7 — PayPal authorize/capture two-step reconciliation
+
+**Question:** PayPal's Orders API is a two-step redirect flow even for "immediate capture":
+create an order, the customer approves it, then the merchant must make a separate explicit call
+to actually finalize funds — no provider here auto-captures on redirect return the way
+`createPayment()` "just works" for Stripe/Mollie. PayPal's seeded capabilities (Phase 8/10)
+already include authorization + capture + cancel, meaning it's expected to implement
+`SupportsAuthCapture` for real. How should `PayPalAdapter` reconcile PayPal's two-step REST shape
+with the port?
+
+**Options:**
+
+1. **Implement the real authorize/capture dance** — `createPayment()` creates a CAPTURE-intent
+   order + returns the approve redirect; the caller is documented to call
+   `capturePayment(providerReference)` once the customer returns from approval, to actually
+   finalize funds (PayPal's single `/capture` call). `authorizePayment()` creates an
+   AUTHORIZE-intent order instead (same shape, different intent); its own `capturePayment()`
+   internally performs PayPal's real two-call dance (`/authorize` to create the Authorization
+   resource, then `/authorizations/{id}/capture`) — the adapter checks the order's intent via a
+   GET call so callers only ever call one `capturePayment()` regardless of which flow created the
+   order. Fully honors the declared capability.
+2. Skip `SupportsAuthCapture` this phase — build only the immediate-capture path for real
+   (`createPayment()` + `capturePayment()` as create+finalize) and do not implement
+   `authorizePayment()`/`cancelPayment()` at all, leaving delayed-authorize a documented gap for a
+   later phase.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — implement the real authorize/capture dance.
+
+**Status:** Decided
+
+---
+
+### Q6 — Mollie subscription flow mismatch (discovered mid-implementation)
+
+**Question:** Mollie's subscription flow isn't one call like Stripe's Checkout-in-subscription-mode.
+You must first get a customer to authorize recurring charges via a one-off "first payment"
+(`sequenceType=first`), which creates a mandate only once that payment succeeds — the actual
+Mollie Subscription resource can only be created afterward. But `SupportsSubscriptions::
+createSubscription()` returns a `ProviderSubscriptionResult` synchronously, mirroring Stripe's
+single-call shape. How should `MollieAdapter` handle this mismatch?
+
+**Options:**
+
+1. **`createSubscription()` does the first-payment step** — creates a Mollie Customer + a "first
+   payment" (`sequenceType=first`) and returns that payment's checkout URL as the
+   `ProviderSubscriptionResult`. The real Mollie Subscription resource is created later,
+   out-of-band, once the mandate is confirmed (wired in Phase 25's webhook processing, same as
+   Phase 21 Q5 deferred the Payments-module wiring). The "provider subscription reference"
+   returned here is provisionally the first-payment id, not yet a real subscription id.
+2. Defer Mollie subscriptions entirely — `MollieAdapter` implements only the core port +
+   `SupportsRefunds` + `SupportsManualPolling` this phase, no `SupportsSubscriptions` yet, even
+   though the seeded capability data says Mollie supports recurring_payment/subscription. Revisit
+   once Phase 25 exists to actually complete the mandate-then-subscribe flow.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `createSubscription()` performs only the first-payment step.
+
+**Status:** Decided
+
+---
+
 ### Q5 — Webhook verification shape for Mollie and PayPal
 
 **Question:** Mollie has no webhook signature at all (it just POSTs an id; you must re-fetch the

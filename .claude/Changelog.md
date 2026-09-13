@@ -7,6 +7,59 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-12 — Phase 22 complete: PayPal adapter
+
+**Summary.** The third real provider on the Phase 21 port, completing Phase 22. New
+`PayPalAdapter` (`Modules\Providers\Infrastructure\Adapter\PayPal\`) implements the core
+`PaymentProviderPort` + `SupportsAuthCapture` + `SupportsRefunds` — not `SupportsSubscriptions`
+(PayPal needs a persisted Billing "Plan" resource ahead of time, unlike Stripe/Mollie's ad-hoc
+pricing; deferred, Q8). Talks to PayPal's REST API directly over `guzzlehttp/guzzle` (Q2, no SDK),
+fetching a fresh OAuth2 client-credentials token per call (no caching). `PayPalStatusMapper` is a
+pure, dependency-free status translator covering PayPal's combined Order/Authorization/Capture
+vocabulary. `DefaultProviderAdapterFactory` gained a `'paypal'` match arm that decodes the
+account's `{client_id, client_secret}` JSON secret (Q4) and picks the sandbox-vs-live host from
+the account's `mode` (Q4/Q7 area — PayPal is the first provider where the factory reads `mode` for
+anything).
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 22 Q7–Q8, discovered mid-implementation):
+**Q7** PayPal's Orders API is a real two-step redirect flow even for immediate capture —
+`capturePayment()` inspects the order's own `intent` and performs the real dance that intent
+needs (`/capture` directly for `CAPTURE`; `/authorize` then `/authorizations/{id}/capture` for
+`AUTHORIZE`), so callers always call the same one method regardless of which flow created the
+order · **Q8** PayPal subscriptions deferred this phase — `PayPalAdapter` does not implement
+`SupportsSubscriptions` despite the seeded capability data, pending a decision on
+pre-provisioning/caching PayPal Billing Plans. **No database changes.**
+
+**Files created**
+- `src/Modules/Providers/Infrastructure/Adapter/PayPal/{PayPalAdapter,PayPalStatusMapper}.php`.
+- `bin/{PayPalCreateCheckoutSession,PayPalGetPaymentStatus}.php` — manual verification CLIs,
+  mirroring the Stripe/Mollie ones.
+- `tests/Unit/Modules/Providers/Infrastructure/Adapter/PayPal/{PayPalAdapterTest,
+  PayPalStatusMapperTest}.php` (15 + 17 tests); `tests/Integration/PayPalAdapterLiveTest.php`
+  (self-skips without real `PAYPAL_TEST_CLIENT_ID`/`PAYPAL_TEST_CLIENT_SECRET`).
+
+**Files modified**
+- `composer.json` — added `paypal:create-checkout-session`/`paypal:get-payment-status` scripts +
+  descriptions (no new PHP dependency — `guzzlehttp/guzzle` was already added for Mollie).
+- `src/Modules/Providers/Infrastructure/DefaultProviderAdapterFactory.php` — `'paypal'` match arm
+  + a private `buildPayPalAdapter()` helper (JSON credential decode, sandbox/live host selection).
+- `tests/Unit/Modules/Providers/Infrastructure/DefaultProviderAdapterFactoryTest.php` — added
+  PayPal success + malformed-credentials cases.
+- `.env.example` — documented the optional `PAYPAL_TEST_CLIENT_ID`/`PAYPAL_TEST_CLIENT_SECRET`.
+- Documentation kept in lock-step: `.claude/docs/Phases.md` (row 22 → ☑ complete, "as built"
+  section rewritten for both providers), `.claude/docs/Architecture.md` §8 (PayPal's as-built
+  shape), `.claude/docs/Commands.md` (new `paypal:*` CLI docs), `.claude/FileIndex.md`,
+  `.claude/knowledge/Knowledge.md` (new "PayPal adapter" section — the two-step capture dance, the
+  capture-id-not-order-id refund reference, no SDK/no token caching, per-environment hostname, the
+  deferred-subscriptions gap, and a Guzzle-testing gotcha around `Middleware::history()`'s generics
+  fighting PHPStan's strict rules). `.claude/PhaseResults/Phase22Result.md` (new, this phase's
+  final result file — created now that both Mollie and PayPal are done).
+
+**Tests.** `composer ci` — CS clean, PHPStan clean, **458 tests / 1683 assertions, all passing**
+(up from 424 after the Mollie half); `composer test:integration` — 39 skipped (up from 38 — the
+new PayPal live test self-skips, same as every MySQL-dependent integration test without a
+database).
+
 ## 2026-09-12 — Phase 22 (in progress): Mollie adapter
 
 **Summary.** The second real provider on the Phase 21 port, plus two additive DTO changes decided

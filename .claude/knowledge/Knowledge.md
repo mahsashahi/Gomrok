@@ -566,7 +566,7 @@ duplicate.
   `new StripeClient($secret)` per call is negligible (no I/O happens at construction — the SDK is
   lazy until a method call actually issues a request).
 
-## Mollie adapter (Phase 22, in progress — Mollie half)
+## Mollie adapter (Phase 22)
 
 - **The Mollie PHP SDK ships its own official test double — use it instead of hand-rolling one.**
   `mollie/mollie-api-php` (v3.14+) has `MollieApiClient::fake([RequestClass::class =>
@@ -615,6 +615,60 @@ duplicate.
   directly for parsing a decimal string *back* to minor units (Mollie refund/payment amounts come
   back as `{currency, value}` objects) — `Shared\Domain\Money` has no "from decimal string"
   constructor, so this one direction goes straight through brick/money rather than the shared VO.
+
+## PayPal adapter (Phase 22)
+
+- **PayPal's Orders API genuinely requires a second explicit call to move money, even for
+  "immediate capture."** Creating an order (`intent: CAPTURE`) only gets you a redirect the
+  customer must approve; a real `POST /v2/checkout/orders/{id}/capture` call afterward is what
+  actually captures funds — no provider here auto-finalizes on redirect return the way Stripe's
+  Checkout does. `capturePayment()` handles this by fetching the order, checking its own `intent`,
+  and running whichever real dance that intent needs — one call for `CAPTURE`, two
+  (`/authorize` then `/authorizations/{id}/capture`) for `AUTHORIZE`. Any future provider whose
+  hosted flow needs a second confirm step after redirect should use this same pattern rather than
+  assuming `createPayment()` alone always delivers captured funds.
+- **PayPal refunds key off the *capture* id, not the order id** — `POST
+  /v2/payments/captures/{id}/refund`. `getPaymentStatus()` surfaces the capture id via
+  `ProviderPaymentStatus::$paymentIntentReference`, the exact same field `StripeAdapter` already
+  uses to carry its PaymentIntent id alongside the Checkout Session id — a "deeper reference for
+  refunds" concept that's now shared across two unrelated providers, not Stripe-specific.
+  `cancelPayment()` has no order-level equivalent to call either — PayPal has no "cancel this
+  order" endpoint; only an existing Authorization can be voided, and an order with no
+  authorization yet simply lapses on its own (throwing is correct there, not a silent no-op).
+- **No official SDK; raw REST over Guzzle, with no OAuth2 token caching.** Every adapter call
+  fetches a fresh client-credentials token (`POST /v1/oauth2/token` with HTTP Basic auth) before
+  its real request — one extra round trip per call, traded for a simpler `final readonly` adapter
+  with no mutable cache to reason about, consistent with "adapters are built fresh per call"
+  (Phase 21 Q4). Guzzle's `http_errors => false` plus manually checking `getStatusCode() >= 400`
+  was simpler than catching several `GuzzleHttp\Exception\*` subclasses for the same effect.
+- **PayPal, unlike Stripe/Mollie, needs a different hostname per environment**
+  (`api-m.sandbox.paypal.com` vs `api-m.paypal.com`) rather than encoding sandbox/live in the
+  credential itself — `DefaultProviderAdapterFactory`'s `'paypal'` arm is the first factory arm to
+  actually read `$account->mode` for anything (Stripe/Mollie ignore it; their API key prefix
+  already carries that distinction).
+- **PayPal Subscriptions need a persisted Billing "Plan" resource before you can subscribe anyone**
+  — unlike Stripe's ad-hoc `price_data`, there's no way to pass an inline one-off price at
+  subscription-creation time. `PayPalAdapter` deliberately does not implement
+  `SupportsSubscriptions` this phase (Phase 22 Q8) rather than build ephemeral Plan provisioning
+  under time pressure — a real gap versus the seeded `subscription`/`subscription_cancel`
+  capability data, acceptable for now the same way a provider type's capabilities can be declared
+  ahead of its adapter existing at all (Ziraat's capabilities were seeded well before Phase 23).
+- **Testing raw Guzzle code: `GuzzleHttp\Handler\MockHandler` + `HandlerStack`, request history via
+  a small custom middleware, not `GuzzleHttp\Middleware::history()`.** `Middleware::history()`'s
+  own docblock types its by-ref container parameter as bare `array|\ArrayAccess<int, array>` —
+  PHPStan's byref-argument variance checking then rejects *any* more specific property type
+  (`list<array{request:...}>`, `array<int, array<string,mixed>>`, even
+  `array<int,mixed>|ArrayAccess<int,mixed>` — all rejected for different covariance reasons) that
+  the project's strict rules would otherwise require. Simplest fix: skip `Middleware::history()`
+  entirely and push a small closure-based middleware that appends the `RequestInterface` directly
+  into a normally-typed `list<RequestInterface>` property — fewer moving parts and no fight with
+  Guzzle's own generics.
+- **A JSON test fixture built with `json_encode()` needs a `string|false`-safe wrapper.**
+  `json_encode()`'s return type is `string|false`; passing it straight into
+  `new GuzzleHttp\Psr7\Response(status, headers, $body)` (which wants `string|null|resource|
+  StreamInterface`) fails PHPStan. A one-line local `json(array $data): string` test helper
+  (`json_encode($data) !== false ? ... : '{}'`, written as a long ternary — this project's rules
+  disallow the short `?:` form) avoids repeating the check at every call site.
 
 ## Gotchas
 

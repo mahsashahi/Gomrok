@@ -39,7 +39,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 19 | Resolution API endpoints | ☑ | 2026-09-11 15:50 | 2026-09-11 16:40 | 3–5h | 50m | N/A |
 | 20 | Payments module: aggregate & lifecycle | ☑ | 2026-09-11 16:50 | 2026-09-11 18:34 | 4–6h | 1h 44m | N/A |
 | 21 | Provider adapter port & Stripe adapter | ☑ | 2026-09-11 18:45 | 2026-09-11 20:11 | 6–9h | 1h 26m | N/A |
-| 22 | Mollie & PayPal adapters | ◐ | 2026-09-11 23:22 | — | 6–9h | — | — |
+| 22 | Mollie & PayPal adapters | ☑ | 2026-09-11 23:22 | 2026-09-12 23:00 | 6–9h | N/A (spans two sessions) | N/A |
 | 23 | Ziraat adapter | ☐ | — | — | 4–7h | — | — |
 | 24 | Payment creation flow | ☐ | — | — | 5–8h | — | — |
 | 25 | Webhooks module | ☐ | — | — | 5–8h | — | — |
@@ -725,14 +725,53 @@ integration test already uses — and is expected to run for real wherever that 
 
 **Goal:** two more providers on the same port.
 
-**Scope:**
-- Mollie adapter (Checkout; method-specific capabilities — card vs PayPal — resolved separately).
-- PayPal adapter (Checkout / orders + subscriptions).
-- Status mapping and webhook parse/verify for both.
+**As built (decisions Phase 22 Q1–Q8 — Q6 discovered mid-Mollie-implementation, Q7/Q8 discovered
+mid-PayPal-implementation, all in `PhaseResults/PhaseDecisions.md`):**
+- **Mollie adapter** — official `mollie/mollie-api-php` SDK (Q1). Core port +
+  `SupportsRefunds` + `SupportsSubscriptions` + `SupportsManualPolling` — **not**
+  `SupportsCustomerPortal`: the Phase 10 seed incorrectly declared Mollie as having a
+  `customer_portal` capability (Mollie has no such product); corrected in
+  `ProviderTypeDeclarations.json` and `InMemoryProviderTypeDeclarations`. `CreatePaymentCommand`
+  gained an additive, optional `paymentMethod` field (Q3) so Mollie's Checkout can be locked to
+  the method Gomrok's routing already resolved. Mollie has no webhook signature at all —
+  `verifyWebhookSignature()`/`parseWebhook()` re-fetch the payment by the id embedded in the
+  payload instead (Q5, alongside `RawWebhook`'s new `headers` bag). Mollie subscriptions are
+  provisional (Q6): `createSubscription()` performs only the first-payment/mandate step and
+  returns that payment's id/checkout URL — the real Mollie Subscription resource is deferred to
+  Phase 25's webhook processing.
+- **PayPal adapter** — raw REST over `guzzlehttp/guzzle` (Q2), not an SDK; no OAuth2 token
+  caching (a fresh client-credentials token is fetched per call, matching the established
+  "adapters are fresh per call" design). Credentials are a `{client_id, client_secret}` JSON pair
+  packed into the existing single `secret_ciphertext` column (Q4) — decoded only inside
+  `DefaultProviderAdapterFactory`'s new `'paypal'` arm, which also picks the sandbox vs. live host
+  from the account's own `mode` (PayPal, unlike Stripe/Mollie, uses a different hostname per
+  environment). Core port + `SupportsAuthCapture` + `SupportsRefunds` — **not**
+  `SupportsSubscriptions` this phase (Q8: PayPal Subscriptions need a persisted Billing "Plan"
+  resource created ahead of time, unlike Stripe/Mollie's ad-hoc pricing; deferred until a
+  pre-provisioning/caching design is chosen). PayPal's Orders API is a real two-step redirect flow
+  even for immediate capture (Q7): `createPayment()`/`authorizePayment()` create a CAPTURE- or
+  AUTHORIZE-intent order; `capturePayment()` inspects the order's own intent and performs whichever
+  real dance it needs (`/capture` directly, or `/authorize` then `/authorizations/{id}/capture`) —
+  callers always call the one method regardless of which flow created the order. Refunds operate
+  on the capture id, not the order id, surfaced via `ProviderPaymentStatus::$paymentIntentReference`
+  (mirroring exactly how `StripeAdapter::refundPayment()` takes a PaymentIntent id). Webhook
+  verification uses PayPal's real verify-webhook-signature endpoint, reading its five headers from
+  `RawWebhook::$headers` and the registered webhook id from `$webhookSigningSecret`.
+- Both adapters ship pure, dependency-free status mappers (`MollieStatusMapper`,
+  `PayPalStatusMapper`) following the same "unrecognised status never falsely resolves to a
+  terminal state" rule as `StripeStatusMapper`.
+- CLI pairs for both (`mollie:create-checkout-session`/`get-payment-status`,
+  `paypal:create-checkout-session`/`get-payment-status`), mirroring Phase 21's Stripe pair —
+  standalone demonstration only, not wired to the Payments module (Phase 24, same as Phase 21 Q5).
 
-**DB:** none new.
+**DB:** no database changes.
 
-**Exit:** unit mapping tests + sandbox integration tests for both.
+**Exit:** unit mapping tests for both (`MollieStatusMapperTest` 10 cases, `PayPalStatusMapperTest`
+17 cases) + integration-style tests against the real SDK/HTTP stack via fakes (`MollieAdapterTest`
+13 tests using Mollie's own official `MollieApiClient::fake()`; `PayPalAdapterTest` 15 tests using
+Guzzle's `MockHandler`) + self-skipping live integration tests
+(`MollieAdapterLiveTest`/`PayPalAdapterLiveTest`) for both, same self-skip convention as
+`StripeAdapterLiveTest`.
 
 ## Phase 23 — Ziraat adapter
 

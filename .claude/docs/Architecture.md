@@ -277,9 +277,31 @@ raw `int` minor units + `string` currency code (Phase 21 Q3), matching `Payment`
   "first payment" (`sequenceType=first`) before a mandate exists, so `createSubscription()`
   performs only that step and returns the first-payment's id/checkout URL; the real Mollie
   Subscription resource is created later, out-of-band, once Phase 25's webhook processing
-  confirms the mandate. `PayPalAdapter` (Phase 22, still outstanding) is expected to be core +
-  subscriptions + refunds via raw REST over a shared HTTP client (Q2), not an SDK. `ZiraatAdapter`
-  (Phase 23) core + `SupportsManualPolling` **only** — it will not implement
+  confirms the mandate.
+- **`PayPalAdapter`** (Phase 22, built) implements core + `SupportsAuthCapture` +
+  `SupportsRefunds` — **not** `SupportsSubscriptions` (Phase 22 Q8: PayPal Subscriptions need a
+  persisted Billing "Plan" resource created ahead of time, unlike Stripe/Mollie's ad-hoc pricing;
+  deferred until a pre-provisioning/caching design is chosen). Talks to PayPal's REST API directly
+  over `guzzlehttp/guzzle` (Q2, no SDK), with no OAuth2 token caching — a fresh client-credentials
+  token is fetched on every call. Credentials are a `{client_id, client_secret}` JSON pair packed
+  into the single `secret_ciphertext` column (Q4); `DefaultProviderAdapterFactory`'s `'paypal'`
+  arm decodes it and also picks the sandbox-vs-live host from the account's `mode` — PayPal, unlike
+  Stripe/Mollie, uses a different hostname per environment rather than encoding it in the key.
+  PayPal's Orders API is a genuine two-step redirect flow even for "immediate capture" (Phase 22
+  Q7): `createPayment()`/`authorizePayment()` create a CAPTURE-/AUTHORIZE-intent order;
+  `capturePayment()` inspects the order's own `intent` (a fresh GET) and performs whichever real
+  dance that intent needs — a CAPTURE-intent order gets one `/capture` call, an AUTHORIZE-intent
+  order gets `/authorize` (creating the Authorization resource) then
+  `/authorizations/{id}/capture` — callers always call the same one method regardless of which
+  flow created the order. `cancelPayment()` voids an existing Authorization if one exists and
+  throws otherwise (PayPal has no "cancel this order" endpoint; an unauthorized order simply
+  lapses). `refundPayment()` operates on a **capture** id, not the order id — surfaced via
+  `ProviderPaymentStatus::$paymentIntentReference`, mirroring exactly how
+  `StripeAdapter::refundPayment()` takes a PaymentIntent id rather than a Checkout Session id.
+  Webhook verification calls PayPal's real `/v1/notifications/verify-webhook-signature` endpoint,
+  reading its five required headers from `RawWebhook::$headers` (Phase 22 Q5) and the registered
+  webhook id from `$webhookSigningSecret`.
+- `ZiraatAdapter` (Phase 23) core + `SupportsManualPolling` **only** — it will not implement
   `SupportsSubscriptions`, so "subscribe via Ziraat" stays impossible at the type level, not a
   runtime throw.
 

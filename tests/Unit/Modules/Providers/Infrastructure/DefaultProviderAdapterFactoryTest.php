@@ -6,6 +6,7 @@ namespace Gomrok\Tests\Unit\Modules\Providers\Infrastructure;
 
 use Gomrok\Modules\Providers\Application\Adapter\UnsupportedProviderType;
 use Gomrok\Modules\Providers\Infrastructure\Adapter\Mollie\MollieAdapter;
+use Gomrok\Modules\Providers\Infrastructure\Adapter\PayPal\PayPalAdapter;
 use Gomrok\Modules\Providers\Infrastructure\Adapter\Stripe\StripeAdapter;
 use Gomrok\Modules\Providers\Infrastructure\DefaultProviderAdapterFactory;
 use Gomrok\Tests\Support\InMemoryProviderTypeDeclarations;
@@ -39,6 +40,29 @@ final class DefaultProviderAdapterFactoryTest extends TestCase
         $adapter = $factory->for(3);
 
         self::assertInstanceOf(MollieAdapter::class, $adapter);
+    }
+
+    #[Test]
+    public function buildsAPayPalAdapterForAPayPalAccount(): void
+    {
+        $accounts = (new StubProviderAccountDirectory())->add(4, 7, 'paypal-live', 'paypal', mode: 'live');
+        $credentials = (new StubProviderAccountCredentials())->withSecret(4, '{"client_id":"cid","client_secret":"csecret"}');
+        $factory = new DefaultProviderAdapterFactory($accounts, $credentials, InMemoryProviderTypeDeclarations::withKnownProviders());
+
+        $adapter = $factory->for(4);
+
+        self::assertInstanceOf(PayPalAdapter::class, $adapter);
+    }
+
+    #[Test]
+    public function rejectsAPayPalAccountWithMalformedCredentials(): void
+    {
+        $accounts = (new StubProviderAccountDirectory())->add(5, 7, 'paypal-bad', 'paypal');
+        $credentials = (new StubProviderAccountCredentials())->withSecret(5, 'not-json');
+        $factory = new DefaultProviderAdapterFactory($accounts, $credentials, InMemoryProviderTypeDeclarations::withKnownProviders());
+
+        $this->expectException(RuntimeException::class);
+        $factory->for(5);
     }
 
     #[Test]

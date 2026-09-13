@@ -9,9 +9,12 @@ use Gomrok\Modules\Providers\Application\Adapter\ProviderAdapterFactory;
 use Gomrok\Modules\Providers\Application\Adapter\UnsupportedProviderType;
 use Gomrok\Modules\Providers\Application\ProviderAccountCredentials;
 use Gomrok\Modules\Providers\Application\ProviderAccountDirectory;
+use Gomrok\Modules\Providers\Application\ProviderAccountSummary;
 use Gomrok\Modules\Providers\Domain\ProviderTypeDeclarations;
 use Gomrok\Modules\Providers\Infrastructure\Adapter\Mollie\MollieAdapter;
+use Gomrok\Modules\Providers\Infrastructure\Adapter\PayPal\PayPalAdapter;
 use Gomrok\Modules\Providers\Infrastructure\Adapter\Stripe\StripeAdapter;
+use GuzzleHttp\Client as GuzzleClient;
 use Mollie\Api\MollieApiClient;
 use RuntimeException;
 use Stripe\StripeClient;
@@ -46,7 +49,32 @@ final readonly class DefaultProviderAdapterFactory implements ProviderAdapterFac
         return match ($account->providerTypeCode) {
             'stripe' => new StripeAdapter(new StripeClient($secret), $this->declarations),
             'mollie' => new MollieAdapter((new MollieApiClient())->setApiKey($secret), $this->declarations),
+            'paypal' => $this->buildPayPalAdapter($account, $secret),
             default => throw new UnsupportedProviderType("No adapter implemented for provider type '{$account->providerTypeCode}' yet."),
         };
+    }
+
+    /**
+     * PayPal's secret (Phase 22 Q4) is a JSON-encoded `{client_id,
+     * client_secret}` pair packed into the single `secret_ciphertext`
+     * column, not one opaque string like Stripe/Mollie's API keys. The base
+     * URI switches on the account's own `mode` (sandbox vs live) — PayPal,
+     * unlike Stripe/Mollie, uses a different hostname per environment rather
+     * than encoding it in the key itself.
+     */
+    private function buildPayPalAdapter(ProviderAccountSummary $account, string $secret): PayPalAdapter
+    {
+        $credentials = json_decode($secret, true);
+        if (
+            !\is_array($credentials)
+            || !\is_string($credentials['client_id'] ?? null)
+            || !\is_string($credentials['client_secret'] ?? null)
+        ) {
+            throw new RuntimeException("Provider account {$account->id} does not hold valid PayPal credentials (expected JSON {client_id, client_secret}).");
+        }
+
+        $baseUri = $account->mode === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
+
+        return new PayPalAdapter(new GuzzleClient(), $credentials['client_id'], $credentials['client_secret'], $baseUri, $this->declarations);
     }
 }

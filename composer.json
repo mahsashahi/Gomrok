@@ -132,6 +132,8 @@
         "stripe:get-payment-status": "php bin/StripeGetPaymentStatus.php",
         "mollie:create-checkout-session": "php bin/MollieCreateCheckoutSession.php",
         "mollie:get-payment-status": "php bin/MollieGetPaymentStatus.php",
+        "paypal:create-checkout-session": "php bin/PayPalCreateCheckoutSession.php",
+        "paypal:get-payment-status": "php bin/PayPalGetPaymentStatus.php",
         "ci": [
             "@cs",
             "@stan",
@@ -216,6 +218,8 @@
         "stripe:get-payment-status": "Look up a Stripe Checkout Session's status (--client --account --reference)",
         "mollie:create-checkout-session": "Create a real Mollie payment (--client --account --attempt --amount-minor --currency --description --success-url --cancel-url --payment-method ...)",
         "mollie:get-payment-status": "Look up a Mollie payment's status (--client --account --reference)",
+        "paypal:create-checkout-session": "Create a real PayPal order (--client --account --attempt --amount-minor --currency --description --success-url --cancel-url ...)",
+        "paypal:get-payment-status": "Look up a PayPal order's status (--client --account --reference)",
         "ci": "Local CI: code style, static analysis, unit tests (no infrastructure)",
         "ci:full": "ci plus the integration suite (needs MySQL: docker compose up -d mysql)"
     }
