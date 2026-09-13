@@ -265,8 +265,20 @@ raw `int` minor units + `string` currency code (Phase 21 Q3), matching `Payment`
   code to a concrete adapter, building a fresh, stateless instance per call. One `match` arm per
   provider type; Mollie/PayPal (Phase 22) and Ziraat (Phase 23) add arms here — an account whose
   type has no arm yet throws `UnsupportedProviderType`.
-- `MollieAdapter` (Phase 22) is expected to implement core + subscriptions + refunds
-  (method-dependent). `PayPalAdapter` (Phase 22) core + subscriptions + refunds. `ZiraatAdapter`
+- **`MollieAdapter`** (Phase 22, built) implements core + `SupportsRefunds` +
+  `SupportsSubscriptions` + `SupportsManualPolling` — **not** `SupportsCustomerPortal`: the Phase
+  10 seed's `customer_portal` capability for Mollie was corrected this phase (Mollie has no
+  hosted self-service billing portal product). Uses `mollie/mollie-api-php` (+ `guzzlehttp/guzzle`
+  as its PSR-18 transport), used only inside this class. Mollie has no webhook signature at all —
+  `verifyWebhookSignature()`/`parseWebhook()` re-fetch the resource by the id embedded in the
+  payload instead (Phase 22 Q5); a forged/unknown id fails because the re-fetch fails, not because
+  a signature check catches it. **Subscriptions are provisional** (Phase 22 Q6): Mollie has no
+  single-call subscription flow — a customer must authorize recurring charges via a one-off
+  "first payment" (`sequenceType=first`) before a mandate exists, so `createSubscription()`
+  performs only that step and returns the first-payment's id/checkout URL; the real Mollie
+  Subscription resource is created later, out-of-band, once Phase 25's webhook processing
+  confirms the mandate. `PayPalAdapter` (Phase 22, still outstanding) is expected to be core +
+  subscriptions + refunds via raw REST over a shared HTTP client (Q2), not an SDK. `ZiraatAdapter`
   (Phase 23) core + `SupportsManualPolling` **only** — it will not implement
   `SupportsSubscriptions`, so "subscribe via Ziraat" stays impossible at the type level, not a
   runtime throw.

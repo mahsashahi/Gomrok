@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gomrok\Tests\Unit\Modules\Providers\Infrastructure;
 
 use Gomrok\Modules\Providers\Application\Adapter\UnsupportedProviderType;
+use Gomrok\Modules\Providers\Infrastructure\Adapter\Mollie\MollieAdapter;
 use Gomrok\Modules\Providers\Infrastructure\Adapter\Stripe\StripeAdapter;
 use Gomrok\Modules\Providers\Infrastructure\DefaultProviderAdapterFactory;
 use Gomrok\Tests\Support\InMemoryProviderTypeDeclarations;
@@ -26,6 +27,18 @@ final class DefaultProviderAdapterFactoryTest extends TestCase
         $adapter = $factory->for(1);
 
         self::assertInstanceOf(StripeAdapter::class, $adapter);
+    }
+
+    #[Test]
+    public function buildsAMollieAdapterForAMollieAccount(): void
+    {
+        $accounts = (new StubProviderAccountDirectory())->add(3, 7, 'mollie-live', 'mollie');
+        $credentials = (new StubProviderAccountCredentials())->withSecret(3, 'test_' . str_repeat('a', 30));
+        $factory = new DefaultProviderAdapterFactory($accounts, $credentials, InMemoryProviderTypeDeclarations::withKnownProviders());
+
+        $adapter = $factory->for(3);
+
+        self::assertInstanceOf(MollieAdapter::class, $adapter);
     }
 
     #[Test]

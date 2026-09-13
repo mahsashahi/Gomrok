@@ -7,6 +7,69 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-12 — Phase 22 (in progress): Mollie adapter
+
+**Summary.** The second real provider on the Phase 21 port, plus two additive DTO changes decided
+for the whole phase. New `MollieAdapter` (`Modules\Providers\Infrastructure\Adapter\Mollie\`)
+implements the core `PaymentProviderPort` + `SupportsRefunds` + `SupportsSubscriptions` +
+`SupportsManualPolling` (not `SupportsCustomerPortal` — see correction below), using the new
+`mollie/mollie-api-php` SDK (+ `guzzlehttp/guzzle` as its PSR-18 transport) — used only inside
+this class, per Hexagonal Architecture Rule 5. `MollieStatusMapper` is a pure, dependency-free
+status translator mirroring `StripeStatusMapper`'s "unrecognised status never falsely resolves"
+rule. `DefaultProviderAdapterFactory` gained a `'mollie'` match arm.
+
+**Data correction.** The Phase 10 seed (`ProviderTypeDeclarations.json`) declared Mollie as
+having `customer_portal` — incorrect; Mollie has no hosted self-service billing portal product
+like Stripe's Billing Portal. Removed from the seed and from `InMemoryProviderTypeDeclarations`
+(which also gained the `manual_status_polling` capability it was missing for Mollie, matching the
+real seed).
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 22 Q1–Q6): **Q1** Mollie via the official
+`mollie/mollie-api-php` SDK · **Q2** PayPal via raw REST over a shared HTTP client, not deferred
+here (PayPal adapter is still to come) · **Q3** `CreatePaymentCommand` gained an additive,
+optional `paymentMethod` field so Mollie's Checkout can be locked to the method Gomrok's routing
+already resolved (`null` = no restriction, other adapters ignore it) · **Q4** PayPal's future
+client_id/client_secret pair will pack into the existing single `secret_ciphertext` column as one
+JSON value — no schema change · **Q5** `RawWebhook` gained an additive `headers` bag for
+providers needing more than one signature header (PayPal); Mollie uses neither field — it has no
+webhook signature at all, so `verifyWebhookSignature()`/`parseWebhook()` re-fetch the payment by
+the id embedded in the payload · **Q6** (discovered mid-implementation) Mollie has no single-call
+subscription flow — `createSubscription()` performs only the first-payment/mandate step and
+returns that payment's id/checkout URL; the real Mollie Subscription resource is deferred to
+Phase 25's webhook processing, once the mandate is confirmed. **No database changes.**
+
+**Files created**
+- `src/Modules/Providers/Infrastructure/Adapter/Mollie/{MollieAdapter,MollieStatusMapper}.php`.
+- `bin/{MollieCreateCheckoutSession,MollieGetPaymentStatus}.php` — manual verification CLIs,
+  mirroring the Stripe ones.
+- `tests/Unit/Modules/Providers/Infrastructure/Adapter/Mollie/{MollieAdapterTest,
+  MollieStatusMapperTest}.php`; `tests/Integration/MollieAdapterLiveTest.php` (self-skips without
+  a real `MOLLIE_TEST_API_KEY`).
+
+**Files modified**
+- `composer.json`/`composer.lock` — added `mollie/mollie-api-php:^3.0` (resolved v3.14.0) and
+  `guzzlehttp/guzzle:^7.9` (resolved 7.15.5); added `mollie:create-checkout-session` /
+  `mollie:get-payment-status` scripts + descriptions.
+- `src/Modules/Providers/Application/Adapter/CreatePaymentCommand.php` — additive `paymentMethod`
+  field (Q3).
+- `src/Modules/Providers/Application/Adapter/RawWebhook.php` — additive `headers` field (Q5).
+- `src/Modules/Providers/Infrastructure/DefaultProviderAdapterFactory.php` — `'mollie'` match arm.
+- `src/Database/Seeds/data/ProviderTypeDeclarations.json` — removed Mollie's incorrect
+  `customer_portal` capability.
+- `tests/Support/InMemoryProviderTypeDeclarations.php` — same correction, plus added the
+  `manual_status_polling` capability Mollie's real seed already had.
+- `tests/Unit/Modules/Providers/Infrastructure/DefaultProviderAdapterFactoryTest.php` — added a
+  Mollie case.
+- `.env.example` — documented the optional `MOLLIE_TEST_API_KEY`.
+
+**Tests.** `composer ci` — CS clean, PHPStan clean, **424 tests / 1593 assertions, all passing**
+(up from 401); `composer test:integration` — 38 skipped (self-skip, no MySQL/no Mollie key), up
+from 37. Run: `vendor/bin/phpunit tests/Unit/Modules/Providers/Infrastructure/Adapter/Mollie
+tests/Unit/Modules/Providers/Infrastructure/DefaultProviderAdapterFactoryTest.php`.
+
+**Status.** Phase 22 is not complete — the PayPal adapter is still outstanding. No
+`Phase22Result.md` yet; this entry covers only the Mollie half.
+
 ## 2026-09-11 — Phase 21: Provider adapter port & Stripe adapter
 
 **Summary.** The one interface every provider implements, plus the first real provider. New

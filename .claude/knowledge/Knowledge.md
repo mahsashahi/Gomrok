@@ -566,6 +566,56 @@ duplicate.
   `new StripeClient($secret)` per call is negligible (no I/O happens at construction — the SDK is
   lazy until a method call actually issues a request).
 
+## Mollie adapter (Phase 22, in progress — Mollie half)
+
+- **The Mollie PHP SDK ships its own official test double — use it instead of hand-rolling one.**
+  `mollie/mollie-api-php` (v3.14+) has `MollieApiClient::fake([RequestClass::class =>
+  MockResponse::ok([...])])`, returning a `MockMollieClient` that swaps only the HTTP transport —
+  the real request-building, response hydration, and `ConvertResponseToException` middleware all
+  run for real, same testing philosophy as `FakeStripeHttpClient` (Phase 21) but with no
+  hand-written fake to maintain. Assertions on what was sent read `$client->assertSent(fn
+  (\Mollie\Api\Http\PendingRequest $r) => ...)` — the callback receives the **`PendingRequest`**,
+  not the typed request directly; get the typed request via `$r->getRequest()`. A built request's
+  `->payload()` returns a `JsonPayloadRepository` (`->get('key')`, not array access) whose
+  `'amount'` value is a real `\Mollie\Api\Http\Data\Money` object (`->currency`/`->value`), not a
+  plain array — `(array) $moneyObject` normalizes either shape for assertions.
+- **`ConvertResponseToException` maps 401/403 to `UnauthorizedException`/`ForbiddenException`**
+  (both extend `ApiException`) and everything else non-2xx to `ApiException` or a narrower
+  subclass — catch the two narrower ones first, exactly like Stripe's
+  `AuthenticationException extends ApiErrorException`.
+- **Mollie's classic per-payment webhook has no signature at all** — it's a form-encoded POST body
+  of just `id=tr_xxx`; the only real "verification" is re-fetching the resource with your own API
+  key (a forged/unknown id fails because the fetch fails). This is a genuinely different provider
+  shape from Stripe's local HMAC, addressed by widening `RawWebhook` with an additive `headers`
+  bag (Phase 22 Q5) rather than forcing every provider through Stripe's fields. (Mollie's SDK does
+  ship a newer, *separate* signed "Webhooks v2" system — `X-Mollie-Signature` HMAC — but that's for
+  organization-level events like payouts/disputes/sales-invoices, not individual payment status
+  changes, so it's irrelevant to `PaymentProviderPort`.)
+- **Mollie has no single-call subscription flow.** A customer must authorize recurring charges via
+  a one-off "first payment" (`sequenceType: 'first'`) before a mandate exists; only then can a real
+  Subscription resource be created. `MollieAdapter::createSubscription()` (Phase 22 Q6) performs
+  only the first-payment step and returns *that payment's* id/checkout URL — `getSubscriptionStatus()`
+  and `cancelSubscription()` this phase operate on that same payment reference, not a real
+  subscription id. Creating the actual Subscription once the mandate is confirmed is Phase 25's job
+  (webhook processing) — do not assume `MollieAdapter`'s subscription methods are the finished
+  article.
+- **A stale seed can silently claim a capability an adapter can't back up.** Phase 10's
+  `ProviderTypeDeclarations.json` declared Mollie as supporting `customer_portal` — Mollie has no
+  such product. Caught while implementing the adapter (which interfaces to implement is *driven
+  by* the seeded capability list), not before — a reminder that "the DB/seed says X" is a claim to
+  verify against the actual provider, not a given. Corrected in the seed and in
+  `InMemoryProviderTypeDeclarations` together (per the Database Diagram Maintenance Rule's spirit:
+  keep seed/test-double data in lock-step, even for non-schema content).
+- **Mollie's `cancelUrl` is a real, first-class Payments API field** (unlike an earlier assumption
+  that Mollie only supported a single `redirectUrl`) — `CreatePaymentCommand::$cancelUrl` maps
+  directly to it, no special-casing needed.
+- **Converting between Gomrok's `int` minor units and Mollie's decimal-string `value` field**:
+  reuse `Gomrok\Shared\Domain\Money::fromMinor()->amount()` for outgoing amounts (already handles
+  per-currency decimal scale correctly, e.g. JPY's 0 decimals); use `Brick\Money\Money::of()`
+  directly for parsing a decimal string *back* to minor units (Mollie refund/payment amounts come
+  back as `{currency, value}` objects) — `Shared\Domain\Money` has no "from decimal string"
+  constructor, so this one direction goes straight through brick/money rather than the shared VO.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

@@ -254,6 +254,13 @@ composer stripe:create-checkout-session -- --client=televika --account=stripe-li
     --amount-minor=2900 --currency=EUR --description="Pro package" \
     --success-url=https://example.com/success --cancel-url=https://example.com/cancel
 composer stripe:get-payment-status -- --client=televika --account=stripe-live --reference=cs_test_...
+
+# Mollie adapter (Phase 22) — needs a real Mollie test/live API key on the provider account
+composer mollie:create-checkout-session -- --client=televika --account=mollie-live --attempt=order-42 \
+    --amount-minor=2900 --currency=EUR --description="Pro package" \
+    --success-url=https://example.com/success --cancel-url=https://example.com/cancel \
+    [--payment-method=card|paypal|ideal|bancontact|sepa_direct_debit]
+composer mollie:get-payment-status -- --client=televika --account=mollie-live --reference=tr_...
 ```
 
 `code` is `^[A-Z0-9][A-Z0-9_-]{2,63}$` (≥3 chars), unique per client, stored upper-case. A
@@ -311,6 +318,15 @@ it makes a genuine call to the Stripe API and prints the real Checkout Session r
 and the internal `PaymentStatus` it maps to (preferring the underlying PaymentIntent's status
 once one exists, for a more precise mapping). Neither command is wired to a `payments` row yet —
 they exercise `StripeAdapter` directly, standalone, per Phase 21 Q5.
+
+`mollie:create-checkout-session` requires `--account` to already hold a real Mollie API key
+(`provider-account:create --provider-type=mollie --secret-key=test_...` or `live_...`) — it makes
+a genuine call to the Mollie API and prints the real payment's checkout URL. `--payment-method`
+is optional (Phase 22 Q3): when given, it locks Mollie's Checkout to that one method instead of
+showing Mollie's own method picker — pass whichever method Gomrok's own routing already resolved.
+`mollie:get-payment-status` reads a payment back by its id and prints both the raw Mollie status
+and the internal `PaymentStatus` it maps to. Neither command is wired to a `payments` row yet,
+same as the Stripe pair, per Phase 21 Q5 / Phase 22's own scope.
 
 `composer db:setup` in `local` / `testing` also seeds a `local-dev` client with a fixed token:
 `gk_test_000000000000dead.localdevsecretlocaldevsecret1234` (dev only — the seeder no-ops in

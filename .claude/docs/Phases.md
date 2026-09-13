@@ -39,7 +39,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 19 | Resolution API endpoints | ☑ | 2026-09-11 15:50 | 2026-09-11 16:40 | 3–5h | 50m | N/A |
 | 20 | Payments module: aggregate & lifecycle | ☑ | 2026-09-11 16:50 | 2026-09-11 18:34 | 4–6h | 1h 44m | N/A |
 | 21 | Provider adapter port & Stripe adapter | ☑ | 2026-09-11 18:45 | 2026-09-11 20:11 | 6–9h | 1h 26m | N/A |
-| 22 | Mollie & PayPal adapters | ☐ | — | — | 6–9h | — | — |
+| 22 | Mollie & PayPal adapters | ◐ | 2026-09-11 23:22 | — | 6–9h | — | — |
 | 23 | Ziraat adapter | ☐ | — | — | 4–7h | — | — |
 | 24 | Payment creation flow | ☐ | — | — | 5–8h | — | — |
 | 25 | Webhooks module | ☐ | — | — | 5–8h | — | — |

@@ -10,7 +10,9 @@ use Gomrok\Modules\Providers\Application\Adapter\UnsupportedProviderType;
 use Gomrok\Modules\Providers\Application\ProviderAccountCredentials;
 use Gomrok\Modules\Providers\Application\ProviderAccountDirectory;
 use Gomrok\Modules\Providers\Domain\ProviderTypeDeclarations;
+use Gomrok\Modules\Providers\Infrastructure\Adapter\Mollie\MollieAdapter;
 use Gomrok\Modules\Providers\Infrastructure\Adapter\Stripe\StripeAdapter;
+use Mollie\Api\MollieApiClient;
 use RuntimeException;
 use Stripe\StripeClient;
 
@@ -43,6 +45,7 @@ final readonly class DefaultProviderAdapterFactory implements ProviderAdapterFac
 
         return match ($account->providerTypeCode) {
             'stripe' => new StripeAdapter(new StripeClient($secret), $this->declarations),
+            'mollie' => new MollieAdapter((new MollieApiClient())->setApiKey($secret), $this->declarations),
             default => throw new UnsupportedProviderType("No adapter implemented for provider type '{$account->providerTypeCode}' yet."),
         };
     }

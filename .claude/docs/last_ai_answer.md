@@ -1,100 +1,79 @@
-# Q: Phase 21 — Provider adapter port & Stripe adapter (completion summary)
+# Q: Implement the Mollie adapter (Phase 22, first half)
 
-Phase 21 is complete. Here's what was built, verified, and documented.
+Implemented the Mollie half of Phase 22 — the second real provider on the `PaymentProviderPort`
+from Phase 21. PayPal (the other half of this phase) is still outstanding.
 
-## What was implemented
+## Decisions made first (recorded in `PhaseResults/PhaseDecisions.md`)
 
-The one interface every provider implements, plus the first real provider. A new
-`Modules\Providers\Application\Adapter\` namespace holds the port: the required core
-`PaymentProviderPort` (`createPayment`, `getPaymentStatus`, `verifyWebhookSignature`,
-`parseWebhook`, `mapProviderStatusToInternalStatus`, `getCapabilities`) plus five optional
-capability interfaces (`SupportsSubscriptions`, `SupportsRefunds`, `SupportsAuthCapture`,
-`SupportsCustomerPortal`, `SupportsManualPolling`) — the hybrid shape decided back in Phase 1 Q5,
-now real code.
+1. **Mollie via the official `mollie/mollie-api-php` SDK** (mirrors Stripe's precedent).
+2. **PayPal via raw REST over a shared HTTP client**, not the generated official SDK (still to be
+   built).
+3. **`CreatePaymentCommand` gained an additive, optional `paymentMethod` field** — Mollie's
+   Checkout can be locked to the method Gomrok's routing already resolved; other adapters ignore
+   it.
+4. **PayPal's future client_id/client_secret pair packs into the existing single
+   `secret_ciphertext` column as one JSON value** — no schema change.
+5. **`RawWebhook` gained an additive `headers` bag** for providers needing more than Stripe's one
+   signature header + one secret (PayPal's verify-webhook-signature call needs five headers).
+6. **(Discovered mid-implementation) Mollie has no single-call subscription flow** — a customer
+   must authorize recurring charges via a one-off "first payment" before a mandate exists.
+   `MollieAdapter::createSubscription()` performs only that step and returns the first payment's
+   id/checkout URL; the real Mollie Subscription resource is deferred to Phase 25 (webhook
+   processing), once the mandate is confirmed.
 
-`StripeAdapter` implements the core plus four capability interfaces using the new
-`stripe/stripe-php` SDK — used only inside this one class. `createPayment()`/`createSubscription()`
-create a Stripe Checkout Session; `getPaymentStatus()` prefers the underlying PaymentIntent's
-status when expanded, for precision; `getCapabilities()` reads the Phase 8 seeded declaration
-rather than duplicating it. `StripeStatusMapper` (pure, no SDK) maps Stripe's vocabulary to
-`PaymentStatus` — an unrecognised status always falls back to `Pending`, never a false claim.
-`DefaultProviderAdapterFactory` resolves a `provider_account_id` to a fresh, credentialed adapter
-instance (Q4).
+## What was built
 
-**Per Q5, this phase stops at a standalone, fully-tested adapter + CLI — it is not wired into the
-Payments module yet.** That orchestration is explicitly Phase 24's job.
+- **`MollieAdapter`** (`src/Modules/Providers/Infrastructure/Adapter/Mollie/MollieAdapter.php`) —
+  implements the core `PaymentProviderPort` + `SupportsRefunds` + `SupportsSubscriptions` +
+  `SupportsManualPolling`. Deliberately **not** `SupportsCustomerPortal`: while implementing, I
+  found the Phase 10 seed incorrectly declared Mollie as having a `customer_portal` capability —
+  Mollie has no hosted self-service billing portal like Stripe's. Corrected
+  `src/Database/Seeds/data/ProviderTypeDeclarations.json` (removed it) and
+  `tests/Support/InMemoryProviderTypeDeclarations.php` (removed it, and added the
+  `manual_status_polling` capability it was separately missing for Mollie).
+- **`MollieStatusMapper`** — pure, dependency-free status translation
+  (`open`/`pending`→Pending, `authorized`→Authorized, `paid`→Paid, `failed`→Failed,
+  `canceled`→Canceled, `expired`→Expired, unrecognised→Pending), same "never a false-positive
+  terminal status" rule as `StripeStatusMapper`.
+- **`DefaultProviderAdapterFactory`** gained a `'mollie'` match arm.
+- **Webhooks**: Mollie's classic per-payment webhook has no signature at all (just POSTs
+  `id=tr_xxx`) — `verifyWebhookSignature()`/`parseWebhook()` re-fetch the payment by that id as
+  the real authenticity check, rather than checking a signature that doesn't exist.
+- **Money conversion**: outgoing amounts use `Gomrok\Shared\Domain\Money::fromMinor()->amount()`
+  (correct per-currency decimal scale); incoming decimal strings (refund amounts) convert back via
+  `Brick\Money\Money::of()`.
+- **CLI**: `bin/MollieCreateCheckoutSession.php`, `bin/MollieGetPaymentStatus.php` (mirror the
+  Stripe pair; `composer mollie:create-checkout-session` / `mollie:get-payment-status`).
+- **Tests**: `MollieAdapterTest` (13 tests, using the Mollie SDK's own official test double
+  `MollieApiClient::fake()`/`MockMollieClient` — no hand-rolled fake needed, unlike Stripe's
+  `FakeStripeHttpClient`), `MollieStatusMapperTest` (10 tests), a Mollie case added to
+  `DefaultProviderAdapterFactoryTest`, and `tests/Integration/MollieAdapterLiveTest.php`
+  (self-skips without a real `MOLLIE_TEST_API_KEY`, same pattern as `StripeAdapterLiveTest`).
 
-## Files created
+## Verified (real captured output)
 
-- `Modules\Providers\Application\Adapter\` — the port interfaces, 10 DTOs, 5 exceptions.
-- `Modules\Providers\Infrastructure\Adapter\Stripe\{StripeAdapter,StripeStatusMapper}.php`.
-- `Modules\Providers\Infrastructure\DefaultProviderAdapterFactory.php`.
-- CLI: `bin/{StripeCreateCheckoutSession,StripeGetPaymentStatus}.php`.
-- Tests: 25 new (`StripeStatusMapperTest` 16, `StripeAdapterTest` 6, `DefaultProviderAdapterFactoryTest`
-  3) + `StripeAdapterLiveTest` (CI-only, self-skips without a real Stripe key);
-  `FakeStripeHttpClient` + `StubProviderAccountCredentials` test doubles.
-- `.claude/PhaseResults/Phase21Result.md`.
+- `composer ci` → CS clean, PHPStan clean, **424 tests / 1593 assertions, all passing** (up from
+  401 before this change).
+- `composer test:integration` → 38 skipped (up from 37 — the new Mollie live test self-skips,
+  same as every MySQL-dependent integration test without a database).
+- Both CLI scripts invoked with no arguments print their real usage banners.
+- A standalone demo script exercised the real `DefaultProviderAdapterFactory` + `MollieAdapter`
+  against Mollie's fake transport end-to-end: factory resolution, `getCapabilities()` (9
+  capabilities, `customer_portal=no`), `createPayment()` → real checkout URL, `getPaymentStatus()`
+  → `raw=paid mapped=paid`, a genuine Mollie 401 → `ProviderAuthenticationFailed` with the real
+  Mollie error message, and webhook verify/parse via re-fetch.
 
-## Files updated
+## Docs updated
 
-`ProviderAccountDirectory` gained `findById()` (additive); DI wired the new factory;
-`composer.json` gained `stripe/stripe-php` + 2 CLI scripts; `.env.example` documented
-`STRIPE_TEST_SECRET_KEY`. Every governance doc updated in lock-step: `Architecture.md` (§3, §8
-rewritten from sketch to as-built, §13), `Phases.md` (row 21 ☑), `Changelog.md`, `FileIndex.md`,
-`Knowledge.md`, `Commands.md`, `Orders.md` (D24). No DB-diagram/db_explain changes — no schema
-changed this phase.
+`.claude/Changelog.md` (new dated entry), `.claude/FileIndex.md`, `.claude/docs/Architecture.md`
+§8 (Mollie's as-built shape + the customer_portal correction), `.claude/docs/Commands.md` (new
+`mollie:*` CLI docs), `.claude/docs/Phases.md` (row 22 → ◐ in progress),
+`.claude/knowledge/Knowledge.md` (new "Mollie adapter" section covering the SDK's fake-client
+testing pattern, the no-signature webhook model, the provisional subscription flow, and the
+seed-data correction).
 
-## Database changes
+## Not done yet
 
-**None.**
-
-## Tests — how to run and real results
-
-```
-composer ci
-```
-→ PHPStan: 685 files, **0 errors**. PHPUnit: **401 tests, 1553 assertions, OK** (+25 new).
-
-```
-composer test:integration
-```
-→ **37 tests, 37 skipped** (no local MySQL; the new `StripeAdapterLiveTest` also self-skips
-without a real `STRIPE_TEST_SECRET_KEY` — same convention as every MySQL-dependent test).
-
-**Honest note on "integration tests against Stripe test mode":** this sandbox has no real Stripe
-account, so the genuine-network test self-skips here, same as every MySQL test does without a
-database. What *is* real and verified: `StripeAdapterTest` drives the actual Stripe PHP SDK
-(`StripeClient`, `Webhook::constructEvent()`, its own HTTP-status-to-exception mapping) through a
-fake transport — a queued real Stripe 401 body genuinely produces a real
-`AuthenticationException`, a real HMAC signature genuinely verifies. Only the network call itself
-is faked. (Network to `api.stripe.com` was confirmed reachable from this environment — no
-credentials were available to authenticate with.)
-
-## Captured evidence
-
-CLI usage strings captured for both new scripts. A standalone script drove the real factory +
-adapter against the fake transport, exercising the full port surface:
-
-```
-factory resolves stripe account #1                         -> StripeAdapter
-getCapabilities()                                           -> 17 capabilities (hosted_checkout=yes, refund=yes)
-factory resolves ziraat account #2 (no adapter yet)          -> ERROR  No adapter implemented for provider type 'ziraat' yet.
-factory resolves unknown account #999                        -> ERROR  Provider account 999 was not found.
-createPayment()                                              -> #cs_test_abc123 [open] https://checkout.stripe.com/...
-getPaymentStatus()                                           -> raw=complete mapped=paid (via payment_intent pi_test_xyz)
-createPayment() with a bad key                                -> ERROR  ProviderAuthenticationFailed: Invalid API Key provided
-verifyWebhookSignature() correct secret / wrong secret        -> true / false
-parseWebhook()                                                -> type=checkout.session.completed reference=cs_test_abc123
-```
-
-## Known limitations
-
-- Not wired into `RecordProviderTransactionHandler`/`CreatePaymentHandler` yet — Phase 24.
-- Mollie/PayPal — Phase 22. Ziraat (first `SupportsManualPolling`) — Phase 23.
-- `mapProviderSubscriptionStatusToInternalStatus()` is a provisional `string` pass-through until
-  the `Subscriptions` module (Phase 26) formalizes a real status enum.
-- No `gateway_references` writer yet — awaits a real caller alongside Phase 24.
-
-## Next recommended phase
-
-**Phase 22 — Mollie & PayPal adapters.**
+Phase 22 is **not complete** — the PayPal adapter is still outstanding. No `Phase22Result.md` has
+been created (that happens once the whole phase, including PayPal, is done). No database changes
+this phase.

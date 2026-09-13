@@ -48,7 +48,6 @@
       "refund",
       "partial_refund",
       "subscription_cancel",
-      "customer_portal",
       "webhook",
       "return_url",
       "manual_status_polling"

@@ -78,6 +78,8 @@ final class InMemoryProviderTypeDeclarations implements ProviderTypeDeclarations
         )));
 
         // Mollie — full at the type level; per-method narrowing via MethodCapabilityRules.
+        // No CustomerPortal (Phase 22): Mollie has no hosted self-service billing
+        // portal equivalent to Stripe's — corrected from an inaccurate Phase 10 seed.
         $self->add(new ProviderTypeDeclaration('mollie', [
             PurchaseType::OneTimePayment, PurchaseType::RecurringPayment, PurchaseType::Subscription,
         ], ProviderCapabilities::of(
@@ -86,10 +88,10 @@ final class InMemoryProviderTypeDeclarations implements ProviderTypeDeclarations
             Capability::Refund,
             Capability::PartialRefund,
             Capability::SubscriptionCancel,
-            Capability::CustomerPortal,
             Capability::ThreeDSecure,
             Capability::Webhook,
             Capability::ReturnUrl,
+            Capability::ManualStatusPolling,
         )));
 
         // Ziraat — charge-only, no API product model, no subscriptions / auto-charge.

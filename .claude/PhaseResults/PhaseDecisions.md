@@ -16,6 +16,138 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 22 — Mollie & PayPal adapters
+
+### Q5 — Webhook verification shape for Mollie and PayPal
+
+**Question:** Mollie has no webhook signature at all (it just POSTs an id; you must re-fetch the
+resource with your API key to confirm it's real). PayPal's recommended verification is an API
+call needing several raw headers (transmission id/time, cert URL, auth algo, signature) that
+`RawWebhook` (Phase 21: one payload + one `signatureHeader` + one `webhookSigningSecret`) doesn't
+carry. How should this be handled?
+
+**Options:**
+
+1. **Extend `RawWebhook` with a headers bag** — add an additive `array<string,string> $headers`
+   field (Stripe keeps using `signatureHeader`/`webhookSigningSecret` unchanged). PayPal's adapter
+   reads its five headers from it and calls PayPal's real verify-webhook-signature endpoint;
+   Mollie's adapter ignores headers/secret entirely and verifies by re-fetching the payment by id
+   from the payload. No real caller exists yet (Webhooks module is Phase 25), so widening the DTO
+   now is low-risk.
+2. Keep `RawWebhook` exactly as Stripe defined it — Mollie still works (verify by re-fetching
+   using only the id already in the payload). PayPal genuinely cannot do its documented
+   server-side signature check without the extra headers, so its `parseWebhook()` would have to
+   skip real verification — a real gap versus PayPal's own security guidance.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — extend `RawWebhook` with a generic headers bag.
+
+**Status:** Decided
+
+---
+
+### Q4 — PayPal's two-part credential storage
+
+**Question:** PayPal needs a client_id + client_secret pair (for OAuth2 token exchange), but
+`ProviderAccountCredentials::secretFor()` and `provider_accounts.secret_ciphertext` (Phase 9) hold
+exactly one opaque secret string per account. How should PayPal's two-part credential fit?
+
+**Options:**
+
+1. **Pack as one JSON value** — store `{"client_id":...,"client_secret":...}` as the single
+   encrypted `secret_ciphertext` value; only the PayPal adapter parses it after decrypt. No schema
+   change, no new port method — matches this phase's stated "DB: none new" scope; Stripe/Mollie
+   (single API key) keep using the string as-is.
+2. Extend the port/schema for multiple named secrets — add a new
+   `ProviderAccountCredentials` method (or a structured multi-field secret store) so any provider
+   can have several named credential fields, decrypted individually. More general, avoids ad hoc
+   JSON-in-a-string, but requires a migration and touches the already-shipped Phase 9 credentials
+   design, contradicting this phase's "no new DB" scope.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — pack PayPal's client_id/client_secret as one JSON value in the existing
+`secret_ciphertext` field.
+
+**Status:** Decided
+
+---
+
+### Q3 — Payment-method selection on CreatePaymentCommand
+
+**Question:** Mollie's Checkout can restrict the hosted page to one payment method (card/ideal/
+paypal/bancontact) or show all enabled methods as a picker. Gomrok's routing already resolves a
+specific provider+method before calling `createPayment()`, but `CreatePaymentCommand` (Phase 21)
+has no method field to pass that choice through. How should this work?
+
+**Options:**
+
+1. **Add an optional `paymentMethod` field** — additive, nullable `PaymentMethod` field on
+   `CreatePaymentCommand`. Mollie's adapter passes it as Mollie's `method` param to lock the
+   Checkout to the resolved method; Stripe/other adapters simply ignore it. Keeps Gomrok's own
+   pricing/routing decision authoritative — the customer can't pick a method Gomrok didn't price
+   or authorize.
+2. Let Mollie show its own method picker — don't touch `CreatePaymentCommand`; Mollie's Checkout
+   page offers whichever methods are enabled on the account regardless of what routing resolved.
+   Simpler DTO, but a customer could complete payment via a method Gomrok never validated
+   capabilities/pricing for, breaking the pricing/capability-resolution guarantee.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — add an optional `paymentMethod` field to `CreatePaymentCommand`.
+
+**Status:** Decided
+
+---
+
+### Q2 — PayPal API integration approach
+
+**Question:** How should the PayPal adapter talk to PayPal's API?
+
+**Options:**
+
+1. **Raw REST via HTTP client** — PayPal's current official SDK (`paypal/paypal-server-sdk`) is a
+   large, code-generated client covering PayPal's whole product surface, heavy for what Gomrok
+   needs (create order/checkout, create subscription, get status, verify one webhook). PayPal's
+   REST API + OAuth2 client-credentials token exchange is simple enough to call directly through
+   the same HTTP client added for Mollie (Q1), keeping both new adapters on one HTTP stack instead
+   of two different SDK philosophies.
+2. Official `paypal/paypal-server-sdk` — consistent with the Stripe/Mollie "use the official SDK"
+   pattern, but a large generated dependency whose orders vs. subscriptions API is split across
+   separate namespaces/clients, and OAuth token handling still has to be wired in manually either
+   way.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — raw REST via the shared internal HTTP client.
+
+**Status:** Decided
+
+---
+
+### Q1 — Mollie API integration approach
+
+**Question:** How should the Mollie adapter talk to Mollie's API?
+
+**Options:**
+
+1. **Official `mollie/mollie-api-php`** — mirrors the Phase 21 precedent (Stripe's official SDK).
+   Mature, handles request signing/serialization and typed resource objects, reduces custom
+   HTTP-error-mapping code. Needs a PSR-18 HTTP client + PSR-17 factories as peer dependencies
+   (none installed yet — adds e.g. `guzzlehttp/guzzle` alongside it).
+2. Raw REST via a new internal HTTP client — more control, no SDK version coupling, but
+   reimplements request building, auth headers, and error-body parsing the SDK already provides,
+   and departs from the Phase 21 pattern.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — official `mollie/mollie-api-php`.
+
+**Status:** Decided
+
+---
+
 ## Phase 21 — Provider adapter port & Stripe adapter
 
 **Note:** the adapter shape itself (required core `PaymentProviderPort` + optional capability
