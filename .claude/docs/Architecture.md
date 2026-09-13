@@ -301,9 +301,19 @@ raw `int` minor units + `string` currency code (Phase 21 Q3), matching `Payment`
   Webhook verification calls PayPal's real `/v1/notifications/verify-webhook-signature` endpoint,
   reading its five required headers from `RawWebhook::$headers` (Phase 22 Q5) and the registered
   webhook id from `$webhookSigningSecret`.
-- `ZiraatAdapter` (Phase 23) core + `SupportsManualPolling` **only** — it will not implement
-  `SupportsSubscriptions`, so "subscribe via Ziraat" stays impossible at the type level, not a
-  runtime throw.
+- **`ZiraatAdapter` is deferred (Phase 23 Q1)** — not built. There are no verified Ziraat sandbox
+  credentials, confirmed-current official integration documentation, or confirmed merchant
+  configuration available; guessing at a bank-hosted POS protocol's request fields,
+  hash/signature format, or callback format would risk baking unverified claims into the
+  codebase. **Ziraat integration is deferred until official documentation and credentials are
+  available.** `DefaultProviderAdapterFactory` throws `UnsupportedProviderType` for a `'ziraat'`
+  account via its `default` arm (documented inline); nothing about this architecture blocks adding
+  it later — one more `match` arm plus a `ZiraatAdapter` class implementing core +
+  `SupportsManualPolling` **only** (it must not implement `SupportsSubscriptions`, so "subscribe
+  via Ziraat" stays impossible at the type level, not a runtime throw) is all that's needed
+  whenever real documentation/credentials exist. Ziraat's provider-type and capability seed data
+  stays in place unchanged (it backs country-routing regardless of adapter existence) and is
+  marked planned/deferred, not implemented, in `ProviderTypesSeeder`'s docblock.
 
 **Capability descriptor (runtime gating).** *Implemented Phase 8 — `Modules/Providers`.*
 `Capability` (backed enum, 19 flags — `hosted_checkout`, `partial_refund`, `subscription_cancel`,
@@ -674,8 +684,9 @@ and flagged, never dropped.
   (`Money`, `Currency`), resolution engines (pricing, routing, voucher), status mapping, state
   machines, capability gating.
 - **Integration** (`tests/Integration/`): infrastructure adapters against a real MySQL (migrations
-  applied) and provider **sandboxes** (Stripe/Mollie/PayPal test mode; a Ziraat stub until real
-  credentials).
+  applied) and provider **sandboxes** (Stripe/Mollie/PayPal test mode). Ziraat has no integration
+  tests — its adapter is deferred (Phase 23 Q1) until official documentation and credentials are
+  available.
 - Tests are written **with** the code each phase, and each phase result records the commands run
   and the real output.
 

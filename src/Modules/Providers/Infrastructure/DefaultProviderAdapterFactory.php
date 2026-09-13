@@ -21,9 +21,17 @@ use Stripe\StripeClient;
 
 /**
  * The one place that knows "provider type code X gets adapter class Y"
- * (Phase 21 Q4) — grows a `match` arm per provider type as Phases 22–23 add
- * Mollie/PayPal/Ziraat. Builds a fresh, stateless adapter instance per call,
- * configured with that one account's decrypted secret.
+ * (Phase 21 Q4) — grows a `match` arm per provider type as new providers are
+ * added. Builds a fresh, stateless adapter instance per call, configured
+ * with that one account's decrypted secret.
+ *
+ * **Ziraat is intentionally not implemented.** A `ziraat` account falls
+ * through to the `default` arm below and throws `UnsupportedProviderType` —
+ * this is deliberate, not an oversight. Ziraat integration is deferred until
+ * official documentation and credentials are available (see Phase 23's
+ * decision in `PhaseResults/PhaseDecisions.md`). Adding it later needs
+ * nothing more than one more `match` arm here plus a `ZiraatAdapter` class;
+ * nothing about this architecture blocks it.
  */
 final readonly class DefaultProviderAdapterFactory implements ProviderAdapterFactory
 {
@@ -50,6 +58,7 @@ final readonly class DefaultProviderAdapterFactory implements ProviderAdapterFac
             'stripe' => new StripeAdapter(new StripeClient($secret), $this->declarations),
             'mollie' => new MollieAdapter((new MollieApiClient())->setApiKey($secret), $this->declarations),
             'paypal' => $this->buildPayPalAdapter($account, $secret),
+            // 'ziraat' deliberately has no arm — deferred, see the class docblock.
             default => throw new UnsupportedProviderType("No adapter implemented for provider type '{$account->providerTypeCode}' yet."),
         };
     }

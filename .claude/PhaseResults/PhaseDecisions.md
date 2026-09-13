@@ -16,6 +16,51 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 23 — Ziraat adapter
+
+### Q1 — Whether to build the Ziraat adapter this phase
+
+**Question:** Ziraat has no real sandbox credentials, no verified-current merchant integration
+documentation, and no confirmed merchant configuration available in this environment. Claude
+proposed building a best-effort implementation of the publicly-known "NestPay/estPos" bank-hosted
+POS pattern several Turkish banks (Ziraat historically included) are known to run on — flagged
+explicitly as unverified — as one option, against building a deliberately generic placeholder
+stub as the other. The user rejected both framings and gave a direct instruction instead of
+picking an option.
+
+**User's instruction (verbatim intent):** Do not implement `ZiraatAdapter` this phase. Defer
+Ziraat integration entirely to a later phase because there are no verified sandbox credentials,
+no official integration documentation, and no confirmed merchant configuration. Specifically:
+
+- Do not build a best-effort Ziraat protocol now.
+- Do not guess Ziraat request fields, hash/signature format, callback format, or bank-hosted POS
+  behavior.
+- Do not create production-ready Ziraat code.
+- Keep Ziraat listed as a future payment provider.
+- Add a clear TODO/placeholder provider entry only where needed (not new code files).
+- The placeholder must explicitly say: "Ziraat integration is deferred until official
+  documentation and credentials are available."
+- The core provider adapter architecture (`PaymentProviderPort`, the optional capability
+  interfaces, `ProviderAdapterFactory`) must still support adding Ziraat later without changes.
+- This must not block Stripe, PayPal, Mollie, or the generic provider adapter architecture — all
+  three are already complete (Phases 21–22) and unaffected.
+- Any Ziraat-specific tests are skipped/deferred — none are added this phase.
+- Ziraat's provider-type/capability seed data (`provider_types`, `ProviderTypeDeclarations.json`,
+  already seeded since Phase 8/10 for country-routing purposes) stays as planned/deferred, not
+  implemented — not removed, since routing/capability resolution already depends on it and that
+  layer is unrelated to whether an adapter exists.
+
+**Selected:** Defer Ziraat entirely. No `ZiraatAdapter` class, no protocol guessing, no new tests.
+`DefaultProviderAdapterFactory` already throws `UnsupportedProviderType` for `'ziraat'` via its
+`default` arm — this was left exactly as-is and documented with the required placeholder sentence
+in the class docblock and inline comment, plus a matching note in `ProviderTypesSeeder`'s
+docblock. No code changes beyond those two comments; Phase 23's actual deliverable this round is
+the deferral decision and its documentation.
+
+**Status:** Decided
+
+---
+
 ## Phase 22 — Mollie & PayPal adapters
 
 ### Q8 — PayPal subscriptions and the Billing Plans dependency

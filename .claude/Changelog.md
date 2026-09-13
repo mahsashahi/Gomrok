@@ -7,6 +7,38 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-13 — Phase 23: Ziraat adapter deferred
+
+**Summary.** Decided not to build `ZiraatAdapter` this phase. There are no verified Ziraat sandbox
+credentials, no confirmed-current official integration documentation, and no confirmed merchant
+configuration available — building a "best-effort" bank-hosted POS protocol would mean guessing
+request fields, a hash/signature format, and callback format, and risking wrong technical claims
+presented as verified. **Ziraat integration is deferred until official documentation and
+credentials are available.** This does not block Stripe/Mollie/PayPal (Phases 21–22, complete and
+unaffected) or the generic provider adapter architecture, which already supports adding Ziraat
+later with one more `match` arm plus a `ZiraatAdapter` class. No Ziraat-specific tests were added.
+Reason: Phase 23 Q1 (`PhaseResults/PhaseDecisions.md`) — user-directed deferral.
+
+**Files modified**
+- `src/Modules/Providers/Infrastructure/DefaultProviderAdapterFactory.php` — no behavior change
+  (a `'ziraat'` account already fell through to the `default` arm and threw
+  `UnsupportedProviderType`); added a class-docblock note and an inline comment on the `match`
+  block explicitly documenting the deferral with the required sentence above.
+- `src/Database/Seeds/ProviderTypesSeeder.php` — added a matching docblock note; the seeded
+  `ziraat` row itself is unchanged (still needed by country-routing/capability resolution).
+- `.claude/docs/Phases.md` — Phase 23 renamed "Ziraat adapter (deferred)" in the tracking table
+  and its own section rewritten to record the deferral, original scope, and why exit criteria
+  aren't met yet.
+- `.claude/docs/Architecture.md` §8 — the `ZiraatAdapter` forward-note rewritten to describe the
+  deferral instead of an expected Phase 23 build; §12's testing-approach note updated (no more "a
+  Ziraat stub" — there is no stub, just a documented gap).
+- `.claude/knowledge/Knowledge.md` — new "Ziraat adapter — deferred" section.
+- `.claude/PhaseResults/PhaseDecisions.md` — new Phase 23 Q1 recording the user's direct
+  instruction (not a multiple-choice selection — the user rejected the offered options and gave
+  an explicit directive instead).
+
+**No database changes. No new tests** (none were needed — nothing new was built).
+
 ## 2026-09-12 — Phase 22 complete: PayPal adapter
 
 **Summary.** The third real provider on the Phase 21 port, completing Phase 22. New

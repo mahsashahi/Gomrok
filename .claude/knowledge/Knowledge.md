@@ -670,6 +670,27 @@ duplicate.
   (`json_encode($data) !== false ? ... : '{}'`, written as a long ternary — this project's rules
   disallow the short `?:` form) avoids repeating the check at every call site.
 
+## Ziraat adapter — deferred (Phase 23)
+
+- **No `ZiraatAdapter` exists, deliberately.** There are no verified Ziraat sandbox credentials, no
+  confirmed-current official integration documentation, and no confirmed merchant configuration
+  available. Rather than guess at a bank-hosted POS protocol's request fields, hash/signature
+  format, or callback format and risk baking wrong technical claims into the codebase as if
+  verified, Phase 23 Q1 explicitly deferred the whole adapter. **Ziraat integration is deferred
+  until official documentation and credentials are available.**
+- `DefaultProviderAdapterFactory` throws `UnsupportedProviderType` for `'ziraat'` via its existing
+  `default` match arm — no special-casing needed, and this was left exactly as-is. The deferral is
+  documented in that class's docblock, an inline comment on the match block, and
+  `ProviderTypesSeeder`'s docblock — not a new file, per the instruction to add a placeholder only
+  where needed.
+- Ziraat's `provider_types` row and its `ProviderTypeDeclarations.json` capability/purchase-type
+  entry (seeded since Phases 8/10) are **unchanged** — country-routing and capability resolution
+  already depend on that data independent of whether an adapter exists, so it stays marked
+  planned/deferred, not implemented, rather than being removed.
+- This does not block anything else: Stripe/Mollie/PayPal (Phases 21–22) are complete and
+  unaffected, and the core provider adapter architecture already supports adding Ziraat later with
+  nothing more than one more `match` arm plus a `ZiraatAdapter` class.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

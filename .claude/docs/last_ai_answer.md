@@ -1,90 +1,62 @@
-# Q: Implement the PayPal adapter (Phase 22, completing the phase)
+# Q: Start the Ziraat adapter (Phase 23)
 
-Implemented the PayPal adapter — the third provider on `PaymentProviderPort`, completing Phase 22
-(Mollie + PayPal). Full detail is in `.claude/PhaseResults/Phase22Result.md`; this is the summary.
+Did not build `ZiraatAdapter`. The user gave an explicit instruction to defer Ziraat integration
+entirely, rejecting both options I'd proposed (a best-effort implementation of the publicly-known
+"NestPay/estPos" bank-hosted POS pattern flagged as unverified, vs. a deliberately generic
+placeholder stub). Recorded as Phase 23 Q1 in `PhaseResults/PhaseDecisions.md`.
 
-## Decisions made first (recorded in `PhaseResults/PhaseDecisions.md` as Q7/Q8)
+## Why this came up
 
-1. **PayPal's Orders API is a genuine two-step redirect flow, even for "immediate capture"** — the
-   customer must approve before either a capture-intent order can be captured or an
-   authorize-intent order can be authorized. Decided to implement the real dance:
-   `capturePayment()` fetches the order, checks its own `intent`, and performs whichever real
-   calls that intent needs (`/capture` directly for `CAPTURE`; `/authorize` then
-   `/authorizations/{id}/capture` for `AUTHORIZE`) — callers always call the one method regardless
-   of which flow created the order. This fully honors PayPal's seeded authorization/capture/cancel
-   capabilities rather than leaving them half-implemented.
-2. **PayPal Subscriptions need a persisted Billing "Plan" resource** created ahead of time —
-   unlike Stripe/Mollie's ad-hoc, inline pricing at subscription-creation time. Decided to defer
-   PayPal subscriptions entirely this phase rather than build ephemeral Plan provisioning without
-   a considered caching/reuse strategy — `PayPalAdapter` does not implement `SupportsSubscriptions`
-   despite the seeded capability data saying PayPal supports it.
+Ziraat is fundamentally different from Stripe/Mollie/PayPal: it's a Turkish bank's bank-hosted
+payment page, already seeded as `api_capable: false` (Phase 8), with no modern REST/SDK API.
+`Architecture.md` had already anticipated "a Ziraat stub until real credentials." I don't have
+Ziraat's actual current merchant integration guide available, and guessing at real-world protocol
+specifics (request field names, hash/signature algorithm, callback format) for a real bank's
+proprietary gateway risked baking wrong technical claims into the codebase as if verified.
 
-## What was built
+## What the user directed
 
-- **`PayPalAdapter`** (`src/Modules/Providers/Infrastructure/Adapter/PayPal/PayPalAdapter.php`) —
-  core `PaymentProviderPort` + `SupportsAuthCapture` + `SupportsRefunds`. Talks to PayPal's REST
-  API directly over `guzzlehttp/guzzle` (no official SDK — its current one is a large generated
-  client, overkill for the handful of endpoints needed), fetching a fresh OAuth2
-  client-credentials token per call rather than caching one.
-- **`PayPalStatusMapper`** — pure status translation covering PayPal's combined Order/
-  Authorization/Capture vocabulary in one table (the port gives no hint which resource a raw
-  status came from), same "unrecognised → Pending, never a false terminal claim" rule as the other
-  two mappers.
-- **Refunds key off the capture id, not the order id** — surfaced via
-  `ProviderPaymentStatus::$paymentIntentReference`, the same field `StripeAdapter` already uses
-  for its PaymentIntent id. `cancelPayment()` voids an existing Authorization if one exists and
-  throws otherwise (PayPal has no "cancel this order" endpoint).
-- **`DefaultProviderAdapterFactory`** gained a `'paypal'` match arm: decodes the account's secret
-  as a `{client_id, client_secret}` JSON pair (packed into the existing `secret_ciphertext`
-  column, no schema change) and picks the sandbox-vs-live host from the account's `mode` — PayPal
-  is the first provider where the factory actually reads `mode` for anything.
-- **Webhook verification** calls PayPal's real `/v1/notifications/verify-webhook-signature`
-  endpoint, reading its five required headers from `RawWebhook::$headers` (the bag added during
-  the Mollie half) and the registered webhook id from `$webhookSigningSecret`.
-- **CLI**: `bin/PayPalCreateCheckoutSession.php`, `bin/PayPalGetPaymentStatus.php`.
-- **Tests**: `PayPalAdapterTest` (15 tests, using Guzzle's own `MockHandler` — no hand-rolled fake
-  needed), `PayPalStatusMapperTest` (17 tests), two new `DefaultProviderAdapterFactoryTest` cases
-  (success + malformed-credentials).
+- Do not build a best-effort Ziraat protocol now, and do not guess request fields,
+  hash/signature format, callback format, or bank-hosted POS behavior.
+- Do not create production-ready Ziraat code.
+- Keep Ziraat listed as a future payment provider; add a placeholder/TODO only where needed (not
+  new code files) — and it must explicitly say: "Ziraat integration is deferred until official
+  documentation and credentials are available."
+- The core provider adapter architecture must still support adding Ziraat later without changes.
+- Must not block Stripe, PayPal, Mollie, or the generic adapter architecture (all already
+  complete, Phases 21–22).
+- No Ziraat-specific tests.
+- Ziraat's existing capability/provider-type seed data (needed by country-routing since Phase
+  8/10) stays marked planned/deferred, not implemented — not removed.
 
-## Verified (real captured output)
+## What was actually done
 
-- `composer ci` → CS clean, PHPStan clean, **458 tests / 1683 assertions, all passing** (up from
-  424 after the Mollie half).
-- `composer test:integration` → 39 skipped (up from 38 — the new PayPal live test self-skips).
-- Both CLI scripts invoked with no arguments print their real usage banners.
-- A standalone demo script exercised the real `DefaultProviderAdapterFactory` + `PayPalAdapter`
-  against PayPal's fake transport end-to-end: factory resolution (reading `mode=live` correctly),
-  `getCapabilities()` (10 capabilities, authorization/capture/refund all yes), `createPayment()` →
-  a real CAPTURE-intent order + approve URL, `capturePayment()` for both a CAPTURE-intent order
-  (one `/capture` call) and an AUTHORIZE-intent order (the real `/authorize` →
-  `/authorizations/{id}/capture` dance), a genuine PayPal 401 → `ProviderAuthenticationFailed`,
-  and a real webhook-signature verification call.
+No new adapter class, no protocol code, no new tests — by design. Only documentation-level changes:
 
-## Problems hit and fixed along the way
+- `src/Modules/Providers/Infrastructure/DefaultProviderAdapterFactory.php` — no behavior change (a
+  `'ziraat'` account already fell through to `default` and threw `UnsupportedProviderType`); added
+  a class-docblock note plus an inline comment on the `match` block with the required deferral
+  sentence.
+- `src/Database/Seeds/ProviderTypesSeeder.php` — added a matching docblock note; the seeded
+  `ziraat` row is unchanged.
+- `.claude/docs/Phases.md` — Phase 23 renamed "Ziraat adapter (deferred)" in the tracking table;
+  its section rewritten to record the deferral, the original (unbuilt) scope, and why exit
+  criteria aren't met.
+- `.claude/docs/Architecture.md` §8 and §12 — the `ZiraatAdapter` forward-note and the "Ziraat
+  stub" testing note both rewritten to describe the actual deferral.
+- `.claude/knowledge/Knowledge.md` — new "Ziraat adapter — deferred" section.
+- `.claude/Changelog.md` — new dated entry.
+- `.claude/PhaseResults/PhaseDecisions.md` — new Phase 23 Q1, recording the user's direct
+  instruction verbatim in intent (not a multiple-choice selection, since the user rejected the
+  offered options).
 
-- PHPStan strict rules fought Guzzle's own generics on `Middleware::history()` (its by-ref
-  container param is typed as a bare `array|\ArrayAccess<int, array>`, incompatible with any more
-  specific property type) — resolved by writing a small custom middleware that appends
-  `RequestInterface` objects directly into a normally-typed `list<RequestInterface>` property
-  instead of fighting Guzzle's generics.
-- Deep, untyped JSON field access (`purchase_units[0].payments.authorizations[0].id`) needed a
-  small `dig()`/`digString()` helper pair for real type-safety rather than chained `??`, which is
-  runtime-safe but still flagged by PHPStan.
-- Mollie's refund request factory requires an explicit `amount` even for a "full" refund (found
-  during the Mollie half) — resolved by always passing the payment's own already-known full amount
-  when the caller didn't specify one.
+## Verified
 
-## Docs updated
+`composer ci` — CS clean, PHPStan clean, 458/458 tests still passing (unchanged, since no
+behavior changed — only comments and docs).
 
-`.claude/Changelog.md` (new dated entry for the PayPal completion), `.claude/docs/Phases.md` (row
-22 → ☑ complete, full "as built" rewrite for both providers), `.claude/docs/Architecture.md` §8,
-`.claude/docs/Commands.md` (new `paypal:*` CLI docs), `.claude/FileIndex.md`,
-`.claude/knowledge/Knowledge.md` (new "PayPal adapter" section), and
-`.claude/PhaseResults/Phase22Result.md` (new — the phase's final result file, now that both Mollie
-and PayPal are done).
+## Not done / next
 
-## Not done yet
-
-PayPal subscriptions (deferred, Q8), Mollie's real Subscription resource (deferred to Phase 25),
-multiple partial captures against one PayPal authorization, and wiring any of the three adapters
-into the actual Payments module — that's Phase 24. Phase 23 (Ziraat) is next.
+No `Phase23Result.md` was created — the phase's original goal (a working adapter) wasn't
+delivered; it stays open/deferred rather than marked complete. Next candidate: Phase 24 (payment
+creation flow), which does not depend on Ziraat.

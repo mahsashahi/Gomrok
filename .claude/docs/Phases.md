@@ -40,7 +40,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 20 | Payments module: aggregate & lifecycle | ☑ | 2026-09-11 16:50 | 2026-09-11 18:34 | 4–6h | 1h 44m | N/A |
 | 21 | Provider adapter port & Stripe adapter | ☑ | 2026-09-11 18:45 | 2026-09-11 20:11 | 6–9h | 1h 26m | N/A |
 | 22 | Mollie & PayPal adapters | ☑ | 2026-09-11 23:22 | 2026-09-12 23:00 | 6–9h | N/A (spans two sessions) | N/A |
-| 23 | Ziraat adapter | ☐ | — | — | 4–7h | — | — |
+| 23 | Ziraat adapter (deferred) | ☐ | — | — | 4–7h | — | — |
 | 24 | Payment creation flow | ☐ | — | — | 5–8h | — | — |
 | 25 | Webhooks module | ☐ | — | — | 5–8h | — | — |
 | 26 | Subscriptions module | ☐ | — | — | 6–9h | — | — |
@@ -773,18 +773,36 @@ Guzzle's `MockHandler`) + self-skipping live integration tests
 (`MollieAdapterLiveTest`/`PayPalAdapterLiveTest`) for both, same self-skip convention as
 `StripeAdapterLiveTest`.
 
-## Phase 23 — Ziraat adapter
+## Phase 23 — Ziraat adapter (deferred)
 
 **Goal:** the bank-hosted, payment-only provider.
 
-**Scope:**
+**Deferred (Phase 23 Q1, `PhaseResults/PhaseDecisions.md`):** no `ZiraatAdapter` is built. There
+are no verified Ziraat sandbox credentials, no confirmed-current official integration
+documentation, and no confirmed merchant configuration available — building a "best-effort" bank
+protocol (guessed request fields, hash/signature format, callback format, bank-hosted POS
+behavior) would risk baking wrong technical claims into the codebase as if verified. **Ziraat
+integration is deferred until official documentation and credentials are available.**
+`DefaultProviderAdapterFactory` already throws `UnsupportedProviderType` for a `'ziraat'` account
+via its `default` match arm — documented in that class's docblock and in `ProviderTypesSeeder`'s
+docblock with the same sentence above. This does not block Stripe/Mollie/PayPal (Phases 21–22,
+complete) or any later phase: the core provider adapter architecture (`PaymentProviderPort`, the
+optional capability interfaces, `ProviderAdapterFactory`) already supports adding Ziraat later
+with nothing more than one more `match` arm plus a `ZiraatAdapter` class. Ziraat's provider-type
+and capability seed data (`provider_types`, `ProviderTypeDeclarations.json`, seeded since Phases
+8/10 for country-routing) stays in place, unchanged — it backs the routing/capability-resolution
+layer regardless of whether an adapter exists, and is explicitly marked planned/deferred, not
+implemented, in the seeder's docblock.
+
+**Original scope (unbuilt, for whenever this is picked back up):**
 - Bank-hosted payment page / 3D Secure redirect, return-URL handling, manual status polling.
 - Explicitly **not** a subscription or auto-charge provider — those capabilities are absent and
   requests for them are rejected.
 
 **DB:** none new.
 
-**Exit:** redirect flow, status polling, and subscription-capability rejection tested.
+**Exit (not met — deferred):** redirect flow, status polling, and subscription-capability
+rejection tested. No Ziraat-specific tests exist yet; none are added while deferred.
 
 ## Phase 24 — Payment creation flow
 
