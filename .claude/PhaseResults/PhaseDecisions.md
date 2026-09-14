@@ -18,6 +18,62 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ## Phase 24 — Payment creation flow
 
+### Q7 — Re-ask of Phase 15 Q5: management surface + which endpoints persist the assignment
+
+**Question:** Re-asked in full per the same standing instruction as Q6. Given persisted
+`price_list_assignments` (Q6), which CRUD handlers/CLI/seeder ship now, and do `/packages` and
+`/pricing/resolve` take a `visitor_ref` and persist a `price_list_assignments` row?
+
+**Options** (identical to the original Phase 15 Q5 list):
+
+1. **Full surface; both endpoints take `visitor_ref` and persist the assignment on first sight.**
+2. Full surface; only `/pricing/resolve` persists; `/packages` reads an existing assignment,
+   never creates one.
+3. Handlers + CLI only; no endpoint changes; resolver gains a `visitorRef` param exercised by
+   tests only until this phase.
+
+**Recommended:** Option 2 (unchanged from the original recommendation)
+
+**Selected:** Option 1 — both `GET /api/v1/packages` and `GET /api/v1/pricing/resolve` accept an
+optional `visitor_ref` query param; either one establishes the visitor's bucket on first sight if
+no assignment exists yet for that `(pricing_group_id, visitor_ref_hash)` pair, and both read an
+existing one the same way. (Diverges from the recommendation — the user preferred symmetry between
+the two read endpoints over restricting the persisting side-effect to `/pricing/resolve` alone.)
+
+**Status:** Decided
+
+---
+
+### Q6 — Re-ask of Phase 15 Q4: how is a visitor assigned to an A/B price list, and is it stored?
+
+**Question:** Re-asked in full per the standing instruction from Phase 15 ("When we reach the
+appropriate later phase … ask me this question again and present the available options before
+implementing anything"). The client passes an opaque visitor reference; Gomrok hashes it with the
+pricing group id to pick an A/B price list. Should the assignment be recomputed statelessly every
+time, or persisted?
+
+**Options** (identical to the original Phase 15 Q4 list):
+
+1. Stateless — `hash(group_id, visitor_ref) mod N` over currently-enabled lists; no table;
+   disable drops to control automatically, but creating/enabling any list re-buckets everyone.
+2. **Stateful `price_list_assignments` table** — first visit computes the bucket by deterministic
+   hash and persists `(client_id, pricing_group_id, visitor_ref_hash, price_list_id,
+   assigned_at)`; later visits read it; a now-disabled stored list → reassign to control +
+   `reassigned_at`. Starting a new experiment never moves an already-assigned visitor.
+3. Stateful but recomputed every visit (cache/log only) — same reshuffle problem as Option 1.
+
+**Recommended:** Option 2
+
+**Selected:** Option 2 — persisted `price_list_assignments`, `UNIQUE (pricing_group_id,
+visitor_ref_hash)`, SHA-256 of the visitor ref (no raw id stored). Bucket chosen on first visit by
+deterministic hash over the group's enabled lists; a stored list that is later disabled is
+reassigned to the group's control row on the next visit. (Same selection the original Phase 15 Q4
+had reached before being withdrawn/deferred — re-confirmed fresh, not assumed.)
+
+**Status:** Decided
+
+---
+
 ### Q5b — Capability gating for cancel/refund/capture
 
 **Question:** Should `cancel`/`refund`/`capture` be gated by the adapter's actual implemented

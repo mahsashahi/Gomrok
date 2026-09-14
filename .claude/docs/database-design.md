@@ -38,7 +38,7 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Packages — capabilities & provider defs (Phase 12) | `package_purchase_capabilities`, `package_country_purchase_capabilities`, `package_provider_definitions` — **3** (+ `badge` / `highlighted` / `client_package_id` columns on `packages`) |
 | Pricing — groups & default prices (Phase 13) | `pricing_groups`, `pricing_group_countries`, `default_package_prices`, `client_exchange_rates`, `pricing_group_packages` — **5** |
 | Pricing — dimension overrides (Phase 14) | `price_rules` — **1** |
-| Pricing — A/B price lists (Phase 15) | `price_lists`, `price_list_packages` — **2** |
+| Pricing — A/B price lists (Phase 15) | `price_lists`, `price_list_packages` — **2** (visitor assignment table listed under Phase 24) |
 | Vouchers — definitions & eligibility (Phase 16) | `vouchers`, `voucher_eligibility_rules`, `voucher_currency_discounts` — **3** |
 | Vouchers — redemption lifecycle (Phase 17) | `voucher_redemptions` — **1** |
 | Checkout + decision snapshots (Phase 18) | `checkout_attempts` (Checkout module) + `pricing_decision_snapshots` (Pricing) + `voucher_decision_snapshots` (Vouchers) + `provider_routing_decision_snapshots` (Providers) — **4** |
@@ -47,9 +47,9 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Provider adapter port & Stripe adapter (Phase 21) | (no new tables) |
 | Mollie & PayPal adapters (Phase 22) | (no new tables) |
 | Ziraat adapter (Phase 23) | deferred — no tables |
-| Payment creation flow (Phase 24) | (no new tables) — `gateway_references` gained a nullable `checkout_attempt_id` column (Q1) |
+| Payment creation flow (Phase 24) | `price_list_assignments` — **1** (Q6/Q7); `gateway_references` gained a nullable `checkout_attempt_id` column (Q1) and `checkout_attempts` gained `hash_return_token` (Q4) |
 
-**Total: 51 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 52 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -765,17 +765,18 @@ whatever the assigned A/B list produced.
 
 ---
 
-## Pricing — A/B price lists (Phase 15)
+## Pricing — A/B price lists (Phase 15; visitor assignment — Phase 24 Q6/Q7)
 
 Price experiments inside a pricing group. Every group has exactly one **control** list; a
 non-control list shifts the resolved base price by `factor` or (per package) by an exact
 `price_list_packages` amount. The step sits between the Phase 13 base amount and the Phase 14
 `price_rules` step.
 
-> **Deferred:** visitor→list assignment (a `price_list_assignments` table, the deterministic
-> bucketing service, `visitor_ref` endpoint params) is **not** in this phase — Phase 15 Q4/Q5,
-> deferred to Phase 24 (Payment creation flow). Until then every resolve uses the group's
-> control list.
+Visitor→list assignment (Phase 15 Q4/Q5, deferred and re-asked fresh at Phase 24 Q6/Q7) is now
+built: `price_list_assignments` persists each visitor's bucket per pricing group, a deterministic
+hash-based bucketing service assigns it on first sight, and `GET /api/v1/packages` /
+`GET /api/v1/packages/{packageId}` / `GET /api/v1/pricing/resolve` all accept an optional
+`visitor_ref` query param that resolves and persists the assignment.
 
 ### `price_lists`
 
@@ -827,7 +828,39 @@ stored assignment pointing at a now-disabled list drops to control). Then:
 3. else (control / `factor = 1.0000`) → the base amount unchanged, but `price_list_id` /
    `price_list_name` / `price_list_factor` are still stamped on the `ResolvedPrice`.
 
-`$priceListId` is `null` for every caller in this phase (assignment deferred) → always control.
+`$priceListId` is resolved from an explicit override, else from a `$visitorRef` via
+`ResolveVisitorPriceListAssignment` (below), else `null` (→ always control).
+
+### `price_list_assignments` (Phase 24 Q6/Q7)
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `pricing_group_id` | INT UNSIGNED | no | FK → `pricing_groups(id)` CASCADE |
+| `visitor_ref_hash` | VARCHAR(64) | no | `SHA-256(pricing_group_id . ':' . visitor_ref)` — the raw `visitor_ref` is never stored |
+| `price_list_id` | INT UNSIGNED | no | FK → `price_lists(id)` CASCADE; the visitor's current bucket |
+| `assigned_at` | DATETIME | no | when the row was first created |
+| `reassigned_at` | DATETIME | yes | set when the assigned list was later disabled and the row moved to control |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (pricing_group_id, visitor_ref_hash)` = `uniq_price_list_assignments_group_visitor`;
+`INDEX (client_id)`, `INDEX (price_list_id)`.
+
+### Visitor bucketing (`ResolveVisitorPriceListAssignment`)
+
+Called by `PriceResolver::resolve()` and `PriceCatalog::resolve()` when a caller supplies
+`visitorRef` and no explicit `priceListId`. On first sight for a `(pricingGroupId, visitorRef)`
+pair: bucket by a deterministic hash (`hexdec(substr(hash, 0, 8)) % count(enabledLists)`) over
+`PriceListRepository::enabledForGroup()` (control first, then by id — a stable order), then
+persist via `insertOrGetExisting()` — a `LAST_INSERT_ID(id)`-on-conflict upsert so a concurrent
+first-visit race always resolves to one authoritative row, never a thrown exception. Later visits
+read the stored row; if its list has since been disabled, the row is reassigned to the group's
+control list on that read (`reassigned_at` stamped) — the same disable-fallback
+`PriceListResolver::apply()` already gives an explicit `priceListId`. If the pricing group has no
+price list at all (not even a control row — possible only for a group built outside
+`CreatePricingGroupHandler`, e.g. in tests), resolution degrades to `null` rather than throwing,
+and `PriceListResolver::apply()` leaves the base price untouched.
 
 ---
 

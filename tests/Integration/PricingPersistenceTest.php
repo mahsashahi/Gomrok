@@ -12,6 +12,7 @@ use Gomrok\Modules\Pricing\Application\CreatePricingGroup\CreatePricingGroupResu
 use Gomrok\Modules\Pricing\Application\PriceResolver;
 use Gomrok\Modules\Pricing\Application\PriceSource;
 use Gomrok\Modules\Pricing\Application\ResolvedPrice;
+use Gomrok\Modules\Pricing\Application\ResolveVisitorPriceListAssignment;
 use Gomrok\Modules\Pricing\Application\SetClientExchangeRate\SetClientExchangeRateCommand;
 use Gomrok\Modules\Pricing\Application\SetClientExchangeRate\SetClientExchangeRateHandler;
 use Gomrok\Modules\Pricing\Application\SetDefaultPackagePrice\SetDefaultPackagePriceCommand;
@@ -22,6 +23,7 @@ use Gomrok\Modules\Pricing\Application\SetPricingGroupPackage\SetPricingGroupPac
 use Gomrok\Modules\Pricing\Application\SetPricingGroupPackage\SetPricingGroupPackageHandler;
 use Gomrok\Modules\Pricing\Infrastructure\PdoClientExchangeRateRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoDefaultPackagePriceRepository;
+use Gomrok\Modules\Pricing\Infrastructure\PdoPriceListAssignmentRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPricingGroupPackageRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPricingGroupRepository;
 use Gomrok\Shared\Infrastructure\Persistence\PdoReferenceCatalog;
@@ -135,6 +137,7 @@ final class PricingPersistenceTest extends TestCase
                 new \Gomrok\Modules\Pricing\Infrastructure\PdoPriceListPackageRepository($this->pdo),
             ),
             new \Gomrok\Modules\Pricing\Application\PriceRuleResolver(new \Gomrok\Modules\Pricing\Infrastructure\PdoPriceRuleRepository($this->pdo)),
+            new ResolveVisitorPriceListAssignment(new PdoPriceListAssignmentRepository($this->pdo), $priceLists, $clock),
             $clock,
         );
 

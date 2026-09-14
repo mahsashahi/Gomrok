@@ -16,13 +16,18 @@ use Gomrok\Shared\Domain\Result;
  * {@see ResolvedPrice} attached (Phase 13). Backs `GET /api/v1/packages`.
  *
  * The pricing group is resolved **once**; its currency is the catalogue
- * currency. Packages priced `disabled` in that group are omitted.
+ * currency. Packages priced `disabled` in that group are omitted. An
+ * optional `$visitorRef` (Phase 24 Q6/Q7) resolves the visitor's assigned
+ * A/B price list **once** for the whole catalogue (the bucket is per
+ * pricing group, not per package) and applies it to every item's price.
  */
 final readonly class PriceCatalog
 {
     public function __construct(
         private PackageCatalog $packages,
         private PriceResolver $prices,
+        private PriceListResolver $priceLists,
+        private ResolveVisitorPriceListAssignment $visitorAssignment,
     ) {
     }
 
@@ -34,6 +39,7 @@ final readonly class PriceCatalog
         string $country,
         ?PaymentMethod $method = null,
         ?string $deviceType = null,
+        ?string $visitorRef = null,
     ): Result {
         $group = $this->prices->resolveGroup($clientId, $country, $deviceType);
         if ($group === null) {
@@ -43,6 +49,11 @@ final readonly class PriceCatalog
                 ['country' => strtoupper($country), 'device_type' => $deviceType],
             ));
         }
+
+        $groupId = $group->id();
+        \assert($groupId !== null);
+
+        $priceListId = $visitorRef !== null ? $this->visitorAssignment->forVisitor($clientId, $groupId, $visitorRef) : null;
 
         $currency = $group->currencyCode();
         $items = [];
@@ -63,6 +74,7 @@ final readonly class PriceCatalog
 
             $price = $priceResult->value();
             \assert($price instanceof ResolvedPrice);
+            $price = $this->priceLists->apply($groupId, $package->id, $priceListId, $price);
             $items[] = new ResolvedCatalogPackage($package, $price);
         }
 

@@ -64,8 +64,9 @@ final readonly class PackageDetailAction
         }
 
         $device = \is_string($query['device'] ?? null) && $query['device'] !== '' ? $query['device'] : null;
+        $visitorRef = \is_string($query['visitor_ref'] ?? null) && $query['visitor_ref'] !== '' ? $query['visitor_ref'] : null;
 
-        $result = $this->catalog->resolve($clientId, $country, $method, $device);
+        $result = $this->catalog->resolve($clientId, $country, $method, $device, $visitorRef);
         if ($result->isErr()) {
             return $this->responder->problem($response, $result->error());
         }

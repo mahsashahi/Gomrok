@@ -294,33 +294,56 @@ Not a plan and not a spec — durable facts and gotchas worth keeping.
 - New `SubscriptionInterval` enum: `monthly` / `quarterly` / `yearly`. A rule pinning it needs a
   subscription/recurring `purchase_type` (`price_rule.interval_needs_subscription`).
 
-## A/B price lists (Phase 15 — narrowed)
+## A/B price lists (Phase 15 — narrowed; visitor assignment built at Phase 24 Q6/Q7)
 
-- **Only the data model + resolver + CRUD shipped.** Visitor→list assignment (persistence,
-  hashing, `visitor_ref` params) is **deferred to Phase 24** (Phase 15 Q4/Q5, user's call). See
-  [[phase15-ab-assignment-deferred]]. Every `PriceResolver::resolve` currently passes
-  `$priceListId = null` → the group's control list. Re-ask Phase 15 Q4 + Q5 at Phase 24.
 - **Explicit control row (Q1 Option 2 — user changed the recommendation).** Every pricing group
   owns one `price_lists` row with `is_control = 1`, `factor = 1.0000`, `is_enabled = 1`. Created
   by `CreatePricingGroupHandler` in the same transaction as the group; the migration backfills
   one per pre-existing group; `PricingSeeder` upserts one per seeded group (it uses raw SQL, not
   the handler). The control row can't be renamed-to-collide, disabled, deleted, or re-factored
-  (`price_list.cannot_disable_control` / `control_factor_locked`).
+  (`price_list.cannot_disable_control` / `control_factor_locked`). **A pricing group built
+  directly via `PricingGroup::define()` (bypassing the handler — this happens in several unit
+  tests) has no control row at all** — `ResolveVisitorPriceListAssignment` and
+  `PriceListResolver::apply()` both tolerate that gracefully (return `null` / the base price
+  unchanged) rather than crashing; don't reintroduce an `\assert($control !== null)` there.
 - **Pipeline slot: base → price list → `price_rules`** (Q3). `PriceListResolver::apply` runs in
-  `PriceResolver::resolve` (not in `PriceCatalog` — the `/packages` browse list stays on the
-  base price). A matching Phase 14 `price_rule` still overrides whatever the list produced.
+  `PriceResolver::resolve` **and, since Phase 24, in `PriceCatalog::resolve` too** — the `/packages`
+  browse list used to always stay on the base price (never called `PriceListResolver` at all); now
+  it resolves the visitor's list **once per catalogue request** (the bucket is per pricing group,
+  not per package) and applies it to every item. A matching Phase 14 `price_rule` still overrides
+  whatever the list produced.
 - **Precedence within a list** (Q2): exact `price_list_packages` amount → else `base × factor`
   (HALF_EVEN, `Money::multipliedBy`) → else base unchanged. `ResolvedPrice.source` becomes
   `price_list` **only when the amount moved**; a control / factor-1 list just stamps
   `priceListId` / `priceListName` / `priceListFactor`.
 - **Disable-fallback is in the resolver, not a sweep.** `PriceListResolver::resolveList` returns
-  the control list whenever `$priceListId` is null, unknown, from another group, or disabled — so
-  a future stored assignment pointing at a killed experiment silently drops to control.
+  the control list whenever `$priceListId` is null, unknown, from another group, or disabled.
+  `ResolveVisitorPriceListAssignment` does the same reassignment at the persistence layer: reading
+  a stored assignment whose list has since been disabled updates the row to control's id right
+  then (`reassigned_at` stamped) rather than waiting for a sweep job.
 - `price_lists.factor` is `DECIMAL(6,4)` — PDO returns it as a string (`"0.9000"`);
   `PriceList::experiment` / `changeFactor` normalise via `number_format(...,4)`.
 - `price_list_packages` currency **must** equal the pricing-group currency
   (`price_list_package.currency_mismatch`); not allowed on a control list
   (`price_list.control_has_no_package_prices`).
+- **Visitor bucketing hashes in the pricing group id** (`SHA-256(pricing_group_id . ':' .
+  visitor_ref)`), per the original Phase 15 Q4 phrasing ("Gomrok hashes it with the pricing group
+  id") — the same visitor gets independently-random-looking buckets across different pricing
+  groups, and a leaked hash from one group can't be correlated to the same visitor in another.
+  Only the hash is stored, never the raw `visitor_ref`.
+- **The insert race is handled with `INSERT ... ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`**,
+  not a `SELECT ... FOR UPDATE` lock (unlike voucher redemption) — a visitor bucket is low-stakes
+  (not financial), so the standard MySQL "return whichever row actually won" upsert idiom is
+  enough: `PdoPriceListAssignmentRepository::insertOrGetExisting()` always re-selects by the id
+  `lastInsertId()` returns (the new row, or the pre-existing conflicting one) so the caller never
+  has to special-case the race.
+- **`ContainerFactory`-booting functional tests must swap `PriceListAssignmentRepository` too.**
+  `tests/Unit/Http/PackagesApiTest.php` builds the real DI container and overrides specific
+  repositories with in-memory doubles; since `PriceCatalog`/`PriceResolver` now unconditionally
+  depend on `ResolveVisitorPriceListAssignment` (even when no `visitor_ref` is ever passed),
+  leaving `PriceListAssignmentRepository` unswapped makes PHP-DI eagerly construct a real `PDO`
+  connection just to satisfy the constructor — a 500 in any environment without a live DB. Any
+  future functional test that boots the real container and exercises pricing needs the same swap.
 
 ## Vouchers — definitions & eligibility (Phase 16)
 

@@ -34,7 +34,7 @@ flowchart TD
     Clients["Clients&lt;br/&gt;clients · client_api_keys · client_endpoints"]
     Providers["Providers&lt;br/&gt;capabilities + purchase types (P8)&lt;br/&gt;provider_accounts + endpoints/countries/methods (P9)&lt;br/&gt;provider_groups + routing (P10)"]
     Packages["Packages&lt;br/&gt;availability (P11)&lt;br/&gt;purchase capabilities + provider definitions (P12)"]
-    Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + group-package rows (P13)&lt;br/&gt;price_rules (P14)&lt;br/&gt;price_lists + price_list_packages (P15)"]
+    Pricing["Pricing&lt;br/&gt;pricing_groups + default_package_prices + group-package rows (P13)&lt;br/&gt;price_rules (P14)&lt;br/&gt;price_lists + price_list_packages (P15)&lt;br/&gt;price_list_assignments (P24)"]
     Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)&lt;br/&gt;voucher_redemptions (P17)&lt;br/&gt;voucher_decision_snapshots (P18)"]
     Checkout["Checkout&lt;br/&gt;checkout_attempts — pre-payment anchor (P18)"]
     Payments["Payments&lt;br/&gt;payments + payment_attempts + provider_transactions (P20)&lt;br/&gt;provider_customers + gateway_references (P20)"]
@@ -520,7 +520,7 @@ erDiagram
     currencies ||--o{ price_rules : "priced in"
 </pre>
 
-<h2>Pricing — A/B price lists (Phase 15)</h2>
+<h2>Pricing — A/B price lists (Phase 15; visitor assignment — Phase 24 Q6/Q7)</h2>
 <pre class="mermaid">
 erDiagram
     price_lists {
@@ -543,11 +543,25 @@ erDiagram
         datetime created_at
         datetime updated_at
     }
+    price_list_assignments {
+        int id PK
+        int client_id FK
+        int pricing_group_id FK
+        varchar visitor_ref_hash
+        int price_list_id FK
+        datetime assigned_at
+        datetime reassigned_at
+        datetime created_at
+        datetime updated_at
+    }
     clients ||--o{ price_lists : "experiments for"
     pricing_groups ||--o{ price_lists : "A/B within"
     price_lists ||--o{ price_list_packages : "exact prices"
     packages ||--o{ price_list_packages : "priced on"
     currencies ||--o{ price_list_packages : "priced in"
+    clients ||--o{ price_list_assignments : "buckets visitors for"
+    pricing_groups ||--o{ price_list_assignments : "bucketed within"
+    price_lists ||--o{ price_list_assignments : "current bucket"
 </pre>
 
 <h2>Vouchers — definitions &amp; eligibility (Phase 16)</h2>

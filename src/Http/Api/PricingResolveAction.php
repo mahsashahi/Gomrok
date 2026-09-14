@@ -75,7 +75,18 @@ final readonly class PricingResolveAction
             return $this->responder->problem($response, DomainError::notFound('package.not_found', "Package '{$code}' was not found.", ['package' => $code]));
         }
 
-        $result = $this->resolver->resolve($clientId, $package->id, $country, $device, $method, $purchaseType, $interval);
+        $visitorRef = \is_string($query['visitor_ref'] ?? null) && $query['visitor_ref'] !== '' ? $query['visitor_ref'] : null;
+
+        $result = $this->resolver->resolve(
+            $clientId,
+            $package->id,
+            $country,
+            $device,
+            $method,
+            $purchaseType,
+            $interval,
+            visitorRef: $visitorRef,
+        );
         if ($result->isErr()) {
             return $this->responder->problem($response, $result->error());
         }

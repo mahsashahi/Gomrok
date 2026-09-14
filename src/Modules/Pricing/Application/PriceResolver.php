@@ -26,7 +26,9 @@ use Psr\Clock\ClockInterface;
  *   2. group-package row status (Phase 13 — `disabled` → unavailable);
  *   3. base amount (Phase 13 — baseline / client-rate conversion / group override);
  *   4. assigned A/B price list (Phase 15 — control unless a `$priceListId` is
- *      passed; an exact `price_list_packages` amount or `base × factor`);
+ *      passed explicitly, or a `$visitorRef` resolves one via
+ *      {@see ResolveVisitorPriceListAssignment}, Phase 24 Q6/Q7; an exact
+ *      `price_list_packages` amount or `base × factor`);
  *   5. most-specific matching `price_rules` row (Phase 14) — an available rule
  *      overrides the amount (`source = dimension_override`); an unavailable rule
  *      → hard `pricing.combination_unavailable`, never a fallback.
@@ -41,6 +43,7 @@ final readonly class PriceResolver
         private PackageDirectory $packages,
         private PriceListResolver $priceLists,
         private PriceRuleResolver $priceRules,
+        private ResolveVisitorPriceListAssignment $visitorAssignment,
         private ClockInterface $clock,
     ) {
     }
@@ -58,6 +61,7 @@ final readonly class PriceResolver
         ?SubscriptionInterval $interval = null,
         ?int $providerAccountId = null,
         ?int $priceListId = null,
+        ?string $visitorRef = null,
     ): Result {
         $package = $this->packages->findById($packageId);
         if ($package === null || $package->clientId !== $clientId) {
@@ -83,7 +87,8 @@ final readonly class PriceResolver
         $groupId = $group->id();
         \assert($groupId !== null);
 
-        $resolved = $this->priceLists->apply($groupId, $packageId, $priceListId, $resolved);
+        $resolvedListId = $priceListId ?? ($visitorRef !== null ? $this->visitorAssignment->forVisitor($clientId, $groupId, $visitorRef) : null);
+        $resolved = $this->priceLists->apply($groupId, $packageId, $resolvedListId, $resolved);
 
         return $this->applyRules($resolved, $clientId, $packageId, new PriceRuleContext(
             $groupId,

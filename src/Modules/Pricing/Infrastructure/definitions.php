@@ -10,6 +10,7 @@ use Gomrok\Modules\Pricing\Application\PricingDecisionSnapshotRepository;
 use Gomrok\Modules\Pricing\Application\PricingGroupDirectory;
 use Gomrok\Modules\Pricing\Domain\ClientExchangeRateRepository;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePriceRepository;
+use Gomrok\Modules\Pricing\Domain\PriceListAssignmentRepository;
 use Gomrok\Modules\Pricing\Domain\PriceListPackageRepository;
 use Gomrok\Modules\Pricing\Domain\PriceListRepository;
 use Gomrok\Modules\Pricing\Domain\PriceRuleRepository;
@@ -17,6 +18,7 @@ use Gomrok\Modules\Pricing\Domain\PricingGroupPackageRepository;
 use Gomrok\Modules\Pricing\Domain\PricingGroupRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoClientExchangeRateRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoDefaultPackagePriceRepository;
+use Gomrok\Modules\Pricing\Infrastructure\PdoPriceListAssignmentRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPriceListDirectory;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPriceListPackageRepository;
 use Gomrok\Modules\Pricing\Infrastructure\PdoPriceListRepository;
@@ -44,5 +46,6 @@ return [
     PriceListRepository::class => get(PdoPriceListRepository::class),
     PriceListPackageRepository::class => get(PdoPriceListPackageRepository::class),
     PriceListDirectory::class => get(PdoPriceListDirectory::class),
+    PriceListAssignmentRepository::class => get(PdoPriceListAssignmentRepository::class),
     PricingDecisionSnapshotRepository::class => get(PdoPricingDecisionSnapshotRepository::class),
 ];

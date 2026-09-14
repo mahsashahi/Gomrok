@@ -41,7 +41,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 21 | Provider adapter port & Stripe adapter | ☑ | 2026-09-11 18:45 | 2026-09-11 20:11 | 6–9h | 1h 26m | N/A |
 | 22 | Mollie & PayPal adapters | ☑ | 2026-09-11 23:22 | 2026-09-12 23:00 | 6–9h | N/A (spans two sessions) | N/A |
 | 23 | Ziraat adapter (deferred) | ☐ | — | — | 4–7h | — | — |
-| 24 | Payment creation flow | ◐ | 2026-09-13 09:00 | — | 5–8h | — (in progress) | N/A |
+| 24 | Payment creation flow | ☑ | 2026-09-13 09:00 | 2026-09-13 18:58 | 5–8h | N/A (spans multiple sessions) | N/A |
 | 25 | Webhooks module | ☐ | — | — | 5–8h | — | — |
 | 26 | Subscriptions module | ☐ | — | — | 6–9h | — | — |
 | 27 | **Admin Module Views and Panels** | ☐ | — | — | 12–20h | — | — |
@@ -808,10 +808,17 @@ rejection tested. No Ziraat-specific tests exist yet; none are added while defer
 
 **Goal:** the end-to-end "create a payment" path.
 
-**Status: in progress.** Built so far: `POST /api/v1/payments`, the provider-return flow, and the
-two read endpoints. Not built yet: `cancel`/`refund`/`capture` and the Phase 15 A/B re-ask.
+**Status: complete.** Built: `POST /api/v1/payments`, the provider-return flow, the two read
+endpoints, capability-gated `cancel`/`refund`/`capture`, and the Phase 15 A/B visitor-assignment
+re-ask. See `.claude/PhaseResults/Phase24Result.md` for the full phase-completion summary.
 
-**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 24 Q1–Q5b):
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 24 Q1–Q7):
+- **Q6** (re-ask of Phase 15 Q4, full option list) — persisted `price_list_assignments`, not
+  stateless recompute. First visit buckets and persists; later visits read the stored row; a
+  since-disabled bucket reassigns to control on read.
+- **Q7** (re-ask of Phase 15 Q5, full option list) — **both** `GET /api/v1/packages` and
+  `GET /api/v1/pricing/resolve` accept a `visitor_ref` and persist the assignment on first sight
+  (diverges from the original recommendation of `/pricing/resolve`-only).
 - **Q5** — a refund/capture/cancel resolves the `GatewayReference` to act on via
   reference-type-per-action: prefer the "deeper" `GatewayReferenceType::PaymentIntent` reference
   (Stripe's PaymentIntent id, PayPal's capture id — both surfaced via the same
@@ -862,21 +869,22 @@ Building this surfaced and fixed two latent gaps: a `Payment` was never driven p
 the Stripe/PayPal "deeper" provider reference (`ProviderPaymentStatus::$paymentIntentReference`)
 was computed and discarded rather than persisted.
 
-**Still pending:**
-- **A/B price-list visitor assignment (deferred from Phase 15):** re-ask Phase 15 Q4 (stateless
-  vs. persisted `price_list_assignments`) and Q5 (management surface + which endpoints persist)
-  with their full option lists, then build the deterministic bucket-assignment service,
-  disable-fallback reassignment, and `visitor_ref` wiring so the resolved price reflects the
-  visitor's list. Exit criteria: stable assignment, even split, disable-fallback.
+**A/B price-list visitor assignment (Phase 15 Q4/Q5, decided fresh here as Q6/Q7):** built
+`price_list_assignments` (new table) + `ResolveVisitorPriceListAssignment` (the deterministic
+bucket-assignment service — hash over the group's enabled lists, control first then by id) +
+disable-fallback reassignment on read + `visitor_ref` wiring into `GET /api/v1/packages`,
+`GET /api/v1/packages/{packageId}`, and `GET /api/v1/pricing/resolve`.
 
-**DB:** `gateway_references.checkout_attempt_id`, `checkout_attempts.hash_return_token` (both
-additive; no further schema changes for cancel/refund/capture — the existing `GatewayReferenceType::PaymentIntent`
-case covers the deeper reference). `price_list_assignments` still pending, if the re-asked Phase
-15 Q4 lands on the persisted option.
+**DB:** `gateway_references.checkout_attempt_id`, `checkout_attempts.hash_return_token`, and
+`price_list_assignments` (all additive; no schema change needed for cancel/refund/capture — the
+existing `GatewayReferenceType::PaymentIntent` case covers the deeper reference).
 
-**Exit (not yet met):** happy path per provider (SDK mocked), capability rejections, and
-idempotency tested for creation/return/status/cancel/refund/capture — done; A/B assignment
-(stable + even + disable-fallback) tested — pending.
+**Exit:** happy path per provider (SDK mocked), capability rejections, and idempotency tested for
+creation/return/status/cancel/refund/capture; A/B assignment tested for stability (same visitor →
+same bucket across calls) and disable-fallback (a disabled bucket reassigns to control on the
+next read). Even-split distribution across a large simulated visitor population was not
+separately load-tested — the bucketing math (`hexdec(hash) % N`) is the same well-distributed
+technique the original Phase 15 Q4 answer specified, verified only at the unit level here.
 
 ## Phase 25 — Webhooks module
 

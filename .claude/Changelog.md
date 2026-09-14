@@ -7,6 +7,83 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-13 — Phase 24 complete: A/B price-list visitor assignment
+
+**Summary.** Closes out Phase 24 by re-asking the two decisions Phase 15 deferred (Q4/Q5,
+persisted here as Q6/Q7) with their full original option lists — per the user's own standing
+instruction not to assume the earlier recommendation — then building the deterministic
+visitor→price-list bucket-assignment service and wiring it into the two catalogue/pricing read
+endpoints.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 24 Q6/Q7):
+- **Q6** (re-ask of Phase 15 Q4): persisted `price_list_assignments`, not stateless recompute —
+  first visit buckets and persists; later visits read the stored row; a since-disabled bucket
+  reassigns to control on read.
+- **Q7** (re-ask of Phase 15 Q5): **both** `GET /api/v1/packages` and `GET /api/v1/pricing/resolve`
+  accept a `visitor_ref` and persist the assignment on first sight — diverging from the original
+  recommendation of `/pricing/resolve`-only, in favour of symmetry between the two read endpoints.
+
+**Database design confirmed** before migrating: one new table, `price_list_assignments`
+(`client_id`, `pricing_group_id`, `visitor_ref_hash`, `price_list_id`, `assigned_at`,
+`reassigned_at`, `created_at`/`updated_at`), `UNIQUE (pricing_group_id, visitor_ref_hash)`, FKs to
+`clients`/`pricing_groups`/`price_lists`. Purely additive.
+
+**Files created**
+- `src/Database/Migrations/20260913090003_create_price_list_assignments_table.php`.
+- `src/Modules/Pricing/Domain/PriceListAssignment.php`, `PriceListAssignmentRepository.php`.
+- `src/Modules/Pricing/Infrastructure/PdoPriceListAssignmentRepository.php` — `insertOrGetExisting()`
+  uses `INSERT ... ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`, the standard MySQL
+  upsert-race idiom, so a concurrent first-visit race for the same visitor always resolves to one
+  authoritative row instead of throwing.
+- `src/Modules/Pricing/Application/ResolveVisitorPriceListAssignment.php` — the bucket-assignment
+  service: `hexdec(substr(SHA-256(pricing_group_id . ':' . visitor_ref), 0, 8)) %
+  count(enabledLists)` over `PriceListRepository::enabledForGroup()` (control first, then by id —
+  a stable order); reassigns a since-disabled bucket to control on read; degrades to `null`
+  (never throws) when a pricing group has no price list at all.
+- Tests: `tests/Support/InMemoryPriceListAssignmentRepository.php`; new cases in
+  `PriceCatalogTest`, `PriceResolverTest` (stability, disable-fallback, no-list-at-all
+  degradation), `PackagesApiTest` (visitor_ref wiring end-to-end).
+
+**Files modified**
+- `src/Modules/Pricing/Application/PriceResolver.php` — gained a `?string $visitorRef` param;
+  resolves to a `priceListId` via the new service when no explicit `priceListId` is given.
+- `src/Modules/Pricing/Application/PriceCatalog.php` — gained a `?string $visitorRef` param;
+  resolves the visitor's bucket **once** per catalogue request (the bucket is per pricing group,
+  not per package) and applies it via `PriceListResolver` to every item — previously `/packages`
+  never touched `PriceListResolver` at all, so this is also the first time the catalog listing's
+  displayed price can reflect an A/B experiment.
+- `src/Http/Api/{PackagesAction,PackageDetailAction,PricingResolveAction}.php` — accept an
+  optional `visitor_ref` query parameter.
+- `src/Modules/Pricing/Infrastructure/definitions.php` — registered
+  `PriceListAssignmentRepository`.
+- `tests/Unit/Http/PackagesApiTest.php` — swapped in `InMemoryPriceListAssignmentRepository`
+  (this functional test builds the real DI container; leaving the new repository unswapped
+  would otherwise construct a real `PDO` connection just to satisfy the constructor, even though
+  the tests never pass a `visitor_ref` — the same reason `PriceListRepository` was already
+  swapped here since Phase 15).
+- Every other call site of `PriceResolver`/`PriceCatalog` across the test suite updated for the
+  new constructor parameter (no behavior change — all pass `null`/an unused in-memory double).
+- `.claude/docs/Architecture.md`, `database-design.md`, `database-diagram.md`/`.html`,
+  `db_explain.md` — `price_list_assignments` documented; Phase 24 marked complete.
+
+**Database changes.** One additive migration (see above); no destructive changes.
+
+**Tests.** New coverage across `PriceCatalogTest`, `PriceResolverTest`, `PackagesApiTest`
+(11 new test methods total). Full suite: 561 tests, 1870 assertions; `composer ci` (CS + PHPStan +
+tests) clean. `tests/Integration/*` continue to self-skip (need a real MySQL connection this
+local environment doesn't currently have — pre-existing, unrelated to this change).
+
+**Known limitations.** `visitor_ref` is not wired into `POST /api/v1/payments` or the checkout
+pricing pipeline (`ResolveCheckoutPricingHandler`) — out of scope for Q7, which named exactly two
+endpoints. A client that wants the checkout price to match what `/packages`/`/pricing/resolve`
+displayed for a given visitor must pass the same `visitor_ref` itself if/when that gap is closed
+in a later phase.
+
+**This completes Phase 24.** All of Phase 24's scope (creation, return flow, show/status,
+cancel/refund/capture, and the A/B visitor-assignment re-ask) is now built and tested. See
+`.claude/docs/Phases.md` for the updated status and `.claude/PhaseResults/Phase24Result.md` for
+the full phase-completion summary.
+
 ## 2026-09-13 — Phase 24 (in progress): cancel/refund/capture
 
 **Summary.** Built the capability-gated `POST /api/v1/payments/{id}/cancel`, `/refund`,

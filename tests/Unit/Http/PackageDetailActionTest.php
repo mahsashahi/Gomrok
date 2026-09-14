@@ -15,6 +15,7 @@ use Gomrok\Modules\Pricing\Application\PriceCatalog;
 use Gomrok\Modules\Pricing\Application\PriceListResolver;
 use Gomrok\Modules\Pricing\Application\PriceResolver;
 use Gomrok\Modules\Pricing\Application\PriceRuleResolver;
+use Gomrok\Modules\Pricing\Application\ResolveVisitorPriceListAssignment;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePrice;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupSlug;
@@ -26,6 +27,7 @@ use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
 use Gomrok\Tests\Support\InMemoryDefaultPackagePriceRepository;
 use Gomrok\Tests\Support\InMemoryPackageRepository;
+use Gomrok\Tests\Support\InMemoryPriceListAssignmentRepository;
 use Gomrok\Tests\Support\InMemoryPriceListPackageRepository;
 use Gomrok\Tests\Support\InMemoryPriceListRepository;
 use Gomrok\Tests\Support\InMemoryPriceRuleRepository;
@@ -181,15 +183,19 @@ final class PackageDetailActionTest extends TestCase
         $defaults = new InMemoryDefaultPackagePriceRepository();
         $defaults->save(new DefaultPackagePrice($id, 2900, 'EUR'));
 
+        $clock = new FrozenClock('2026-09-11T12:00:00+00:00');
+        $priceListRepository = new InMemoryPriceListRepository();
+        $this->priceListResolver = new PriceListResolver($priceListRepository, new InMemoryPriceListPackageRepository());
         $this->priceResolver = new PriceResolver(
             $groups,
             new InMemoryPricingGroupPackageRepository(),
             $defaults,
             new InMemoryClientExchangeRateRepository(),
             $this->directory,
-            new PriceListResolver(new InMemoryPriceListRepository(), new InMemoryPriceListPackageRepository()),
+            $this->priceListResolver,
             new PriceRuleResolver(new InMemoryPriceRuleRepository()),
-            new FrozenClock('2026-09-11T12:00:00+00:00'),
+            new ResolveVisitorPriceListAssignment(new InMemoryPriceListAssignmentRepository(), $priceListRepository, $clock),
+            $clock,
         );
 
         return $id;
@@ -197,13 +203,20 @@ final class PackageDetailActionTest extends TestCase
 
     private PriceResolver $priceResolver;
 
+    private PriceListResolver $priceListResolver;
+
     private function action(int $seededPackageId): PackageDetailAction
     {
         $context = new ClientContext();
         $context->set(new AuthenticatedClient(self::CLIENT, 'televika', 'Televika', 'active', 'EUR', 'DE', 'Europe/Berlin', 'gk_test'));
 
         $packageCatalog = new PackageCatalog($this->packages, new StubProviderAccountDirectory(), new PackagePurchaseCapabilityResolver($this->packages));
-        $catalog = new PriceCatalog($packageCatalog, $this->priceResolver);
+        $catalog = new PriceCatalog(
+            $packageCatalog,
+            $this->priceResolver,
+            $this->priceListResolver,
+            new ResolveVisitorPriceListAssignment(new InMemoryPriceListAssignmentRepository(), new InMemoryPriceListRepository(), new FrozenClock('2026-09-11T12:00:00+00:00')),
+        );
 
         return new PackageDetailAction($context, $this->directory, $catalog, new JsonResponder());
     }

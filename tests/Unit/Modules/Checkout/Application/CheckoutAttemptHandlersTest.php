@@ -22,6 +22,7 @@ use Gomrok\Modules\Checkout\Domain\CheckoutAttemptStatus;
 use Gomrok\Modules\Pricing\Application\PriceListResolver;
 use Gomrok\Modules\Pricing\Application\PriceResolver;
 use Gomrok\Modules\Pricing\Application\PriceRuleResolver;
+use Gomrok\Modules\Pricing\Application\ResolveVisitorPriceListAssignment;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePrice;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupSlug;
@@ -39,6 +40,7 @@ use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryCheckoutAttemptRepository;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
 use Gomrok\Tests\Support\InMemoryDefaultPackagePriceRepository;
+use Gomrok\Tests\Support\InMemoryPriceListAssignmentRepository;
 use Gomrok\Tests\Support\InMemoryPriceListPackageRepository;
 use Gomrok\Tests\Support\InMemoryPriceListRepository;
 use Gomrok\Tests\Support\InMemoryPriceRuleRepository;
@@ -108,6 +110,7 @@ final class CheckoutAttemptHandlersTest extends TestCase
             $packages,
             new PriceListResolver(new InMemoryPriceListRepository(), new InMemoryPriceListPackageRepository()),
             new PriceRuleResolver($priceRules),
+            new ResolveVisitorPriceListAssignment(new InMemoryPriceListAssignmentRepository(), new InMemoryPriceListRepository(), $this->clock),
             $this->clock,
         );
         $this->pricingSnapshots = new InMemoryPricingDecisionSnapshotRepository();

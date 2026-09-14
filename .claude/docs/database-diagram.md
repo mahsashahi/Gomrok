@@ -13,7 +13,7 @@ flowchart TD
     Clients["Clients<br/>clients · client_api_keys · client_endpoints"]
     Providers["Providers<br/>capabilities + purchase types (P8)<br/>provider_accounts + endpoints/countries/methods (P9)<br/>provider_groups + routing (P10)"]
     Packages["Packages<br/>packages + country/currency/method/provider availability (P11)<br/>purchase capabilities + provider definitions (P12)"]
-    Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)<br/>price_lists + price_list_packages — A/B (P15)"]
+    Pricing["Pricing<br/>pricing_groups + default_package_prices + client_exchange_rates + group-package rows (P13)<br/>price_rules — dimension overrides (P14)<br/>price_lists + price_list_packages — A/B (P15)<br/>price_list_assignments — visitor bucketing (P24)"]
     Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)<br/>voucher_redemptions — discount calc & redemption lifecycle (P17)<br/>voucher_decision_snapshots — Phase 18"]
     Checkout["Checkout<br/>checkout_attempts — pre-payment lifecycle anchor (P18)"]
     Payments["Payments<br/>payments + payment_attempts + provider_transactions (P20)<br/>provider_customers + gateway_references (P20)"]
@@ -583,7 +583,7 @@ with `pricing.combination_unavailable` (no fallback). `GET /api/v1/pricing/resol
 `method` / `purchase_type` / `interval` query params. `local-dev` seeds a `pro` Stripe+EUR rule
 (€27) and a `pro` US-group yearly-subscription unavailable rule.
 
-## Pricing — A/B price lists (Phase 15)
+## Pricing — A/B price lists (Phase 15; visitor assignment — Phase 24 Q6/Q7)
 
 ```mermaid
 erDiagram
@@ -607,12 +607,26 @@ erDiagram
         datetime created_at
         datetime updated_at
     }
+    price_list_assignments {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        int pricing_group_id FK "-> pricing_groups.id (CASCADE)"
+        varchar visitor_ref_hash "SHA-256(group_id:visitor_ref); UNIQUE with pricing_group_id"
+        int price_list_id FK "-> price_lists.id (CASCADE); current bucket"
+        datetime assigned_at
+        datetime reassigned_at "set if the assigned list was later disabled"
+        datetime created_at
+        datetime updated_at
+    }
 
     clients ||--o{ price_lists : "experiments for"
     pricing_groups ||--o{ price_lists : "A/B within"
     price_lists ||--o{ price_list_packages : "exact prices"
     packages ||--o{ price_list_packages : "priced on"
     currencies ||--o{ price_list_packages : "priced in"
+    clients ||--o{ price_list_assignments : "buckets visitors for"
+    pricing_groups ||--o{ price_list_assignments : "bucketed within"
+    price_lists ||--o{ price_list_assignments : "current bucket"
 ```
 
 Every pricing group owns one control list (`is_control = 1`, `factor = 1.0000`, always enabled,
@@ -620,9 +634,18 @@ created with the group + backfilled by the migration). A non-control list shifts
 base price by `factor`, or by an exact `price_list_packages` amount per package.
 `PriceListResolver` runs between the Phase 13 base amount and the Phase 14 `price_rules` step:
 an exact list-package amount → else `base × factor` → else the base unchanged
-(`ResolvedPrice.source = price_list` when the amount moved). **Visitor→list assignment is
-deferred to Phase 24** — until then every resolve uses the control list. `local-dev` seeds a
-control list per group + a disabled `dach` "List B · -10%" with an exact `pro` €21.00.
+(`ResolvedPrice.source = price_list` when the amount moved). `local-dev` seeds a control list per
+group + a disabled `dach` "List B · -10%" with an exact `pro` €21.00.
+
+**Visitor→list assignment (Phase 15 Q4/Q5, decided fresh at Phase 24 Q6/Q7):** persisted in
+`price_list_assignments`, one row per `(pricing_group_id, visitor_ref_hash)`. On first sight,
+`ResolveVisitorPriceListAssignment` buckets by a deterministic hash over the group's
+currently-enabled lists and persists the row (a `LAST_INSERT_ID(id)`-on-conflict upsert makes a
+concurrent first-visit race resolve to one authoritative row rather than throwing). Later visits
+read the stored bucket; if it's since been disabled, the row reassigns to control on that read.
+Wired into `GET /api/v1/packages`, `GET /api/v1/packages/{packageId}`, and
+`GET /api/v1/pricing/resolve` via an optional `visitor_ref` query param (Q7: both endpoints
+persist).
 
 ## Vouchers — definitions & eligibility (Phase 16)
 

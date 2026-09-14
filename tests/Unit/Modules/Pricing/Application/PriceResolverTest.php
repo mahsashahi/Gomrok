@@ -10,9 +10,11 @@ use Gomrok\Modules\Pricing\Application\PriceResolver;
 use Gomrok\Modules\Pricing\Application\PriceRuleResolver;
 use Gomrok\Modules\Pricing\Application\PriceSource;
 use Gomrok\Modules\Pricing\Application\ResolvedPrice;
+use Gomrok\Modules\Pricing\Application\ResolveVisitorPriceListAssignment;
 use Gomrok\Modules\Pricing\Domain\ClientExchangeRate;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePrice;
 use Gomrok\Modules\Pricing\Domain\PriceList;
+use Gomrok\Modules\Pricing\Domain\PriceListAssignment;
 use Gomrok\Modules\Pricing\Domain\PriceRule;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupPackage;
@@ -24,6 +26,7 @@ use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
 use Gomrok\Tests\Support\InMemoryDefaultPackagePriceRepository;
+use Gomrok\Tests\Support\InMemoryPriceListAssignmentRepository;
 use Gomrok\Tests\Support\InMemoryPriceListPackageRepository;
 use Gomrok\Tests\Support\InMemoryPriceListRepository;
 use Gomrok\Tests\Support\InMemoryPriceRuleRepository;
@@ -46,6 +49,7 @@ final class PriceResolverTest extends TestCase
     private InMemoryPriceListRepository $priceLists;
     private InMemoryPriceListPackageRepository $listPackages;
     private StubPackageDirectory $packages;
+    private InMemoryPriceListAssignmentRepository $assignments;
     private PriceResolver $resolver;
     private DateTimeImmutable $now;
 
@@ -60,6 +64,7 @@ final class PriceResolverTest extends TestCase
         $this->priceLists = new InMemoryPriceListRepository();
         $this->listPackages = new InMemoryPriceListPackageRepository();
         $this->packages = (new StubPackageDirectory())->add(self::PACKAGE, self::CLIENT, 'pro', 'Pro');
+        $this->assignments = new InMemoryPriceListAssignmentRepository();
         $this->resolver = new PriceResolver(
             $this->groups,
             $this->rows,
@@ -68,6 +73,7 @@ final class PriceResolverTest extends TestCase
             $this->packages,
             new PriceListResolver($this->priceLists, $this->listPackages),
             new PriceRuleResolver($this->priceRules),
+            new ResolveVisitorPriceListAssignment($this->assignments, $this->priceLists, new FrozenClock('2026-09-10T12:00:00+00:00')),
             new FrozenClock('2026-09-10T12:00:00+00:00'),
         );
         $this->defaults->save(new DefaultPackagePrice(self::PACKAGE, 2900, 'EUR'));
@@ -290,6 +296,69 @@ final class PriceResolverTest extends TestCase
         self::assertSame(2500, $cardOnList->amountMinor); // price rule overrides the experiment
         self::assertSame(PriceSource::DimensionOverride, $cardOnList->source);
         self::assertSame($listBId, $cardOnList->priceListId); // still stamped
+    }
+
+    #[Test]
+    public function aVisitorRefIsBucketedOnceAndStaysStableAcrossCalls(): void
+    {
+        $groupId = $this->group('default', priority: 0, countries: [], currency: 'EUR', isDefault: true);
+        $this->priceLists->save(PriceList::control(self::CLIENT, $groupId, $this->now));
+        $listB = PriceList::experiment(self::CLIENT, $groupId, 'List B', '0.9000', $this->now);
+        $this->priceLists->save($listB);
+
+        $first = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, null, null, null, null, null, 'visitor-1'));
+        $second = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, null, null, null, null, null, 'visitor-1'));
+
+        self::assertSame($first->amountMinor, $second->amountMinor);
+        self::assertContains($first->amountMinor, [2900, 2610]);
+
+        $hash = hash('sha256', $groupId . ':visitor-1');
+        $stored = $this->assignments->findByGroupAndHash($groupId, $hash);
+        self::assertNotNull($stored);
+    }
+
+    #[Test]
+    public function aDisabledAssignedListReassignsToControlOnTheNextResolve(): void
+    {
+        $groupId = $this->group('default', priority: 0, countries: [], currency: 'EUR', isDefault: true);
+        $control = PriceList::control(self::CLIENT, $groupId, $this->now);
+        $this->priceLists->save($control);
+        $listB = PriceList::experiment(self::CLIENT, $groupId, 'List B', '0.9000', $this->now);
+        $this->priceLists->save($listB);
+        $listBId = $listB->id();
+        \assert($listBId !== null);
+        $controlId = $control->id();
+        \assert($controlId !== null);
+
+        // Seed the assignment directly onto List B (as if bucketed there
+        // earlier), then disable List B to exercise the reassign-on-read path.
+        $hash = hash('sha256', $groupId . ':visitor-2');
+        $this->assignments->insertOrGetExisting(PriceListAssignment::assign(self::CLIENT, $groupId, $hash, $listBId, $this->now));
+
+        $listB->disable($this->now);
+        $this->priceLists->save($listB);
+
+        $result = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, null, null, null, null, null, 'visitor-2'));
+
+        self::assertSame(2900, $result->amountMinor); // reassigned to control
+        $stored = $this->assignments->findByGroupAndHash($groupId, $hash);
+        self::assertNotNull($stored);
+        self::assertSame($controlId, $stored->priceListId());
+        self::assertNotNull($stored->reassignedAt());
+    }
+
+    #[Test]
+    public function aVisitorRefOnAGroupWithNoPriceListsAtAllResolvesThePlainBasePrice(): void
+    {
+        $this->group('default', priority: 0, countries: [], currency: 'EUR', isDefault: true);
+        // No control row, no experiment lists — a synthetic group built directly
+        // via PricingGroup::define() rather than through CreatePricingGroupHandler
+        // (which would normally auto-create the control row).
+
+        $result = $this->priceOf($this->resolver->resolve(self::CLIENT, self::PACKAGE, 'DE', null, null, null, null, null, null, 'visitor-3'));
+
+        self::assertSame(2900, $result->amountMinor);
+        self::assertNull($result->priceListId);
     }
 
     /**

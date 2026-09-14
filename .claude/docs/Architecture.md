@@ -427,9 +427,18 @@ price-list layer; Phases 16–17 add vouchers, 18 tax/fee.
   `priceListId` / `priceListName` / `priceListFactor`. A `$priceListId` that is unknown, from
   another group, or disabled falls back to control (disable-fallback). Set via
   `bin/CreatePriceList.php` / `SetPriceListStatus.php` / `SetPriceListFactor.php` /
-  `SetPriceListPackagePrice.php`; listed by `ListPriceLists.php`. **The visitor→list assignment
-  itself (persistence, hashing, `visitor_ref` params) is deferred to Phase 24** (Phase 15
-  Q4/Q5); until then `$priceListId` is always `null` and every resolve uses control.
+  `SetPriceListPackagePrice.php`; listed by `ListPriceLists.php`. **Visitor→list assignment
+  (Phase 15 Q4/Q5, decided fresh at Phase 24 Q6/Q7)** is persisted in `price_list_assignments`
+  (`UNIQUE (pricing_group_id, visitor_ref_hash)`, `visitor_ref_hash = SHA-256(pricing_group_id .
+  ':' . visitor_ref)` — the raw ref is never stored). **`ResolveVisitorPriceListAssignment`**
+  buckets a first-seen visitor by a deterministic hash over the group's enabled lists (control
+  first, then by id), persists via a `LAST_INSERT_ID(id)`-on-conflict upsert (a concurrent
+  first-visit race resolves to one authoritative row, never throws), and on a later visit
+  reassigns a since-disabled bucket to control (mirroring `PriceListResolver`'s own
+  disable-fallback). Returns `null` — never throws — for a group with no price list at all.
+  `GET /api/v1/packages`, `GET /api/v1/packages/{packageId}`, and `GET /api/v1/pricing/resolve`
+  each accept an optional `visitor_ref` query param (Q7: **both** endpoints persist, not just
+  `/pricing/resolve`).
 - **HTTP:** `GET /api/v1/packages?country=…` (resolved catalogue, base prices),
   `GET /api/v1/packages/{packageId}?country=…` (one package from that same resolved catalogue —
   Phase 19 Q1/Q2; `{packageId}` accepts either the numeric id or the code, and a package that
@@ -573,11 +582,11 @@ than transient in-memory state.
   (`bin/CreatePayment.php`, `RecordProviderTransaction.php`, `SetPaymentStatus.php`,
   `LinkProviderCustomer.php`, `ListPayments.php`).
 
-### Payment creation & the return flow (Phase 24 — in progress)
+### Payment creation & the return flow (Phase 24 — complete)
 
-Wires the Checkout/Payments/Providers modules together behind four HTTP endpoints. Still
-in progress: capability-gated cancel/refund/capture and the Phase 15 A/B visitor-assignment
-re-ask are not built yet.
+Wires the Checkout/Payments/Providers modules together behind seven HTTP endpoints (creation,
+return, show, status, cancel/refund/capture), plus the Phase 15 A/B visitor-assignment re-ask
+(Q6/Q7 — see the Pricing section above for `price_list_assignments`).
 
 - **`gateway_references` dual-parent columns (Q1).** Both `checkout_attempt_id` and `payment_id`
   are nullable on the same table; exactly one is set per row. `GatewayReference` gained two named

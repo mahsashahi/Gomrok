@@ -443,10 +443,10 @@ with the null-safe `<=>` operator instead of `ON DUPLICATE KEY`.
 
 ---
 
-## Pricing — A/B price lists (Phase 15)
+## Pricing — A/B price lists (Phase 15; visitor assignment — Phase 24 Q6/Q7)
 
 Price experiments inside a pricing group, layered between the Phase 13 base amount and the Phase
-14 `price_rules` step. Two tables.
+14 `price_rules` step. Three tables.
 
 ### `price_lists`
 
@@ -487,12 +487,36 @@ enabled — otherwise the group's **control** list (this is the disable-fallback
 always carries `price_list_id` / `price_list_name` / `price_list_factor`; `source` becomes
 `price_list` only when the amount actually moved.
 
-**`$priceListId` is `null` for every caller in Phase 15** — the visitor→list assignment (the
-`price_list_assignments` table + hashing service + `visitor_ref` params) is deferred to Phase 24
-(Phase 15 Q4/Q5). So every resolve currently uses the control list; the machinery is in place
-for Phase 24 to pass a real list id.
+`$priceListId` is resolved from an explicit override, else from `ResolveVisitorPriceListAssignment`
+when a `$visitorRef` is supplied (below), else `null` (→ control).
 
-- **Referenced by:** nothing yet (Phase 24 assignment; payment snapshots later).
+- **Referenced by:** `price_list_assignments.price_list_id` (below); payment snapshots later.
+
+### `price_list_assignments` (Phase 24 Q6/Q7)
+
+The visitor→list bucketing Phase 15 Q4/Q5 deferred, re-asked with the full option list at Phase 24
+and decided fresh: **persisted**, one row per `(pricing_group_id, visitor_ref_hash)`. `UNIQUE
+(pricing_group_id, visitor_ref_hash)`.
+
+- **`visitor_ref_hash`** — `SHA-256(pricing_group_id . ':' . visitor_ref)`; the raw `visitor_ref`
+  is never stored, and mixing in the group id means the same visitor's hash differs across
+  pricing groups (no cross-experiment correlation from a leaked hash).
+- **Bucketing (`ResolveVisitorPriceListAssignment`):** on first sight, `hexdec(substr(hash, 0, 8))
+  % count(enabledLists)` over `PriceListRepository::enabledForGroup()` (control first, then by
+  id — a stable order), persisted via a `LAST_INSERT_ID(id)`-on-conflict upsert so a concurrent
+  first-visit race resolves to one authoritative row without ever throwing. Later visits read the
+  stored row; if its list has since been disabled, the row is reassigned to the group's control
+  list on that read (`reassigned_at` stamped) — mirrors `PriceListResolver::apply()`'s own
+  disable-fallback for an explicit `priceListId`.
+- **No control row at all** (a pricing group built outside `CreatePricingGroupHandler`, e.g. in a
+  test) → bucketing returns `null` rather than throwing; `PriceListResolver::apply()` already
+  tolerates a `null` list id by leaving the base price untouched.
+- **Wired into:** `GET /api/v1/packages`, `GET /api/v1/packages/{packageId}`,
+  `GET /api/v1/pricing/resolve` — each accepts an optional `visitor_ref` query param (Q7: "both
+  persist", diverging from the original recommendation of `/pricing/resolve`-only). Not wired
+  into `POST /api/v1/payments` (out of scope for Q7) or the checkout pricing pipeline.
+- **Not audited** — this fires on ordinary catalogue/price-resolution traffic (potentially every
+  visitor), not an admin write; the persisted row itself is the durable history a report needs.
 
 ---
 

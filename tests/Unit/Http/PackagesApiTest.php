@@ -80,6 +80,32 @@ final class PackagesApiTest extends TestCase
         self::assertSame('baseline', $body['price']['source']);
     }
 
+    #[Test]
+    public function packagesEndpointAcceptsAVisitorRefAndStillResolvesAPrice(): void
+    {
+        // No price lists configured beyond the implicit control, so bucketing
+        // is a no-op here — this proves the `visitor_ref` param is accepted
+        // end-to-end (parsed, hashed, resolved, and the request still
+        // succeeds) without needing a live A/B experiment.
+        $response = $this->handle('GET', '/api/v1/packages?country=DE&visitor_ref=visitor-abc');
+
+        self::assertSame(200, $response->getStatusCode());
+        /** @var array{packages: list<array{price: array{amount_minor: int}}>} $body */
+        $body = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(2900, $body['packages'][0]['price']['amount_minor']);
+    }
+
+    #[Test]
+    public function pricingResolveEndpointAcceptsAVisitorRefAndStillResolvesAPrice(): void
+    {
+        $response = $this->handle('GET', '/api/v1/pricing/resolve?package=pro&country=DE&visitor_ref=visitor-abc');
+
+        self::assertSame(200, $response->getStatusCode());
+        /** @var array{price: array{amount_minor: int}} $body */
+        $body = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(2900, $body['price']['amount_minor']);
+    }
+
     private function handle(string $method, string $path): ResponseInterface
     {
         $now = new DateTimeImmutable('2026-09-10T12:00:00+00:00');
@@ -114,6 +140,7 @@ final class PackagesApiTest extends TestCase
         $container->set(\Gomrok\Modules\Pricing\Domain\PriceRuleRepository::class, new \Gomrok\Tests\Support\InMemoryPriceRuleRepository());
         $container->set(\Gomrok\Modules\Pricing\Domain\PriceListRepository::class, new \Gomrok\Tests\Support\InMemoryPriceListRepository());
         $container->set(\Gomrok\Modules\Pricing\Domain\PriceListPackageRepository::class, new \Gomrok\Tests\Support\InMemoryPriceListPackageRepository());
+        $container->set(\Gomrok\Modules\Pricing\Domain\PriceListAssignmentRepository::class, new \Gomrok\Tests\Support\InMemoryPriceListAssignmentRepository());
 
         $app = AppFactory::create($container);
 
