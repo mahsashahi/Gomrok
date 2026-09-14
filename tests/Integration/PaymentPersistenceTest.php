@@ -131,7 +131,7 @@ final class PaymentPersistenceTest extends TestCase
         $customers->save($customer);
         self::assertNotNull($customers->findByProviderCustomerId($this->providerAccountId, 'cus_1'));
 
-        $referenceId = $references->save(GatewayReference::record($this->clientId, $this->providerAccountId, GatewayReferenceType::PaymentIntent, 'pi_1', $paymentId, $now));
+        $referenceId = $references->save(GatewayReference::forPayment($this->clientId, $this->providerAccountId, GatewayReferenceType::PaymentIntent, 'pi_1', $paymentId, $now));
         self::assertGreaterThan(0, $referenceId);
 
         $loadedReference = $references->findByReference($this->providerAccountId, GatewayReferenceType::PaymentIntent, 'pi_1');

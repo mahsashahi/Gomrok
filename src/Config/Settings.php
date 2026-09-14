@@ -25,6 +25,19 @@ final readonly class Settings
          * still work.
          */
         public ?string $encryptionKeyBase64 = null,
+        /**
+         * Gomrok's own public base URL — used to build the return endpoint's
+         * absolute successUrl/cancelUrl handed to provider adapters (Phase 24
+         * Q2). Defaults to a local dev value.
+         */
+        public string $appBaseUrl = 'http://localhost:8080',
+        /**
+         * HMAC secret for {@see \Gomrok\Modules\Checkout\Domain\CheckoutReturnToken}
+         * (Phase 24 Q4). Hardcoded default per an explicit user instruction —
+         * moving it to a required environment variable is deliberately
+         * deferred, not an oversight.
+         */
+        public string $checkoutReturnTokenSecret = 'gomrokimo',
     ) {
     }
 
@@ -46,6 +59,11 @@ final readonly class Settings
                 password: self::str('DB_PASSWORD', ''),
                 charset: self::str('DB_CHARSET', 'utf8mb4'),
             ),
+            appBaseUrl: self::str('APP_BASE_URL', 'http://localhost:8080'),
+            // Deliberately not environment-backed yet (Phase 24 Q4) — always
+            // "gomrokimo" until moving it to a required env var is picked up
+            // as its own task.
+            checkoutReturnTokenSecret: 'gomrokimo',
         );
     }
 

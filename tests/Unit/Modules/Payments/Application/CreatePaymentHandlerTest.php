@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gomrok\Tests\Unit\Modules\Payments\Application;
 
 use DateTimeImmutable;
+use Gomrok\Modules\Checkout\Application\ResolveCheckoutPayableAmount;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttempt;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttemptStatus;
 use Gomrok\Modules\Payments\Application\CreatePayment\CreatePaymentCommand;
@@ -54,9 +55,7 @@ final class CreatePaymentHandlerTest extends TestCase
         $this->handler = new CreatePaymentHandler(
             $this->attempts,
             $this->payments,
-            $this->pricingSnapshots,
-            $this->voucherSnapshots,
-            $this->redemptions,
+            new ResolveCheckoutPayableAmount($this->pricingSnapshots, $this->voucherSnapshots, $this->redemptions),
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-11T12:00:00+00:00'),

@@ -40,4 +40,13 @@ final class ClientContext
     {
         return $this->client()->id;
     }
+
+    /**
+     * `live` or `test` (Phase 7) — derived from the API key used to
+     * authenticate, never client-supplied.
+     */
+    public function keyMode(): string
+    {
+        return $this->client()->keyMode;
+    }
 }

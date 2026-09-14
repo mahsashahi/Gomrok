@@ -36,6 +36,7 @@ final class CheckoutAttempt
         private ?DateTimeImmutable $updatedAt,
         private ?DateTimeImmutable $abandonedAt,
         private ?DateTimeImmutable $expiredAt,
+        private ?string $hashReturnToken,
     ) {
     }
 
@@ -69,6 +70,7 @@ final class CheckoutAttempt
             null,
             null,
             null,
+            null,
         );
     }
 
@@ -90,6 +92,7 @@ final class CheckoutAttempt
         ?DateTimeImmutable $updatedAt,
         ?DateTimeImmutable $abandonedAt,
         ?DateTimeImmutable $expiredAt,
+        ?string $hashReturnToken,
     ): self {
         return new self(
             $id,
@@ -109,12 +112,32 @@ final class CheckoutAttempt
             $updatedAt,
             $abandonedAt,
             $expiredAt,
+            $hashReturnToken,
         );
     }
 
     public function assignId(int $id): void
     {
         $this->id = $id;
+    }
+
+    /**
+     * Issues this attempt's {@see CheckoutReturnToken} (Phase 24 Q4) —
+     * called once, when the provider checkout session is created, so the
+     * return endpoint can later verify a token without trusting anything the
+     * browser presents on its own. Only the hash half is retained on the
+     * entity; the caller embeds the full token (returned here) in the
+     * successUrl/cancelUrl given to the provider.
+     */
+    public function issueReturnToken(string $secret): CheckoutReturnToken
+    {
+        $id = $this->id;
+        \assert($id !== null);
+
+        $token = CheckoutReturnToken::issue($id, $secret);
+        $this->hashReturnToken = $token->hash;
+
+        return $token;
     }
 
     /**
@@ -279,5 +302,10 @@ final class CheckoutAttempt
     public function expiredAt(): ?DateTimeImmutable
     {
         return $this->expiredAt;
+    }
+
+    public function hashReturnToken(): ?string
+    {
+        return $this->hashReturnToken;
     }
 }

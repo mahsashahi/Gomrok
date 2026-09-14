@@ -29,11 +29,11 @@ final readonly class PdoCheckoutAttemptRepository implements CheckoutAttemptRepo
                 'INSERT INTO checkout_attempts
                     (client_id, client_user_ref, attempt_reference, package_id, country, currency_code,
                      purchase_type, payment_method, subscription_interval, status, error_code, error_message,
-                     created_at, updated_at, abandoned_at, expired_at)
+                     created_at, updated_at, abandoned_at, expired_at, hash_return_token)
                  VALUES
                     (:client_id, :client_user_ref, :attempt_reference, :package_id, :country, :currency_code,
                      :purchase_type, :payment_method, :subscription_interval, :status, :error_code, :error_message,
-                     :created_at, :updated_at, :abandoned_at, :expired_at)',
+                     :created_at, :updated_at, :abandoned_at, :expired_at, :hash_return_token)',
             );
             $statement->execute($this->params($attempt) + [
                 'created_at' => $attempt->createdAt()->format(self::DT),
@@ -47,7 +47,8 @@ final readonly class PdoCheckoutAttemptRepository implements CheckoutAttemptRepo
         $statement = $this->pdo->prepare(
             'UPDATE checkout_attempts SET
                 status = :status, error_code = :error_code, error_message = :error_message,
-                updated_at = :updated_at, abandoned_at = :abandoned_at, expired_at = :expired_at
+                updated_at = :updated_at, abandoned_at = :abandoned_at, expired_at = :expired_at,
+                hash_return_token = :hash_return_token
              WHERE id = :id',
         );
         $statement->execute([
@@ -58,6 +59,7 @@ final readonly class PdoCheckoutAttemptRepository implements CheckoutAttemptRepo
             'updated_at' => $attempt->updatedAt()?->format(self::DT) ?? gmdate(self::DT),
             'abandoned_at' => $attempt->abandonedAt()?->format(self::DT),
             'expired_at' => $attempt->expiredAt()?->format(self::DT),
+            'hash_return_token' => $attempt->hashReturnToken(),
         ]);
     }
 
@@ -113,6 +115,7 @@ final readonly class PdoCheckoutAttemptRepository implements CheckoutAttemptRepo
             'error_message' => $attempt->errorMessage(),
             'abandoned_at' => $attempt->abandonedAt()?->format(self::DT),
             'expired_at' => $attempt->expiredAt()?->format(self::DT),
+            'hash_return_token' => $attempt->hashReturnToken(),
         ];
     }
 
@@ -144,6 +147,7 @@ final readonly class PdoCheckoutAttemptRepository implements CheckoutAttemptRepo
             $updatedAt !== null ? new DateTimeImmutable($updatedAt) : null,
             $abandonedAt !== null ? new DateTimeImmutable($abandonedAt) : null,
             $expiredAt !== null ? new DateTimeImmutable($expiredAt) : null,
+            Row::nullableStr($row['hash_return_token'] ?? null),
         );
     }
 }

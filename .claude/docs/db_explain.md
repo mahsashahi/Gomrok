@@ -772,9 +772,16 @@ two state machines in the codebase.
 - **No `subscription_id` column yet** — `subscriptions` doesn't exist until Phase 26; per the
   project's incremental-schema strategy, it's added there as an additive, nullable column rather
   than reserved now against a table that doesn't exist.
+- **`checkout_attempt_id` (Phase 24 Q1, additive)** — a provider checkout-session reference
+  (Stripe session id, Mollie payment id, PayPal order id) is created at
+  `checkout_attempts.status = provider_checkout_created`, well before the attempt reaches
+  `confirmed` (`Payment::create()`'s precondition, Phase 20 Q1) — so no `payments` row exists yet
+  at write time. Rather than relax the Phase 20 Q1 rule, `gateway_references` gained a second
+  nullable parent column: exactly one of `checkout_attempt_id` / `payment_id` is set per row,
+  enforced by which named constructor is used (`GatewayReference::forCheckoutAttempt()` /
+  `::forPayment()`), not a DB-level check constraint.
 - **Set / advanced by** `LinkProviderCustomerHandler` (idempotent by `(provider_account_id,
   provider_customer_id)`, `conflict` if the same provider customer id is claimed by a different
-  client); `gateway_references` rows are expected to be written by `RecordProviderTransactionHandler`
-  once Phase 21+'s adapters actually return reference ids to record (no dedicated handler yet in
-  Phase 20 — the repository and schema exist ahead of a real caller, the same pattern used for
-  `checkout_attempts.abandoned_at`/`expired_at` in Phase 18).
+  client); `gateway_references` rows with `checkout_attempt_id` set are written by the new
+  checkout-provider-checkout handler (Phase 24); rows with `payment_id` set are written by
+  `RecordProviderTransactionHandler` once a payment exists.

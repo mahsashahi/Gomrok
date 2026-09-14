@@ -1,0 +1,235 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Gomrok\Tests\Unit\Modules\Payments\Application;
+
+use DateTimeImmutable;
+use Gomrok\Modules\Payments\Application\RecordProviderTransaction\RecordProviderTransactionHandler;
+use Gomrok\Modules\Payments\Application\RefundPayment\RefundPaymentCommand;
+use Gomrok\Modules\Payments\Application\RefundPayment\RefundPaymentHandler;
+use Gomrok\Modules\Payments\Application\RefundPayment\RefundPaymentResult;
+use Gomrok\Modules\Payments\Application\ResolvePaymentActionContext;
+use Gomrok\Modules\Payments\Domain\GatewayReference;
+use Gomrok\Modules\Payments\Domain\GatewayReferenceType;
+use Gomrok\Modules\Payments\Domain\Payment;
+use Gomrok\Modules\Payments\Domain\PaymentStatus;
+use Gomrok\Modules\Providers\Application\Adapter\ProviderRefundResult;
+use Gomrok\Modules\Providers\Application\Adapter\ProviderRequestFailed;
+use Gomrok\Modules\Providers\Application\ProviderCapabilityResolver;
+use Gomrok\Modules\Providers\Application\Routing\ProviderRoutingDecisionSnapshot;
+use Gomrok\Modules\Providers\Domain\Capability;
+use Gomrok\Modules\Providers\Domain\PaymentMethod;
+use Gomrok\Modules\Providers\Domain\ProviderCapabilities;
+use Gomrok\Modules\Providers\Domain\ProviderTypeDeclaration;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
+use Gomrok\Tests\Support\FakePaymentProviderPort;
+use Gomrok\Tests\Support\FrozenClock;
+use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
+use Gomrok\Tests\Support\InMemoryPaymentAttemptRepository;
+use Gomrok\Tests\Support\InMemoryPaymentRepository;
+use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
+use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
+use Gomrok\Tests\Support\InMemoryProviderTypeDeclarations;
+use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\StubProviderAccountDirectory;
+use Gomrok\Tests\Support\StubProviderAdapterFactory;
+use Gomrok\Tests\Support\SynchronousTransactions;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\TestCase;
+
+final class RefundPaymentHandlerTest extends TestCase
+{
+    private const CLIENT = 7;
+    private const CHECKOUT_ATTEMPT = 100;
+    private const PACKAGE = 42;
+    private const PROVIDER_ACCOUNT = 1;
+    private const AMOUNT_MINOR = 2900;
+
+    private DateTimeImmutable $now;
+    private InMemoryPaymentRepository $payments;
+    private InMemoryGatewayReferenceRepository $gatewayReferences;
+    private FakePaymentProviderPort $adapter;
+    private RefundPaymentHandler $handler;
+
+    protected function setUp(): void
+    {
+        $this->now = new DateTimeImmutable('2026-09-13T12:00:00+00:00');
+        $this->payments = new InMemoryPaymentRepository();
+        $this->gatewayReferences = new InMemoryGatewayReferenceRepository();
+        $this->adapter = new FakePaymentProviderPort();
+        $this->handler = $this->buildHandler('stripe');
+    }
+
+    #[Test]
+    public function fullyRefundsAPaidPayment(): void
+    {
+        $paymentId = $this->seedPaidPayment();
+        $this->adapter->refundResult(new ProviderRefundResult('re_1', self::AMOUNT_MINOR, 'succeeded'));
+
+        $result = $this->handler->handle(new RefundPaymentCommand(self::CLIENT, self::CHECKOUT_ATTEMPT));
+
+        self::assertTrue($result->isOk());
+        $value = $result->value();
+        \assert($value instanceof RefundPaymentResult);
+        self::assertSame('refunded', $value->status);
+        self::assertSame('re_1', $value->providerReference);
+        self::assertSame(self::AMOUNT_MINOR, $value->refundedMinor);
+        self::assertNull($this->adapter->lastRefundAmountMinor);
+
+        $payment = $this->payments->findById($paymentId);
+        self::assertNotNull($payment);
+        self::assertSame(PaymentStatus::Refunded, $payment->status());
+    }
+
+    #[Test]
+    public function partiallyRefundsAPaidPayment(): void
+    {
+        $this->seedPaidPayment();
+        $this->adapter->refundResult(new ProviderRefundResult('re_1', 1000, 'succeeded'));
+
+        $result = $this->handler->handle(new RefundPaymentCommand(self::CLIENT, self::CHECKOUT_ATTEMPT, 1000));
+
+        self::assertTrue($result->isOk());
+        $value = $result->value();
+        \assert($value instanceof RefundPaymentResult);
+        self::assertSame('partially_refunded', $value->status);
+        self::assertSame(1000, $this->adapter->lastRefundAmountMinor);
+    }
+
+    #[Test]
+    public function rejectsARefundAmountLargerThanThePayment(): void
+    {
+        $this->seedPaidPayment();
+
+        $result = $this->handler->handle(new RefundPaymentCommand(self::CLIENT, self::CHECKOUT_ATTEMPT, self::AMOUNT_MINOR + 1));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('payment.refund_amount_exceeds_payment', $result->error()->code);
+    }
+
+    #[Test]
+    public function rejectsAPaymentThatIsNotPaid(): void
+    {
+        $this->seedPayment(PaymentStatus::Created);
+
+        $result = $this->handler->handle(new RefundPaymentCommand(self::CLIENT, self::CHECKOUT_ATTEMPT));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('payment.not_refundable', $result->error()->code);
+    }
+
+    #[Test]
+    public function rejectsRefundWhenTheProviderDoesNotSupportItAtAll(): void
+    {
+        // Ziraat declares neither Refund nor PartialRefund.
+        $this->handler = $this->buildHandler('ziraat');
+        $this->seedPaidPayment();
+
+        $result = $this->handler->handle(new RefundPaymentCommand(self::CLIENT, self::CHECKOUT_ATTEMPT));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('payment.refund_not_supported', $result->error()->code);
+    }
+
+    #[Test]
+    public function rejectsAPartialRefundWhenTheProviderOnlySupportsFullRefunds(): void
+    {
+        $declarations = new InMemoryProviderTypeDeclarations();
+        $declarations->add(new ProviderTypeDeclaration('full-refund-only', [PurchaseType::OneTimePayment], ProviderCapabilities::of(Capability::Refund)));
+        $accounts = (new StubProviderAccountDirectory())->add(self::PROVIDER_ACCOUNT, self::CLIENT, 'account-main', 'full-refund-only');
+        $routingSnapshots = new InMemoryProviderRoutingDecisionSnapshotRepository();
+        $routingSnapshots->save(new ProviderRoutingDecisionSnapshot(null, self::CHECKOUT_ATTEMPT, self::CLIENT, self::PROVIDER_ACCOUNT, 'card', 'one_time_payment', [], $this->now));
+        $context = new ResolvePaymentActionContext(
+            $routingSnapshots,
+            $accounts,
+            new ProviderCapabilityResolver($declarations),
+            (new StubProviderAdapterFactory())->add(self::PROVIDER_ACCOUNT, $this->adapter),
+            $this->gatewayReferences,
+        );
+        $this->handler = new RefundPaymentHandler($this->payments, $context, new RecordProviderTransactionHandler(
+            $this->payments,
+            new InMemoryPaymentAttemptRepository(),
+            new InMemoryProviderTransactionRepository(),
+            new RecordingAuditLogWriter(),
+            new SynchronousTransactions(),
+            new FrozenClock('2026-09-13T12:00:00+00:00'),
+        ));
+        $this->seedPaidPayment();
+
+        $result = $this->handler->handle(new RefundPaymentCommand(self::CLIENT, self::CHECKOUT_ATTEMPT, 1000));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('payment.partial_refund_not_supported', $result->error()->code);
+    }
+
+    #[Test]
+    public function mapsAProviderAdapterExceptionToAnUpstreamFailure(): void
+    {
+        $this->seedPaidPayment();
+        $this->adapter->throwOnRefund(new ProviderRequestFailed('provider is down'));
+
+        $result = $this->handler->handle(new RefundPaymentCommand(self::CLIENT, self::CHECKOUT_ATTEMPT));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('payment.refund_failed', $result->error()->code);
+        self::assertSame(502, $result->error()->httpStatus());
+    }
+
+    private function buildHandler(string $providerTypeCode): RefundPaymentHandler
+    {
+        $routingSnapshots = new InMemoryProviderRoutingDecisionSnapshotRepository();
+        $routingSnapshots->save(new ProviderRoutingDecisionSnapshot(null, self::CHECKOUT_ATTEMPT, self::CLIENT, self::PROVIDER_ACCOUNT, 'card', 'one_time_payment', [], $this->now));
+
+        $accounts = (new StubProviderAccountDirectory())->add(self::PROVIDER_ACCOUNT, self::CLIENT, 'account-main', $providerTypeCode);
+
+        $context = new ResolvePaymentActionContext(
+            $routingSnapshots,
+            $accounts,
+            new ProviderCapabilityResolver(InMemoryProviderTypeDeclarations::withKnownProviders()),
+            (new StubProviderAdapterFactory())->add(self::PROVIDER_ACCOUNT, $this->adapter),
+            $this->gatewayReferences,
+        );
+
+        $recordTransaction = new RecordProviderTransactionHandler(
+            $this->payments,
+            new InMemoryPaymentAttemptRepository(),
+            new InMemoryProviderTransactionRepository(),
+            new RecordingAuditLogWriter(),
+            new SynchronousTransactions(),
+            new FrozenClock('2026-09-13T12:00:00+00:00'),
+        );
+
+        return new RefundPaymentHandler($this->payments, $context, $recordTransaction);
+    }
+
+    private function seedPaidPayment(): int
+    {
+        return $this->seedPayment(PaymentStatus::Paid);
+    }
+
+    private function seedPayment(PaymentStatus $status): int
+    {
+        $payment = Payment::create(self::CLIENT, self::CHECKOUT_ATTEMPT, 'user-1', self::PACKAGE, 'DE', 'EUR', self::AMOUNT_MINOR, PurchaseType::OneTimePayment, PaymentMethod::Card, null, $this->now);
+        $this->advanceTo($payment, $status);
+        $this->payments->save($payment);
+        $paymentId = $payment->id();
+        \assert($paymentId !== null);
+
+        $this->gatewayReferences->save(GatewayReference::forPayment(self::CLIENT, self::PROVIDER_ACCOUNT, GatewayReferenceType::CheckoutSession, 'cs_test_1', $paymentId, $this->now));
+
+        return $paymentId;
+    }
+
+    private function advanceTo(Payment $payment, PaymentStatus $target): void
+    {
+        $path = match ($target) {
+            PaymentStatus::Created => [],
+            PaymentStatus::Paid => [PaymentStatus::Pending, PaymentStatus::Paid],
+            default => throw new \LogicException('unsupported target in this test'),
+        };
+        foreach ($path as $step) {
+            $payment->transitionTo($step, $this->now);
+        }
+    }
+}

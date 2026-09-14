@@ -862,6 +862,7 @@ erDiagram
         int provider_account_id FK "-> provider_accounts.id (CASCADE)"
         varchar reference_type "checkout_session | payment_intent | order | transaction | subscription | customer | other"
         varchar reference_value "UNIQUE (provider_account_id, reference_type, reference_value)"
+        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); nullable (P24)"
         int payment_id FK "-> payments.id (CASCADE); nullable"
         datetime created_at "write-once"
     }
@@ -876,6 +877,7 @@ erDiagram
     provider_accounts ||--o{ provider_customers : "recognises"
     clients ||--o{ gateway_references : "owns"
     provider_accounts ||--o{ gateway_references : "issues"
+    checkout_attempts ||--o{ gateway_references : "referenced by (pre-payment)"
     payments ||--o{ gateway_references : "referenced by"
 ```
 
@@ -887,7 +889,10 @@ declined card retried with a different method is a *new* attempt, `attempt_numbe
 while each raw call/response under that attempt gets its own immutable `provider_transactions`
 row. `provider_customers` and `gateway_references` (Q4) are separate concerns — a durable
 customer identity reused across payments vs. a generic, provider-agnostic reverse-lookup table
-(no `subscription_id` column until Phase 26 adds it additively). Lifecycle: an explicit
+(no `subscription_id` column until Phase 26 adds it additively). `gateway_references` also gained
+a nullable `checkout_attempt_id` (Phase 24 Q1) — exactly one of `checkout_attempt_id` /
+`payment_id` is set per row, since a provider checkout-session reference exists before any
+`payments` row does. Lifecycle: an explicit
 allowed-next-statuses graph per `PaymentStatus` (not a single rank, since a payment genuinely
 branches — `paid` can go to `refunded`, `partially_refunded`, or `disputed`; a dispute can
 resolve back to `paid` or escalate to `chargeback`); terminal once `refunded` / `canceled` /

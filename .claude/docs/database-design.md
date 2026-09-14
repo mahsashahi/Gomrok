@@ -45,7 +45,9 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Resolution API endpoints (Phase 19) | (no new tables) |
 | Payments — aggregate & lifecycle (Phase 20) | `payments`, `payment_attempts`, `provider_transactions`, `provider_customers`, `gateway_references` — **5** |
 | Provider adapter port & Stripe adapter (Phase 21) | (no new tables) |
-| — | (more business tables land per module from Phase 22) |
+| Mollie & PayPal adapters (Phase 22) | (no new tables) |
+| Ziraat adapter (Phase 23) | deferred — no tables |
+| Payment creation flow (Phase 24) | (no new tables) — `gateway_references` gained a nullable `checkout_attempt_id` column (Q1) |
 
 **Total: 51 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
@@ -1178,13 +1180,22 @@ The generic, provider-agnostic reverse-lookup table (Q4).
 | `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
 | `reference_type` | VARCHAR(30) | no | `GatewayReferenceType`: `checkout_session` / `payment_intent` / `order` / `transaction` / `subscription` / `customer` / `other` |
 | `reference_value` | VARCHAR(191) | no | the raw provider id string |
-| `payment_id` | INT UNSIGNED | yes | FK → `payments(id)` CASCADE; null when the reference is subscription-only |
+| `checkout_attempt_id` | INT UNSIGNED | yes | FK → `checkout_attempts(id)` CASCADE; set when the reference is recorded before a `payments` row exists (Phase 24 Q1) |
+| `payment_id` | INT UNSIGNED | yes | FK → `payments(id)` CASCADE; null when the reference is subscription-only or predates the payment |
 | `created_at` | DATETIME | no | write-once |
 
 `UNIQUE (provider_account_id, reference_type, reference_value)` =
 `uniq_gateway_references_account_type_value`; `INDEX (payment_id)` =
-`idx_gateway_references_payment`. **No `subscription_id` column yet** — `subscriptions` doesn't
-exist until Phase 26; it will be added there as an additive, nullable column.
+`idx_gateway_references_payment`; `INDEX (checkout_attempt_id)` =
+`idx_gateway_references_checkout_attempt` (Phase 24). Exactly one of `checkout_attempt_id` /
+`payment_id` is set on any row — app-enforced (`GatewayReference::forCheckoutAttempt()` /
+`::forPayment()`), not a DB constraint: a provider checkout-session reference (Stripe session id,
+Mollie payment id, PayPal order id) is created at `checkout_attempts.status =
+provider_checkout_created`, before the attempt reaches `confirmed` (`Payment::create()`'s
+precondition, Phase 20 Q1), so `checkout_attempt_id` is the only parent available at that point;
+`payment_id` is filled in for references recorded afterward. **No `subscription_id` column yet** —
+`subscriptions` doesn't exist until Phase 26; it will be added there as an additive, nullable
+column, the same pattern as `checkout_attempt_id`.
 
 ### Lifecycle (`PaymentStatus`, Phase 20 Q2)
 

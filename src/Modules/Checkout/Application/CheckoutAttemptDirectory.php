@@ -16,4 +16,11 @@ interface CheckoutAttemptDirectory
     public function forClient(int $clientId): array;
 
     public function findByAttemptReference(int $clientId, string $attemptReference): ?CheckoutAttemptSummary;
+
+    /**
+     * By id alone — used by the `GET /api/v1/payments/{id}` family (Phase
+     * 24), which addresses the whole payment lifecycle (pre- and
+     * post-conversion) by the stable checkout attempt id.
+     */
+    public function findById(int $id): ?CheckoutAttemptSummary;
 }

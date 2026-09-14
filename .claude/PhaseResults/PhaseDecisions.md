@@ -16,6 +16,196 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 24 — Payment creation flow
+
+### Q5b — Capability gating for cancel/refund/capture
+
+**Question:** Should `cancel`/`refund`/`capture` be gated by the adapter's actual implemented
+interface (`instanceof SupportsRefunds`/`SupportsAuthCapture`) alone, or also by the resolved
+`ProviderCapabilities` for that client+country+provider combination?
+
+**Options:**
+
+1. **Both** — check the resolved `ProviderCapabilities` first (a client/country config can
+   disable a capability the adapter technically supports), then `instanceof` as the type-safe call
+   guard before invoking the method. Matches the existing pattern in `ProviderRouter`/
+   `SelectCheckoutProviderHandler`.
+2. Adapter interface only — just `instanceof SupportsRefunds`/`SupportsAuthCapture`. Simpler, but
+   ignores CLAUDE.md's per-client/per-country capability override requirement.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — both. `ProviderCapabilities` checked first (business-rule rejection via
+`DomainError` if disabled for that client/country/provider), `instanceof` checked second as the
+type-safe guard immediately before the call (a defensive check — should never fail if the
+capability was actually resolved from a real adapter's declared capabilities, but costs nothing to
+assert).
+
+**Status:** Decided
+
+---
+
+### Q5 — Which stored GatewayReference a refund/capture/cancel acts on
+
+**Question:** A payment can have more than one recorded `GatewayReference` (e.g. Stripe's Checkout
+Session id from creation vs. its PaymentIntent id, which `capturePayment()`/`cancelPayment()`/
+`refundPayment()` actually require; PayPal's Order id vs. the Capture id `refundPayment()` needs).
+Nothing today persists that second-level reference — `ProviderPaymentStatus::$paymentIntentReference`
+(Stripe) is computed on every `getPaymentStatus()` call and then discarded. How should a later
+refund/capture/cancel request pick the right one?
+
+**Options:**
+
+1. **Reference type per action** — when `getPaymentStatus()` returns a secondary reference, persist
+   it as a second `GatewayReference::forPayment(paymentId, GatewayReferenceType::PaymentIntent, …)`
+   row once the `Payment` exists; refund/capture/cancel handlers ask which `GatewayReferenceType`
+   the target provider needs for that action and fetch that specific row. Extensible per-provider,
+   no new migration, fixes the latent "Stripe PaymentIntent id computed then thrown away" gap.
+2. Always use the latest reference — keep taking the last recorded row regardless of type. Wrong
+   for Stripe today (refund would receive a Checkout Session id, which the PaymentIntents API
+   rejects) unless every call re-derives the id via a fresh `getPaymentStatus()` first.
+3. `payments.provider_reference` column — set once at confirmation, read directly. Simplest read
+   path, but duplicates what `gateway_references` already exists to hold, and needs a migration.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — reference-type-per-action. `ReconcileCheckoutStatusHandler` persists
+`GatewayReference::forPayment(..., GatewayReferenceType::PaymentIntent, ...)` when a Stripe-style
+adapter returns a secondary reference; `RefundPaymentHandler`/`CapturePaymentHandler`/
+`CancelPaymentHandler` each resolve the reference type they need per adapter and look it up via
+`GatewayReferenceRepository::forPayment()`. PayPal's Order→Capture-id lookup for refund stays
+inside `PayPalAdapter::refundPayment()` itself (it already does this — fetches the order, finds the
+capture id, and refunds that) since Gomrok never needs to store the capture id separately; it's an
+adapter-internal detail of "refund this Order," not a second externally-addressable reference.
+
+**Status:** Decided
+
+---
+
+### Q4 — Return-token format, hashing, and storage (user-specified correction)
+
+**Question:** The public return endpoint needs to identify which checkout attempt a request
+belongs to, using only information Gomrok can embed in the successUrl/cancelUrl *before* calling
+the provider (Mollie/PayPal don't support Stripe's placeholder-substitution trick for echoing
+back their own reference). Claude proposed a two-option question (a fully random opaque token vs.
+embedding the raw attempt reference/id); the user rejected the multiple-choice framing and
+specified the exact design directly instead.
+
+**User's exact specification:**
+
+- The return token has **exactly two parts**: `{checkout_attempt_id}_{hash}` (e.g. `123_9f4b7c...`).
+  Separator is `_`. If parsing yields anything other than exactly two parts, the token is invalid
+  — reject it. No three-part format; no separate `id` + `id_hash` query parameters — exactly one
+  query parameter, `return_token={checkout_attempt_id}_{hash}`.
+- **Hash generation:** HMAC-SHA256 where the message is the `checkout_attempt_id` and the
+  secret/salt is the literal string `gomrokimo` — `hash = HMAC_SHA256(checkout_attempt_id,
+  "gomrokimo")`.
+- **Verification:** split `return_token` into exactly `checkout_attempt_id` + `hash`; recompute
+  the expected hash the same way; compare received vs. expected using a **timing-safe**
+  comparison (`hash_equals()`); reject on mismatch; on match, load the checkout attempt by id.
+- **Storage:** add a column to `checkout_attempts` named `hash_return_token`, storing **only the
+  hash part** (not the full `{id}_{hash}` token).
+- **Important:** the token is not proof of payment — it only proves the return URL was genuinely
+  generated by Gomrok for that checkout attempt. The return endpoint must still verify the actual
+  payment status with the provider's own API before advancing the attempt.
+- **Secret handling:** `"gomrokimo"` is used as a hardcoded placeholder for now, explicitly
+  intended to move to environment configuration later — not done in this phase.
+
+**Selected:** Implemented exactly as specified above. `CheckoutReturnToken` (pure domain value
+object, no I/O) issues/parses/verifies the token; the secret is bound once in the Checkout
+module's `definitions.php` (a single named value, not scattered inline) so swapping it for an env
+var later is a one-line change — the literal value stored there is still `"gomrokimo"`, per the
+"for now hardcode it" instruction.
+
+**Status:** Decided
+
+---
+
+### Q3 — Source of the client's success/cancel pages
+
+**Question:** Since Gomrok owns the return endpoint (Q2), where should the client's own
+success/cancel pages — the ones Gomrok redirects the browser onward to after verifying status —
+come from?
+
+**Options:**
+
+1. **Per-client configured URLs** — store a client-level success/cancel URL pair (e.g. new
+   `EndpointPurpose` values alongside the existing `PaymentStatus`/`SubscriptionStatus`/
+   `RefundStatus` outbound-notification endpoints in the Clients module), configured once per
+   client rather than trusted per request. Gomrok never redirects a browser to an arbitrary URL
+   supplied in an API call — avoids an open-redirect risk and matches CLAUDE.md's already-
+   established "client callback endpoints" concept.
+2. Client-supplied per request — `POST /api/v1/payments` accepts `success_url`/`cancel_url`
+   directly in the body, same shape the provider adapters' own `CreatePaymentCommand` already
+   takes. More flexible per purchase flow, but Gomrok would need its own validation (e.g. a
+   per-client domain allowlist) to avoid becoming an open redirect target.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — per-client configured success/cancel URLs.
+
+**Status:** Decided
+
+---
+
+### Q2 — Who owns the browser's return from the provider
+
+**Question:** Nothing today calls the provider back after the customer leaves its hosted checkout
+page, so nothing drives `CheckoutAttemptStatus` from `ReturnedFromProvider` to `Confirmed`. Who
+should own that return flow in this phase?
+
+**Options:**
+
+1. **Gomrok owns a dedicated return endpoint** — a new browser-facing endpoint (no API-key auth —
+   the customer's browser hits it directly) that the adapter's `successUrl`/`cancelUrl` point at.
+   It calls the adapter's `getPaymentStatus()`, drives `ReturnedFromProvider` → `Confirmed` (or an
+   exit status) → `ConvertedToPayment` via the existing `CreatePaymentHandler`, then
+   302-redirects the browser onward to the client's own success/cancel page. Matches CLAUDE.md's
+   "receive return-url events from the gateway" language directly; confirmation happens the
+   instant the customer returns.
+2. Client owns the return URL; status-poll only — the adapter's `successUrl`/`cancelUrl` point
+   straight at the client app's own pages; `GET /api/v1/payments/{id}/status` becomes the only
+   mechanism that advances state. Less scope this phase, but immediate confirmation on return
+   isn't built until a later phase.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — Gomrok owns a dedicated return endpoint.
+
+**Status:** Decided
+
+---
+
+### Q1 — Where to store the provider checkout-session reference before a Payment exists
+
+**Question:** `Payment::create()` (Phase 20 Q1) requires the checkout attempt to already be
+`Confirmed`, but the provider checkout-session reference (Stripe session id, Mollie payment id,
+PayPal order id) is created much earlier — at `ProviderSelected` → `ProviderCheckoutCreated` —
+before any `Payment` row exists. `gateway_references` (Phase 20) has only a nullable `payment_id`,
+no `checkout_attempt_id`, so there is currently nowhere to durably store that reference for
+reverse lookup until a `Payment` exists.
+
+**Options:**
+
+1. **Add a nullable `checkout_attempt_id` to `gateway_references`** — additive migration; a row
+   links to whichever of `checkout_attempt_id`/`payment_id` exists when it's written. Leaves the
+   already-settled Phase 20 Q1 rule (Payment only created from a Confirmed attempt) unchanged.
+   Matches the project's established pattern of additive nullable columns for exactly this kind of
+   forward-reference gap (`gateway_references.subscription_id` is already planned the same way for
+   Phase 26).
+2. Create the Payment row earlier instead — relax `CreatePaymentHandler` so a Payment can exist as
+   soon as a provider checkout session exists, before the customer has done anything. Avoids a
+   schema change but reopens the already-settled Phase 20 Q1 decision and allows a Payment record
+   for a purchase the customer never completed.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — add a nullable `checkout_attempt_id` to `gateway_references`.
+
+**Status:** Decided
+
+---
+
 ## Phase 23 — Ziraat adapter
 
 ### Q1 — Whether to build the Ziraat adapter this phase

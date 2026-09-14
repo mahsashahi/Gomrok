@@ -41,7 +41,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 21 | Provider adapter port & Stripe adapter | ☑ | 2026-09-11 18:45 | 2026-09-11 20:11 | 6–9h | 1h 26m | N/A |
 | 22 | Mollie & PayPal adapters | ☑ | 2026-09-11 23:22 | 2026-09-12 23:00 | 6–9h | N/A (spans two sessions) | N/A |
 | 23 | Ziraat adapter (deferred) | ☐ | — | — | 4–7h | — | — |
-| 24 | Payment creation flow | ☐ | — | — | 5–8h | — | — |
+| 24 | Payment creation flow | ◐ | 2026-09-13 09:00 | — | 5–8h | — (in progress) | N/A |
 | 25 | Webhooks module | ☐ | — | — | 5–8h | — | — |
 | 26 | Subscriptions module | ☐ | — | — | 6–9h | — | — |
 | 27 | **Admin Module Views and Panels** | ☐ | — | — | 12–20h | — | — |
@@ -808,23 +808,75 @@ rejection tested. No Ziraat-specific tests exist yet; none are added while defer
 
 **Goal:** the end-to-end "create a payment" path.
 
-**Scope:**
-- `POST /api/v1/payments`: authenticate → resolve package / price / voucher → resolve provider /
-  method / purchase type → create the provider transaction → persist snapshots + gateway
-  references → return the redirect / checkout URL. Provider-hosted UI only; Gomrok never touches
-  raw card data.
-- `GET /api/v1/payments/{id}`, `/status`, `POST .../cancel`, `/refund`, `/capture` — each gated
-  by provider + client capability.
+**Status: in progress.** Built so far: `POST /api/v1/payments`, the provider-return flow, and the
+two read endpoints. Not built yet: `cancel`/`refund`/`capture` and the Phase 15 A/B re-ask.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 24 Q1–Q5b):
+- **Q5** — a refund/capture/cancel resolves the `GatewayReference` to act on via
+  reference-type-per-action: prefer the "deeper" `GatewayReferenceType::PaymentIntent` reference
+  (Stripe's PaymentIntent id, PayPal's capture id — both surfaced via the same
+  `ProviderPaymentStatus::$paymentIntentReference` field) when one was recorded, else fall back to
+  the original `CheckoutSession` reference (Mollie: one id serves every action).
+- **Q5b** — capability gating checks **both** the resolved `ProviderCapabilityResolver` capability
+  (client/country config can disable what the adapter supports) and the adapter's actual
+  `SupportsRefunds`/`SupportsAuthCapture` implementation as a type-safe guard.
+- **Q1** — `gateway_references` gets nullable `checkout_attempt_id` **and** nullable `payment_id`
+  columns (exactly one set per row) instead of a separate pre-payment reference table, so the same
+  reverse-lookup table serves both the pre- and post-`Payment` provider references.
+  `GatewayReference::forCheckoutAttempt()` / `::forPayment()` replace the old single `record()`.
+- **Q2** — Gomrok owns the return URL: the provider redirects back to Gomrok's own
+  `GET /payments/return` first (never straight to a client-supplied URL), which re-verifies the
+  real payment status with the provider before redirecting onward.
+- **Q3** — the onward redirect target is a **per-client, admin-configured** URL
+  (`ClientEndpoint` + new `EndpointPurpose::CheckoutSuccess`/`CheckoutCancel`), not a client-request
+  parameter — avoids open-redirect and keeps the destination under Gomrok/admin control.
+- **Q4** — the return token is **user-specified, exact format**: `return_token={checkout_attempt_id}_{hash}`,
+  `hash = HMAC_SHA256(checkout_attempt_id, "gomrokimo")`, verified with `hash_equals()`; only the
+  hash half is persisted (`checkout_attempts.hash_return_token`). The secret is hardcoded for now
+  (`Settings::$checkoutReturnTokenSecret`), to move to env config later per the user's own
+  instruction. Full verbatim spec recorded in `PhaseDecisions.md`.
+
+**Built:**
+- `src/Modules/Checkout/Domain/CheckoutReturnToken.php` — the token value object (`issue`/`parse`/`verify`).
+- `Checkout/Application/CreateProviderCheckout`, `CreateCheckoutPayment`, `ReconcileCheckoutStatus`,
+  `ConfirmCheckoutReturn` — the new orchestrating handlers (see `Architecture.md` §8, "Payment
+  creation & the return flow").
+- `Checkout/Application/ResolveCheckoutPayableAmount` — shared payable-amount logic, extracted out
+  of `CreatePaymentHandler` to avoid duplicating the voucher-override rule.
+- `POST /api/v1/payments`, `GET /payments/return` (public), `GET /api/v1/payments/{id}`,
+  `GET /api/v1/payments/{id}/status` — `src/Http/Api/Payments{Create,Return,Show,Status}Action.php`.
+- Migrations `20260913090001` (gateway_references.checkout_attempt_id) and `20260913090002`
+  (checkout_attempts.hash_return_token).
+- Tests: `CheckoutReturnTokenTest`, `CreateProviderCheckoutHandlerTest`,
+  `CreateCheckoutPaymentHandlerTest`, `ReconcileCheckoutStatusHandlerTest`,
+  `PaymentsCreateActionTest`, `PaymentsReturnActionTest`, `PaymentsShowActionTest`,
+  `PaymentsStatusActionTest`, plus the updated `CreatePaymentHandlerTest`.
+
+`POST /api/v1/payments/{id}/cancel`, `/refund`, `/capture` — each gated by both the resolved
+provider capability and the adapter's actual capability interface (Q5b) — are now built too:
+`Payments/Application/{CancelPayment,RefundPayment,CapturePayment}Handler` resolve the payment's
+provider context (`ResolvePaymentActionContext`, Q5), check capability, call the adapter, and
+delegate the actual persistence to the existing (Phase 20) `RecordProviderTransactionHandler`.
+Building this surfaced and fixed two latent gaps: a `Payment` was never driven past its initial
+`created` status after creation (now `ReconcileCheckoutStatusHandler` advances it to `paid`), and
+the Stripe/PayPal "deeper" provider reference (`ProviderPaymentStatus::$paymentIntentReference`)
+was computed and discarded rather than persisted.
+
+**Still pending:**
 - **A/B price-list visitor assignment (deferred from Phase 15):** re-ask Phase 15 Q4 (stateless
   vs. persisted `price_list_assignments`) and Q5 (management surface + which endpoints persist)
   with their full option lists, then build the deterministic bucket-assignment service,
   disable-fallback reassignment, and `visitor_ref` wiring so the resolved price reflects the
   visitor's list. Exit criteria: stable assignment, even split, disable-fallback.
 
-**DB:** `price_list_assignments` (if the re-asked Phase 15 Q4 lands on the persisted option).
+**DB:** `gateway_references.checkout_attempt_id`, `checkout_attempts.hash_return_token` (both
+additive; no further schema changes for cancel/refund/capture — the existing `GatewayReferenceType::PaymentIntent`
+case covers the deeper reference). `price_list_assignments` still pending, if the re-asked Phase
+15 Q4 lands on the persisted option.
 
-**Exit:** happy path per provider (SDK mocked), capability rejections, and idempotency tested;
-A/B assignment stable + even + disable-fallback tested.
+**Exit (not yet met):** happy path per provider (SDK mocked), capability rejections, and
+idempotency tested for creation/return/status/cancel/refund/capture — done; A/B assignment
+(stable + even + disable-fallback) tested — pending.
 
 ## Phase 25 — Webhooks module
 

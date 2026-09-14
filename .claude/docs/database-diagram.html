@@ -747,6 +747,7 @@ erDiagram
         int provider_account_id FK
         varchar reference_type
         varchar reference_value
+        int checkout_attempt_id FK
         int payment_id FK
         datetime created_at
     }
@@ -760,6 +761,7 @@ erDiagram
     provider_accounts ||--o{ provider_customers : "recognises"
     clients ||--o{ gateway_references : "owns"
     provider_accounts ||--o{ gateway_references : "issues"
+    checkout_attempts ||--o{ gateway_references : "referenced by (pre-payment)"
     payments ||--o{ gateway_references : "referenced by"
 </pre>
 </div>

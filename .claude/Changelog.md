@@ -7,6 +7,165 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-13 — Phase 24 (in progress): cancel/refund/capture
+
+**Summary.** Built the capability-gated `POST /api/v1/payments/{id}/cancel`, `/refund`,
+`/capture` endpoints — the remaining action endpoints from Phase 24's original scope (the A/B
+price-list re-ask is still pending). Also closed two latent gaps found while building this:
+(1) a newly created `Payment` was never driven past its initial `created` status — nothing called
+`ChangePaymentStatusHandler` after `CreatePaymentHandler` even though the checkout attempt only
+reaches `Confirmed` because the provider already reported the payment paid; (2) Stripe's
+PaymentIntent id (and PayPal's capture id, surfaced through the same field) was computed by every
+`getPaymentStatus()` call and then discarded — refund/capture/cancel need it and it was never
+persisted anywhere.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 24 Q5/Q5b):
+- **Q5** which stored `GatewayReference` a refund/capture/cancel acts on: reference-type-per-action
+  — prefer the "deeper" `GatewayReferenceType::PaymentIntent` reference when one was recorded,
+  falling back to the original `CheckoutSession` reference (Mollie: one id serves every action).
+- **Q5b** capability gating: **both** the resolved `ProviderCapabilityResolver` capability (a
+  client/country config can disable a capability the adapter technically supports) and the
+  adapter's actual `SupportsRefunds`/`SupportsAuthCapture` implementation as a type-safe guard.
+
+**Files created**
+- `src/Modules/Payments/Application/PaymentActionContext.php`,
+  `ResolvePaymentActionContext.php` — resolves the adapter/capabilities/reference a post-creation
+  payment action needs, from the payment's own frozen checkout-attempt routing decision.
+- `src/Modules/Payments/Application/CancelPayment/{CancelPaymentCommand,CancelPaymentResult,CancelPaymentHandler}.php`,
+  `RefundPayment/{RefundPaymentCommand,RefundPaymentResult,RefundPaymentHandler}.php`,
+  `CapturePayment/{CapturePaymentCommand,CapturePaymentResult,CapturePaymentHandler}.php` — each
+  validates the payment's current status, resolves the provider context, checks capability, calls
+  the adapter, then delegates the actual state change to the existing (Phase 20)
+  `RecordProviderTransactionHandler` rather than duplicating its persistence/audit logic.
+- `src/Http/Api/{PaymentsCancelAction,PaymentsRefundAction,PaymentsCaptureAction}.php` — `{id}` is
+  the checkout attempt id, matching every other `/api/v1/payments/{id}*` route.
+- Tests: `CapturePaymentHandlerTest` (5), `RefundPaymentHandlerTest` (7), `CancelPaymentHandlerTest`
+  (3), `PaymentsCancelActionTest` (2), `PaymentsRefundActionTest` (2), `PaymentsCaptureActionTest`
+  (2).
+
+**Files modified**
+- `src/Modules/Checkout/Application/ReconcileCheckoutStatus/ReconcileCheckoutStatusHandler.php` —
+  now takes a `ChangePaymentStatusHandler` dependency and, after creating a `Payment`, transitions
+  it `created → pending → paid`; persists a second `GatewayReference::forPayment(...,
+  GatewayReferenceType::PaymentIntent, ...)` when `ProviderPaymentStatus::$paymentIntentReference`
+  is non-null.
+- `src/Config/routes.php` — three new POST routes inside the `/api/v1` group.
+- `tests/Support/FakePaymentProviderPort.php` — now implements `SupportsRefunds`/
+  `SupportsAuthCapture` (`refundPayment`/`authorizePayment`/`capturePayment`/`cancelPayment`),
+  gained a configurable `paymentIntentReference()`, `refundResult()`/`captureResult()`, and
+  `throwOnRefund()`/`throwOnCapture()`; `mapProviderStatusToInternalStatus()` now actually maps
+  instead of always returning `Pending` (unused by any existing assertion, so this is safe).
+- `tests/Unit/Http/{PaymentsReturnActionTest,PaymentsStatusActionTest}.php`,
+  `tests/Unit/Modules/Checkout/Application/ReconcileCheckoutStatusHandlerTest.php` — updated for
+  `ReconcileCheckoutStatusHandler`'s new constructor parameter; the latter also asserts the
+  created `Payment` ends at `PaymentStatus::Paid`.
+- `.claude/docs/Architecture.md` §8 — the "Payment creation & the return flow" subsection extended
+  with the cancel/refund/capture design and the two fixed gaps.
+
+**No database changes** (the `GatewayReferenceType::PaymentIntent` case already existed).
+
+**Tests.** 21 new tests across the six files above. Full suite green at the time of this entry:
+555 tests, 1840 assertions; `composer ci` (CS + PHPStan + tests) clean.
+
+**Known limitation.** A refund's own provider-issued reference (e.g. Stripe/Mollie/PayPal's
+refund id) is recorded only in `provider_transactions.response_payload`, not as its own
+`GatewayReference` row — a dedicated `refunds` table (CLAUDE.md's Required Database Concepts list)
+is out of scope for this slice and needs its own database-design confirmation first.
+
+**No breaking changes.**
+
+## 2026-09-13 — Phase 24 (in progress): payment creation flow, provider return flow
+
+**Summary.** Built the core of `POST /api/v1/payments`: authenticate → create a checkout attempt →
+resolve pricing → (reserve a voucher, if a code was supplied) → select a provider → create the
+provider-hosted checkout session → return a redirect URL. Also built the provider return flow
+(`GET /payments/return`, public) and the two read endpoints (`GET /api/v1/payments/{id}`,
+`/status`). Cancel/refund/capture and the deferred Phase 15 A/B visitor-assignment re-ask are not
+built yet — the phase stays **in progress**.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 24 Q1–Q4):
+- **Q1** `gateway_references` gets both a nullable `checkout_attempt_id` and a nullable
+  `payment_id` column (exactly one set per row) instead of a separate pre-payment table, since a
+  provider checkout session must be recorded for reverse lookup before a `payments` row can exist.
+- **Q2** Gomrok owns the return URL — the provider redirects back to Gomrok's own
+  `GET /payments/return` first, which re-verifies the real status with the provider (the return
+  hit itself is never treated as proof of payment) before redirecting the customer onward.
+- **Q3** the onward redirect target is a per-client, admin-configured URL
+  (`EndpointPurpose::CheckoutSuccess`/`CheckoutCancel`), never a client-supplied parameter.
+- **Q4** the return token format was dictated exactly by the user, not chosen from options:
+  `return_token={checkout_attempt_id}_{hash}` (exactly two `_`-separated parts),
+  `hash = HMAC_SHA256(checkout_attempt_id, "gomrokimo")`, verified with `hash_equals()`, only the
+  hash persisted (`checkout_attempts.hash_return_token`). The secret is intentionally hardcoded
+  for now (`Settings::$checkoutReturnTokenSecret`) — moving it to environment config is explicitly
+  deferred by the user's own instruction, not an oversight.
+
+**Files created**
+- `src/Modules/Checkout/Domain/CheckoutReturnToken.php` — HMAC-SHA256 issue/parse/verify value object.
+- `src/Modules/Checkout/Application/CheckoutPayableAmount.php`,
+  `ResolveCheckoutPayableAmount.php` — shared payable-amount resolution (pricing snapshot,
+  overridden by a reserved voucher's payable amount).
+- `src/Modules/Checkout/Application/CreateProviderCheckout/{Command,Result,Handler}.php` — calls
+  the real provider adapter, builds the Gomrok-owned return URL, records the
+  `GatewayReference::forCheckoutAttempt()`, transitions to `ProviderCheckoutCreated`.
+- `src/Modules/Checkout/Application/CreateCheckoutPayment/{Command,Result,Handler}.php` — the
+  `POST /api/v1/payments` pipeline orchestrator.
+- `src/Modules/Checkout/Application/ReconcileCheckoutStatus/{Result,Handler}.php` — shared core:
+  calls the provider, transitions the attempt, creates the `Payment` when confirmed. Reused by
+  both the public return endpoint and the authenticated status poll.
+- `src/Modules/Checkout/Application/ConfirmCheckoutReturn/{Command,Result,Handler}.php` — verifies
+  the return token, delegates to `ReconcileCheckoutStatusHandler`, resolves the client redirect URL.
+- `src/Http/Api/Payments{Create,Return,Show,Status}Action.php` — the four new HTTP actions.
+- `src/Database/Migrations/20260913090001_add_checkout_attempt_id_to_gateway_references.php`,
+  `20260913090002_add_hash_return_token_to_checkout_attempts.php`.
+- Tests: `CheckoutReturnTokenTest`, `CreateProviderCheckoutHandlerTest`,
+  `CreateCheckoutPaymentHandlerTest`, `ReconcileCheckoutStatusHandlerTest`,
+  `PaymentsCreateActionTest`, `PaymentsReturnActionTest`, `PaymentsShowActionTest`,
+  `PaymentsStatusActionTest`.
+- Test doubles: `tests/Support/InMemoryCheckoutAttemptDirectory.php`,
+  `InMemoryPaymentDirectory.php`, `FakePaymentProviderPort.php`, `StubProviderAdapterFactory.php`.
+
+**Files modified**
+- `src/Modules/Payments/Domain/GatewayReference.php` / `GatewayReferenceRepository.php` /
+  `Infrastructure/PdoGatewayReferenceRepository.php` — dual-parent columns, `forCheckoutAttempt()`
+  read method.
+- `src/Modules/Checkout/Domain/CheckoutAttempt.php` / `Infrastructure/PdoCheckoutAttemptRepository.php`
+  — `hashReturnToken`, `issueReturnToken()`.
+- `src/Modules/Checkout/Application/CheckoutAttemptDirectory.php` /
+  `Infrastructure/PdoCheckoutAttemptDirectory.php` — `findById()`.
+- `src/Modules/Clients/Domain/EndpointPurpose.php` — `CheckoutSuccess`/`CheckoutCancel` cases.
+- `src/Modules/Clients/Application/ClientDirectory.php` / `Infrastructure/PdoClientDirectory.php`
+  — `findActiveEndpointUrl()`.
+- `src/Modules/Payments/Application/CreatePayment/CreatePaymentHandler.php` — refactored to use
+  `ResolveCheckoutPayableAmount` instead of duplicating the pricing/voucher lookup.
+- `src/Shared/Domain/ErrorType.php` / `DomainError.php` — new `UpstreamFailure` (HTTP 502), for
+  provider-adapter failures during checkout creation.
+- `src/Config/Settings.php`, `.env.example` — `appBaseUrl` (`APP_BASE_URL`),
+  `checkoutReturnTokenSecret` (hardcoded `'gomrokimo'`, not env-backed yet — intentional).
+- `src/Config/routes.php` — `GET /payments/return` outside the auth group; the four new routes
+  inside `/api/v1`.
+- `src/Shared/Http/ClientContext.php` — `keyMode()`.
+- `.claude/docs/Architecture.md` §8 — new "Payment creation & the return flow" subsection;
+  `.claude/docs/Phases.md` Phase 24 status/body updated to reflect what's actually built vs.
+  pending; `.claude/docs/database-design.md` / `database-diagram.md` / `database-diagram.html` /
+  `db_explain.md` — `gateway_references.checkout_attempt_id` documented (the `hash_return_token`
+  column was already covered by the Checkout table entry's general shape).
+
+**Database changes.** Two additive migrations (see above); no destructive changes, no renames.
+
+**Tests.** `CheckoutReturnTokenTest` (11), `CreateProviderCheckoutHandlerTest` (6),
+`CreateCheckoutPaymentHandlerTest` (4), `ReconcileCheckoutStatusHandlerTest` (5),
+`PaymentsCreateActionTest` (3), `PaymentsReturnActionTest` (4), `PaymentsShowActionTest` (2),
+`PaymentsStatusActionTest` (2), plus `CreatePaymentHandlerTest` updated for the refactored
+constructor. Run with `vendor/bin/phpunit`. Full suite green at the time of this entry: 495 tests,
+1778 assertions; `composer ci` (CS + PHPStan + tests) clean.
+
+**Known limitation.** `CreateCheckoutPaymentHandler`'s pipeline is idempotent up through
+`ProviderSelected` via each sub-handler's own domain-key idempotency, but not idempotent past that
+point on a bare retry (a second full run fails with `checkout_attempt.provider_not_selected`) — the
+HTTP `Idempotency-Key` header is the actual defense for the whole pipeline.
+
+**No breaking changes.**
+
 ## 2026-09-13 — Phase 23: Ziraat adapter deferred
 
 **Summary.** Decided not to build `ZiraatAdapter` this phase. There are no verified Ziraat sandbox

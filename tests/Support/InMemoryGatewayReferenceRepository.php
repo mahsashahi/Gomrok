@@ -24,6 +24,7 @@ final class InMemoryGatewayReferenceRepository implements GatewayReferenceReposi
             $reference->providerAccountId,
             $reference->referenceType,
             $reference->referenceValue,
+            $reference->checkoutAttemptId,
             $reference->paymentId,
             $reference->createdAt,
         );
@@ -45,5 +46,10 @@ final class InMemoryGatewayReferenceRepository implements GatewayReferenceReposi
     public function forPayment(int $paymentId): array
     {
         return array_values(array_filter($this->byId, static fn (GatewayReference $r): bool => $r->paymentId === $paymentId));
+    }
+
+    public function forCheckoutAttempt(int $checkoutAttemptId): array
+    {
+        return array_values(array_filter($this->byId, static fn (GatewayReference $r): bool => $r->checkoutAttemptId === $checkoutAttemptId));
     }
 }

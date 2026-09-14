@@ -7,6 +7,7 @@ namespace Gomrok\Tests\Support;
 use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Clients\Application\ClientSnapshot;
 use Gomrok\Modules\Clients\Domain\ClientStatus;
+use Gomrok\Modules\Clients\Domain\EndpointPurpose;
 
 /**
  * A {@see ClientDirectory} with a single configurable client — for use-case
@@ -14,11 +15,21 @@ use Gomrok\Modules\Clients\Domain\ClientStatus;
  */
 final class StubClientDirectory implements ClientDirectory
 {
+    /** @var array<string, string> keyed by purpose value */
+    private array $endpoints = [];
+
     public function __construct(
         private int $clientId = 7,
         private string $slug = 'stub-client',
         private bool $active = true,
     ) {
+    }
+
+    public function withEndpoint(EndpointPurpose $purpose, string $url): self
+    {
+        $this->endpoints[$purpose->value] = $url;
+
+        return $this;
     }
 
     public function findById(int $id): ?ClientSnapshot
@@ -34,6 +45,11 @@ final class StubClientDirectory implements ClientDirectory
     public function existsById(int $id): bool
     {
         return $id === $this->clientId;
+    }
+
+    public function findActiveEndpointUrl(int $clientId, EndpointPurpose $purpose): ?string
+    {
+        return $clientId === $this->clientId ? ($this->endpoints[$purpose->value] ?? null) : null;
     }
 
     private function snapshot(): ClientSnapshot

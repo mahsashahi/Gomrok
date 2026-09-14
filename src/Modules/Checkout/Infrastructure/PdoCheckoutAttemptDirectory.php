@@ -39,6 +39,15 @@ final readonly class PdoCheckoutAttemptDirectory implements CheckoutAttemptDirec
         return \is_array($row) ? $this->toSummary($row) : null;
     }
 
+    public function findById(int $id): ?CheckoutAttemptSummary
+    {
+        $statement = $this->pdo->prepare('SELECT * FROM checkout_attempts WHERE id = :id');
+        $statement->execute(['id' => $id]);
+        $row = $statement->fetch();
+
+        return \is_array($row) ? $this->toSummary($row) : null;
+    }
+
     /**
      * @param array<array-key, mixed> $row
      */

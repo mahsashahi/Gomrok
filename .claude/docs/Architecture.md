@@ -532,8 +532,8 @@ than transient in-memory state.
   and admin visibility, per the user's explicit requirement.
 - Audited handlers + `checkout:*` CLI (`bin/CreateCheckoutAttempt.php`,
   `ResolveCheckoutPricing.php`, `ReserveCheckoutVoucher.php`, `SelectCheckoutProvider.php`,
-  `SetCheckoutAttemptStatus.php`, `ListCheckoutAttempts.php`). No HTTP endpoint yet (mounts with
-  the payment-creation flow, Phase 24).
+  `SetCheckoutAttemptStatus.php`, `ListCheckoutAttempts.php`). HTTP endpoints added Phase 24 (see
+  below).
 
 ### Payments (Phase 20 — aggregate & lifecycle)
 
@@ -572,6 +572,92 @@ than transient in-memory state.
   payment's own status change. Audited handlers + `payment:*` CLI
   (`bin/CreatePayment.php`, `RecordProviderTransaction.php`, `SetPaymentStatus.php`,
   `LinkProviderCustomer.php`, `ListPayments.php`).
+
+### Payment creation & the return flow (Phase 24 — in progress)
+
+Wires the Checkout/Payments/Providers modules together behind four HTTP endpoints. Still
+in progress: capability-gated cancel/refund/capture and the Phase 15 A/B visitor-assignment
+re-ask are not built yet.
+
+- **`gateway_references` dual-parent columns (Q1).** Both `checkout_attempt_id` and `payment_id`
+  are nullable on the same table; exactly one is set per row. `GatewayReference` gained two named
+  constructors — `forCheckoutAttempt(...)` and `forPayment(...)` — replacing the old single
+  `record()` factory, because a provider checkout session must be recorded for reverse lookup
+  *before* a `payments` row exists (no Payment until `confirmed`), while a later transaction still
+  needs to reference the finished payment. `GatewayReferenceRepository::forCheckoutAttempt(int)`
+  is the reverse-lookup query the return endpoint uses.
+- **Gomrok owns the return URL, not the client (Q2).** `POST /api/v1/payments` never accepts a
+  client-supplied redirect URL. `CreateProviderCheckoutHandler` builds the provider return URL
+  itself (`{appBaseUrl}/payments/return?return_token=…&outcome=success|cancel`) and the provider
+  redirects the customer back to Gomrok first. Gomrok re-verifies the actual payment status with
+  the provider API — the return hit is never trusted as proof of payment — then redirects onward
+  to a **per-client, admin-configured** URL (Q3): `ClientEndpoint` gained
+  `EndpointPurpose::CheckoutSuccess` / `CheckoutCancel` (plain-VARCHAR column, no migration), and
+  `ClientDirectory::findActiveEndpointUrl(clientId, purpose)` looks it up. No endpoint configured
+  → the return action falls back to a JSON body instead of a redirect (never a 500, never an open
+  redirect to an untrusted URL).
+- **`CheckoutReturnToken` (Q4, exact format dictated by the user).** The return URL identifies the
+  attempt via exactly one query parameter, `return_token={checkout_attempt_id}_{hash}` — two
+  parts only, separator `_`. `hash = HMAC_SHA256(checkout_attempt_id, secret)`; verification
+  recomputes the hash and compares with `hash_equals()` (timing-safe). Only the hash half is
+  persisted, in `checkout_attempts.hash_return_token`, so a leaked column value alone can't forge
+  a token for a different id. The secret is `"gomrokimo"`, **hardcoded** in
+  `Settings::$checkoutReturnTokenSecret` — deliberately not environment-backed yet, per explicit
+  instruction to move it to env only later. The token is proof only that *Gomrok* generated this
+  return URL for this attempt, never proof of payment; `ConfirmCheckoutReturnHandler` always calls
+  through to the same provider re-verification as the authenticated poll below.
+- **`ResolveCheckoutPayableAmount`** — extracted shared logic (pricing snapshot's amount,
+  overridden by the voucher redemption's payable amount when one was reserved) used by both
+  `CreatePaymentHandler` and `CreateProviderCheckoutHandler` so the "what does the customer
+  actually owe" rule lives in exactly one place.
+- **`ReconcileCheckoutStatusHandler`** is the single shared core for "ask the provider, transition
+  the attempt, create the Payment if paid" — called by both the public return endpoint and the
+  authenticated on-demand status poll, so there is exactly one place that talks to
+  `PaymentProviderPort::getPaymentStatus()` for a checkout attempt. If the attempt is already
+  terminal it returns as-is without a second provider call. It checks `CreatePaymentHandler`'s
+  `Result` and propagates a failure rather than leaving the attempt silently stuck at `confirmed`
+  with no `Payment` row (a real bug caught by `ReconcileCheckoutStatusHandlerTest`). It also drives
+  the new `Payment` from `created` to `paid` via `ChangePaymentStatusHandler` (through `pending`,
+  since `PaymentStatus`'s allowed-next-statuses graph has no direct `created → paid` edge) — a
+  second latent gap this phase closed: `CreatePaymentHandler` always creates at `created` and
+  nothing drove it further until now, even though the attempt only reaches `Confirmed` because the
+  provider already reported it paid.
+- **HTTP surface:**
+  - `POST /api/v1/payments` (auth, idempotent via `Idempotency-Key`) — `CreateCheckoutPaymentHandler`
+    composes `CreateCheckoutAttemptHandler → ResolveCheckoutPricingHandler → (ReserveCheckoutVoucherHandler
+    if a voucher code was supplied) → SelectCheckoutProviderHandler → CreateProviderCheckoutHandler`
+    in one pipeline; rejects `PurchaseType::Subscription` upfront (subscriptions are a separate
+    Phase 26 endpoint). Idempotent up through `ProviderSelected` via each sub-handler's own
+    domain-key idempotency, but **not** idempotent past that point on a bare retry — the HTTP
+    `Idempotency-Key` header is the real defense for the whole pipeline. Returns `201` with
+    `{checkout_attempt_id, status, redirect_url, provider_reference}`.
+  - `GET /payments/return?return_token=…&outcome=…` — **public**, outside the `/api/v1` group (no
+    `AuthenticationMiddleware`/`IdempotencyMiddleware`), since the provider — not an authenticated
+    client — hits it. `302` to the client's configured success/cancel URL when the reconciled
+    outcome resolves one, else a `200` JSON body.
+  - `GET /api/v1/payments/{id}` (auth) — `{id}` is always the `checkout_attempt_id`, the one stable
+    client-facing identifier across the whole lifecycle (pre- and post-`Payment`, since no
+    `payments` row exists before `confirmed`). Returns the `Payment`'s fields once one exists,
+    else the checkout attempt's own pre-payment state.
+  - `GET /api/v1/payments/{id}/status` (auth) — the authenticated equivalent of the return flow:
+    validates ownership via `CheckoutAttemptDirectory`, then calls `ReconcileCheckoutStatusHandler`
+    directly for a live re-check against the provider.
+  - `POST /api/v1/payments/{id}/cancel`, `/refund`, `/capture` (auth) — gated by both the resolved
+    `ProviderCapabilityResolver` capability for that client/country/provider and the adapter's
+    actual `SupportsAuthCapture`/`SupportsRefunds` implementation (Q5b — "both", not either alone).
+    Each resolves the right `GatewayReference` to act on via `ResolvePaymentActionContext` (Q5):
+    prefer the "deeper" reference under `GatewayReferenceType::PaymentIntent` — Stripe's
+    PaymentIntent id, PayPal's capture id, both surfaced through the same
+    `ProviderPaymentStatus::$paymentIntentReference` field and now persisted by
+    `ReconcileCheckoutStatusHandler` when non-null — falling back to the original
+    `CheckoutSession` reference when no deeper one was ever recorded (Mollie: one id serves every
+    action). `CancelPaymentHandler`/`RefundPaymentHandler`/`CapturePaymentHandler` each delegate
+    the actual persistence — `provider_transactions` row, `PaymentAttempt` bookkeeping, the
+    `Payment` status transition, and the audit entry — to the existing (Phase 20)
+    `RecordProviderTransactionHandler`, rather than duplicating that logic a fourth time.
+    Refund's `refunded`-vs-`partially_refunded` outcome is decided from the requested amount
+    against the payment's own frozen `amountMinor`, since no adapter status-mapper covers that
+    distinction (Phase 21's mappers only cover the creation-time vocabulary).
 
 ## 9. Resolution pipelines (sketch)
 

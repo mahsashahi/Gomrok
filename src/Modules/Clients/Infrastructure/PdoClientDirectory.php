@@ -7,6 +7,7 @@ namespace Gomrok\Modules\Clients\Infrastructure;
 use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Clients\Application\ClientSnapshot;
 use Gomrok\Modules\Clients\Domain\ClientStatus;
+use Gomrok\Modules\Clients\Domain\EndpointPurpose;
 use Gomrok\Shared\Infrastructure\Persistence\Row;
 use PDO;
 
@@ -44,6 +45,17 @@ final readonly class PdoClientDirectory implements ClientDirectory
         $statement->execute(['id' => $id]);
 
         return $statement->fetchColumn() !== false;
+    }
+
+    public function findActiveEndpointUrl(int $clientId, EndpointPurpose $purpose): ?string
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT url FROM client_endpoints WHERE client_id = :client_id AND purpose = :purpose AND is_active = 1 LIMIT 1',
+        );
+        $statement->execute(['client_id' => $clientId, 'purpose' => $purpose->value]);
+        $url = $statement->fetchColumn();
+
+        return \is_string($url) ? $url : null;
     }
 
     private function hydrate(mixed $row): ?ClientSnapshot

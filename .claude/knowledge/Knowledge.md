@@ -691,6 +691,80 @@ duplicate.
   unaffected, and the core provider adapter architecture already supports adding Ziraat later with
   nothing more than one more `match` arm plus a `ZiraatAdapter` class.
 
+## Payment creation flow & return token (Phase 24, in progress)
+
+- **`gateway_references` dual-parent columns, not a second table.** Both `checkout_attempt_id`
+  and `payment_id` are nullable on the same table; exactly one is set per row, enforced only
+  through the two named constructors (`forCheckoutAttempt()`/`forPayment()`) — there's no DB
+  `CHECK` constraint doing it. A provider checkout session needs to be reverse-lookup-able before
+  a `payments` row exists (no `Payment` until `confirmed`), and the same row later gets replaced
+  in spirit — not literally updated — by a `forPayment()` row once conversion happens.
+- **The return token format was dictated exactly by the user, word for word — do not "improve"
+  it.** `return_token={checkout_attempt_id}_{hash}`, exactly two `_`-separated parts (reject
+  anything else), `hash = HMAC_SHA256(checkout_attempt_id, secret)`, timing-safe compare via
+  `hash_equals()`. Only the hash half is persisted (`checkout_attempts.hash_return_token`) —
+  never the full token — so a leaked column value alone still can't forge a token for a different
+  attempt id (the id half has to match too, and it's derivable from the URL anyway so there's no
+  secrecy lost by not storing it).
+- **The secret is intentionally hardcoded (`'gomrokimo'`) in `Settings`, not env-backed.** This was
+  an explicit two-step instruction: use the literal string for now, move it to environment config
+  *later*. Don't "fix" this by wiring it to `.env` on your own initiative — it would deviate from
+  a recorded decision (`PhaseResults/PhaseDecisions.md` Phase 24 Q4).
+- **Real bug caught by testing, not by inspection:** `ReconcileCheckoutStatusHandler` originally
+  called `CreatePaymentHandler::handle()` without checking the returned `Result`. When the test
+  helper forgot to seed a `PricingDecisionSnapshot`, `CreatePaymentHandler` silently returned
+  `Result::err('payment.pricing_not_resolved')`, and the checkout attempt was left stuck at
+  `confirmed` forever with no `Payment` row and no visible error. Fix: check the result and
+  `return` it (propagate the error) if `isErr()` — a genuinely `confirmed` attempt that fails to
+  convert to a `Payment` is a real bug, not a business-rule rejection, and must surface rather than
+  vanish. Any future caller of a handler that both transitions state *and* calls another handler
+  must check that inner handler's `Result`.
+- **One shared reconciliation core, not two.** `ReconcileCheckoutStatusHandler` is called both by
+  the public `GET /payments/return` (via `ConfirmCheckoutReturnHandler`) and by the authenticated
+  `GET /api/v1/payments/{id}/status` — both need "ask the provider, transition the attempt, create
+  the Payment if paid," and duplicating that logic would risk the two paths diverging on exactly
+  the security-sensitive step (never trusting the return hit as proof of payment). If it's already
+  terminal, it returns as-is without a second provider call — avoids a live provider round-trip on
+  every poll of an already-finished attempt.
+- **`{checkout_attempt_id}` is the one stable client-facing payment identifier**, from creation
+  through to `converted_to_payment` — there is deliberately no separate "payment id" surfaced to
+  the client, because no `payments` row exists until `confirmed`, so a client polling status right
+  after `POST /api/v1/payments` has nothing else to poll with.
+- **`CreateCheckoutPaymentHandler`'s pipeline is not fully idempotent on a bare application-level
+  retry** past `ProviderSelected` (a second full run throws `checkout_attempt.provider_not_selected`
+  because `CreateCheckoutAttemptHandler`'s own idempotency returns the *existing* attempt, which is
+  already past that status) — the HTTP `Idempotency-Key` header (`IdempotencyMiddleware`) is the
+  real defense for the whole pipeline, not the sub-handlers' individual domain-key idempotency.
+- **A newly created `Payment` was silently stuck at `created` forever, until this phase's
+  cancel/refund/capture work exposed it.** `CreatePaymentHandler::handle()` always calls
+  `Payment::create()`, which fixes the initial status at `PaymentStatus::Created` — and nothing
+  called `ChangePaymentStatusHandler`/`RecordProviderTransactionHandler` afterward to advance it,
+  even in the one caller (`ReconcileCheckoutStatusHandler`) that only reaches this code path
+  *because* the provider already reported the payment paid. Fixed by having
+  `ReconcileCheckoutStatusHandler` call `ChangePaymentStatusHandler` right after creation — twice,
+  `created → pending → paid`, since `PaymentStatus::allowedNextStatuses()` has no direct
+  `created → paid` edge (only `pending`/`requires_action`/`authorized` can reach `paid`). Any
+  future caller of `CreatePaymentHandler` must remember it does **not** set a realistic status on
+  its own.
+- **`ProviderPaymentStatus::$paymentIntentReference` is a dual-purpose field, not Stripe-only.**
+  Despite the name, `PayPalAdapter::refundPayment()`'s docblock explicitly says it reuses this same
+  field for the Capture id refunds need (PayPal's "deeper reference," analogous to Stripe's
+  PaymentIntent). Mollie never populates it (one id serves every action there). Before this phase,
+  every `getPaymentStatus()` call computed this value and then discarded it — nothing persisted
+  it. Fixed by having `ReconcileCheckoutStatusHandler` persist it as a
+  `GatewayReference::forPayment(..., GatewayReferenceType::PaymentIntent, ...)` row whenever
+  non-null, so `ResolvePaymentActionContext` (used by cancel/refund/capture) can look it up later —
+  preferring that "deep" reference and falling back to the original `CheckoutSession` one when no
+  deeper reference was ever recorded.
+- **Capability gating for cancel/refund/capture checks two independent things, not one** (Phase 24
+  Q5b): `ProviderCapabilityResolver::resolve($providerTypeCode, $method)->supports(Capability::X)`
+  (the client/country-level declared capability — from `ProviderTypeDeclarations`, *not* the
+  adapter's own `getCapabilities()`) **and** `$adapter instanceof SupportsRefunds`/
+  `SupportsAuthCapture` (the type-safe call guard). Checking only one is wrong in different ways:
+  the declared-capability check alone doesn't prove the adapter class actually implements the
+  method; the `instanceof` check alone ignores a client/country config that disables a capability
+  the adapter technically supports.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

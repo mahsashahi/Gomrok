@@ -9,9 +9,17 @@ use DateTimeImmutable;
 /**
  * Makes reverse lookup possible from any provider webhook/callback (the
  * Gateway Reference Lookup Rule): given a provider account and a raw
- * reference string a webhook carries, find the client/payment/subscription it
- * belongs to. Insert-only — a reference, once recorded, is never rewritten.
- * `id` is null until persisted.
+ * reference string a webhook carries, find the client/checkout attempt/
+ * payment/subscription it belongs to. Insert-only — a reference, once
+ * recorded, is never rewritten.
+ *
+ * Exactly one of `checkoutAttemptId` / `paymentId` is set (Phase 24 Q1): a
+ * provider checkout-session reference is created at
+ * `checkout_attempts.status = provider_checkout_created`, well before the
+ * attempt reaches `confirmed` — `Payment::create()`'s precondition — so no
+ * `payments` row exists yet at write time. The two named constructors below
+ * make that invariant explicit rather than accepting one raw nullable
+ * `paymentId` with an implicit contract. `id` is null until persisted.
  */
 final readonly class GatewayReference
 {
@@ -21,13 +29,19 @@ final readonly class GatewayReference
         public int $providerAccountId,
         public GatewayReferenceType $referenceType,
         public string $referenceValue,
+        public ?int $checkoutAttemptId,
         public ?int $paymentId,
         public DateTimeImmutable $createdAt,
     ) {
     }
 
-    public static function record(int $clientId, int $providerAccountId, GatewayReferenceType $referenceType, string $referenceValue, ?int $paymentId, DateTimeImmutable $now): self
+    public static function forCheckoutAttempt(int $clientId, int $providerAccountId, GatewayReferenceType $referenceType, string $referenceValue, int $checkoutAttemptId, DateTimeImmutable $now): self
     {
-        return new self(null, $clientId, $providerAccountId, $referenceType, trim($referenceValue), $paymentId, $now);
+        return new self(null, $clientId, $providerAccountId, $referenceType, trim($referenceValue), $checkoutAttemptId, null, $now);
+    }
+
+    public static function forPayment(int $clientId, int $providerAccountId, GatewayReferenceType $referenceType, string $referenceValue, int $paymentId, DateTimeImmutable $now): self
+    {
+        return new self(null, $clientId, $providerAccountId, $referenceType, trim($referenceValue), null, $paymentId, $now);
     }
 }

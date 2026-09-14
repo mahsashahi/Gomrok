@@ -1,62 +1,76 @@
-# Q: Start the Ziraat adapter (Phase 23)
+# Q: Go with option 1, proceed with implementation (Phase 24 cancel/refund/capture)
 
-Did not build `ZiraatAdapter`. The user gave an explicit instruction to defer Ziraat integration
-entirely, rejecting both options I'd proposed (a best-effort implementation of the publicly-known
-"NestPay/estPos" bank-hosted POS pattern flagged as unverified, vs. a deliberately generic
-placeholder stub). Recorded as Phase 23 Q1 in `PhaseResults/PhaseDecisions.md`.
+Built the remaining action endpoints from Phase 24's original scope:
+`POST /api/v1/payments/{id}/cancel`, `/refund`, `/capture`. The A/B price-list visitor-assignment
+re-ask (deferred from Phase 15) is still the only thing left before Phase 24 as a whole is done.
 
-## Why this came up
+## Decisions recorded (Q5, Q5b)
 
-Ziraat is fundamentally different from Stripe/Mollie/PayPal: it's a Turkish bank's bank-hosted
-payment page, already seeded as `api_capable: false` (Phase 8), with no modern REST/SDK API.
-`Architecture.md` had already anticipated "a Ziraat stub until real credentials." I don't have
-Ziraat's actual current merchant integration guide available, and guessing at real-world protocol
-specifics (request field names, hash/signature algorithm, callback format) for a real bank's
-proprietary gateway risked baking wrong technical claims into the codebase as if verified.
+- **Q5 — which stored `GatewayReference` a refund/capture/cancel acts on.** Chosen:
+  reference-type-per-action. When a provider's `getPaymentStatus()` surfaces a "deeper" reference
+  (`ProviderPaymentStatus::$paymentIntentReference` — Stripe's PaymentIntent id, and, per
+  `PayPalAdapter::refundPayment()`'s own docblock, PayPal's Capture id reusing the same field),
+  it's now persisted as a second `GatewayReference::forPayment(..., GatewayReferenceType::PaymentIntent,
+  ...)` row. `ResolvePaymentActionContext` prefers that deeper reference and falls back to the
+  original `CheckoutSession` reference when none was recorded (Mollie: one id serves every action).
+- **Q5b — capability gating.** Chosen: both. Every action checks the resolved
+  `ProviderCapabilityResolver` capability (client/country config can disable something the adapter
+  technically supports) **and** `$adapter instanceof SupportsRefunds`/`SupportsAuthCapture` as a
+  type-safe guard before calling.
 
-## What the user directed
+## What was built
 
-- Do not build a best-effort Ziraat protocol now, and do not guess request fields,
-  hash/signature format, callback format, or bank-hosted POS behavior.
-- Do not create production-ready Ziraat code.
-- Keep Ziraat listed as a future payment provider; add a placeholder/TODO only where needed (not
-  new code files) — and it must explicitly say: "Ziraat integration is deferred until official
-  documentation and credentials are available."
-- The core provider adapter architecture must still support adding Ziraat later without changes.
-- Must not block Stripe, PayPal, Mollie, or the generic adapter architecture (all already
-  complete, Phases 21–22).
-- No Ziraat-specific tests.
-- Ziraat's existing capability/provider-type seed data (needed by country-routing since Phase
-  8/10) stays marked planned/deferred, not implemented — not removed.
+- `src/Modules/Payments/Application/PaymentActionContext.php` + `ResolvePaymentActionContext.php`
+  — resolves the adapter, resolved capabilities, and provider reference a post-creation action
+  needs, from the payment's own frozen checkout-attempt routing decision.
+- `CancelPaymentHandler`/`RefundPaymentHandler`/`CapturePaymentHandler` (each with its own
+  Command/Result) — validate the payment's current status is eligible for that action, resolve the
+  provider context, check capability, call the adapter, then delegate the actual persistence
+  (provider_transactions row, PaymentAttempt bookkeeping, Payment status transition, audit entry)
+  to the existing Phase 20 `RecordProviderTransactionHandler` rather than duplicating it.
+- `PaymentsCancelAction`/`PaymentsRefundAction`/`PaymentsCaptureAction` — thin HTTP wrappers,
+  `{id}` is the checkout attempt id (consistent with every other `/api/v1/payments/{id}*` route).
+  Refund/capture accept an optional `amount_minor` body field for a partial refund/capture.
 
-## What was actually done
+## Two real bugs found and fixed along the way
 
-No new adapter class, no protocol code, no new tests — by design. Only documentation-level changes:
+1. **A `Payment` was never driven past its initial `created` status.** `CreatePaymentHandler`
+   always creates at `PaymentStatus::Created` and nothing ever called `ChangePaymentStatusHandler`
+   afterward — even though the only caller (`ReconcileCheckoutStatusHandler`) only reaches that
+   code path because the provider already confirmed the payment as paid. Fixed by having
+   `ReconcileCheckoutStatusHandler` transition the new Payment `created → pending → paid`
+   (two hops, since `PaymentStatus`'s allowed-next-statuses graph has no direct `created → paid`
+   edge).
+2. **Stripe's PaymentIntent id (and PayPal's capture id) was computed and discarded.** Every
+   `getPaymentStatus()` call surfaced it via `ProviderPaymentStatus::$paymentIntentReference`, but
+   nothing ever persisted it — so cancel/refund/capture would have had no way to look it up. Fixed
+   by persisting it as a `GatewayReference::forPayment()` row in `ReconcileCheckoutStatusHandler`
+   whenever non-null.
 
-- `src/Modules/Providers/Infrastructure/DefaultProviderAdapterFactory.php` — no behavior change (a
-  `'ziraat'` account already fell through to `default` and threw `UnsupportedProviderType`); added
-  a class-docblock note plus an inline comment on the `match` block with the required deferral
-  sentence.
-- `src/Database/Seeds/ProviderTypesSeeder.php` — added a matching docblock note; the seeded
-  `ziraat` row is unchanged.
-- `.claude/docs/Phases.md` — Phase 23 renamed "Ziraat adapter (deferred)" in the tracking table;
-  its section rewritten to record the deferral, the original (unbuilt) scope, and why exit
-  criteria aren't met.
-- `.claude/docs/Architecture.md` §8 and §12 — the `ZiraatAdapter` forward-note and the "Ziraat
-  stub" testing note both rewritten to describe the actual deferral.
-- `.claude/knowledge/Knowledge.md` — new "Ziraat adapter — deferred" section.
-- `.claude/Changelog.md` — new dated entry.
-- `.claude/PhaseResults/PhaseDecisions.md` — new Phase 23 Q1, recording the user's direct
-  instruction verbatim in intent (not a multiple-choice selection, since the user rejected the
-  offered options).
+## Tests
 
-## Verified
+21 new tests: `CapturePaymentHandlerTest` (5), `RefundPaymentHandlerTest` (7),
+`CancelPaymentHandlerTest` (3), `PaymentsCancelActionTest` (2), `PaymentsRefundActionTest` (2),
+`PaymentsCaptureActionTest` (2). `FakePaymentProviderPort` extended to implement
+`SupportsRefunds`/`SupportsAuthCapture` with configurable results/exceptions. Full suite green:
+**555 tests, 1840 assertions**; `composer ci` (CS + PHPStan + tests) clean.
 
-`composer ci` — CS clean, PHPStan clean, 458/458 tests still passing (unchanged, since no
-behavior changed — only comments and docs).
+## Documentation updated
 
-## Not done / next
+`.claude/docs/Architecture.md` §8 (cancel/refund/capture design + the two fixed gaps),
+`.claude/Changelog.md` (new dated entry), `.claude/FileIndex.md` (new Payments module files, new
+HTTP actions, extended test double), `.claude/knowledge/Knowledge.md` (four new gotchas),
+`.claude/docs/Phases.md` (Phase 24 body updated — only the A/B re-ask remains before this phase is
+complete), `.claude/PhaseResults/PhaseDecisions.md` (Q5/Q5b recorded).
 
-No `Phase23Result.md` was created — the phase's original goal (a working adapter) wasn't
-delivered; it stays open/deferred rather than marked complete. Next candidate: Phase 24 (payment
-creation flow), which does not depend on Ziraat.
+## What's still pending for Phase 24
+
+- The deferred Phase 15 A/B price-list visitor-assignment re-ask (Q4: stateless vs. persisted
+  `price_list_assignments`; Q5: management surface) plus the resulting bucket-assignment service —
+  the only remaining item before this phase is complete.
+- No git commit has been made for any of this work yet.
+- `Phase24Result.md` is not created yet — only once the A/B item above is also done.
+- **Known limitation, not yet addressed:** a refund's own provider-issued reference id is recorded
+  only inside `provider_transactions.response_payload`, not as its own `GatewayReference` row — a
+  dedicated `refunds` table (on CLAUDE.md's Required Database Concepts list) needs its own
+  database-design confirmation before that's built.

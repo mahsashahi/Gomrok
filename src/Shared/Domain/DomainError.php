@@ -78,6 +78,14 @@ final readonly class DomainError
         return new self(ErrorType::RuleViolation, $code, $message, $context);
     }
 
+    /**
+     * @param array<string, scalar|null> $context
+     */
+    public static function upstreamFailure(string $code, string $message, array $context = []): self
+    {
+        return new self(ErrorType::UpstreamFailure, $code, $message, $context);
+    }
+
     public function httpStatus(): int
     {
         return $this->type->httpStatus();

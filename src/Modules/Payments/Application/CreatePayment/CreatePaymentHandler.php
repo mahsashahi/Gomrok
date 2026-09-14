@@ -5,15 +5,12 @@ declare(strict_types=1);
 namespace Gomrok\Modules\Payments\Application\CreatePayment;
 
 use Gomrok\Modules\Checkout\Application\CheckoutAuditSnapshot;
+use Gomrok\Modules\Checkout\Application\ResolveCheckoutPayableAmount;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttemptRepository;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttemptStatus;
 use Gomrok\Modules\Payments\Application\PaymentAuditSnapshot;
 use Gomrok\Modules\Payments\Domain\Payment;
 use Gomrok\Modules\Payments\Domain\PaymentRepository;
-use Gomrok\Modules\Pricing\Application\PricingDecisionSnapshotRepository;
-use Gomrok\Modules\Vouchers\Domain\VoucherDecisionSnapshotRepository;
-use Gomrok\Modules\Vouchers\Domain\VoucherRedemption;
-use Gomrok\Modules\Vouchers\Domain\VoucherRedemptionRepository;
 use Gomrok\Shared\Application\Audit\AuditEntry;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
 use Gomrok\Shared\Application\Transactions;
@@ -35,9 +32,7 @@ final readonly class CreatePaymentHandler
     public function __construct(
         private CheckoutAttemptRepository $attempts,
         private PaymentRepository $payments,
-        private PricingDecisionSnapshotRepository $pricingSnapshots,
-        private VoucherDecisionSnapshotRepository $voucherSnapshots,
-        private VoucherRedemptionRepository $redemptions,
+        private ResolveCheckoutPayableAmount $payableAmount,
         private AuditLogWriter $audit,
         private Transactions $transactions,
         private ClockInterface $clock,
@@ -64,18 +59,9 @@ final readonly class CreatePaymentHandler
             ));
         }
 
-        $pricing = $this->pricingSnapshots->findByCheckoutAttemptId($command->checkoutAttemptId);
-        if ($pricing === null) {
+        $amount = $this->payableAmount->forCheckoutAttempt($command->checkoutAttemptId);
+        if ($amount === null) {
             return Result::err(DomainError::validation('payment.pricing_not_resolved', 'The checkout attempt has no resolved pricing decision.'));
-        }
-
-        $amountMinor = $pricing->amountMinor;
-
-        $voucherSnapshot = $this->voucherSnapshots->findByCheckoutAttemptId($command->checkoutAttemptId);
-        if ($voucherSnapshot !== null) {
-            $redemption = $this->redemptions->findById($voucherSnapshot->voucherRedemptionId);
-            \assert($redemption instanceof VoucherRedemption);
-            $amountMinor = $redemption->payableMinor();
         }
 
         $purchaseType = $attempt->purchaseType();
@@ -90,8 +76,8 @@ final readonly class CreatePaymentHandler
             $attempt->clientUserRef(),
             $attempt->packageId(),
             $attempt->country(),
-            $pricing->currencyCode,
-            $amountMinor,
+            $amount->currencyCode,
+            $amount->amountMinor,
             $purchaseType,
             $attempt->paymentMethod(),
             $attempt->subscriptionInterval(),

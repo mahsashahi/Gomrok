@@ -20,14 +20,15 @@ final readonly class PdoGatewayReferenceRepository implements GatewayReferenceRe
     public function save(GatewayReference $reference): int
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO gateway_references (client_id, provider_account_id, reference_type, reference_value, payment_id, created_at)
-             VALUES (:client_id, :provider_account_id, :reference_type, :reference_value, :payment_id, :now)',
+            'INSERT INTO gateway_references (client_id, provider_account_id, reference_type, reference_value, checkout_attempt_id, payment_id, created_at)
+             VALUES (:client_id, :provider_account_id, :reference_type, :reference_value, :checkout_attempt_id, :payment_id, :now)',
         );
         $statement->execute([
             'client_id' => $reference->clientId,
             'provider_account_id' => $reference->providerAccountId,
             'reference_type' => $reference->referenceType->value,
             'reference_value' => $reference->referenceValue,
+            'checkout_attempt_id' => $reference->checkoutAttemptId,
             'payment_id' => $reference->paymentId,
             'now' => $reference->createdAt->format('Y-m-d H:i:s'),
         ]);
@@ -61,6 +62,21 @@ final readonly class PdoGatewayReferenceRepository implements GatewayReferenceRe
         return $references;
     }
 
+    public function forCheckoutAttempt(int $checkoutAttemptId): array
+    {
+        $statement = $this->pdo->prepare('SELECT * FROM gateway_references WHERE checkout_attempt_id = :a ORDER BY id ASC');
+        $statement->execute(['a' => $checkoutAttemptId]);
+
+        $references = [];
+        while (($row = $statement->fetch()) !== false) {
+            if (\is_array($row)) {
+                $references[] = $this->hydrate($row);
+            }
+        }
+
+        return $references;
+    }
+
     /**
      * @param array<array-key, mixed> $row
      */
@@ -72,6 +88,7 @@ final readonly class PdoGatewayReferenceRepository implements GatewayReferenceRe
             Row::int($row['provider_account_id'] ?? null),
             GatewayReferenceType::from(Row::str($row['reference_type'] ?? 'other')),
             Row::str($row['reference_value'] ?? ''),
+            Row::nullableInt($row['checkout_attempt_id'] ?? null),
             Row::nullableInt($row['payment_id'] ?? null),
             new DateTimeImmutable(Row::str($row['created_at'] ?? 'now')),
         );
