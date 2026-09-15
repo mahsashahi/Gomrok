@@ -42,7 +42,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 22 | Mollie & PayPal adapters | ☑ | 2026-09-11 23:22 | 2026-09-12 23:00 | 6–9h | N/A (spans two sessions) | N/A |
 | 23 | Ziraat adapter (deferred) | ☐ | — | — | 4–7h | — | — |
 | 24 | Payment creation flow | ☑ | 2026-09-13 09:00 | 2026-09-13 18:58 | 5–8h | N/A (spans multiple sessions) | N/A |
-| 25 | Webhooks module | ☐ | — | — | 5–8h | — | — |
+| 25 | Webhooks module | ☑ | 2026-09-14 12:00 | 2026-09-14 19:31 | 5–8h | N/A | N/A |
 | 26 | Subscriptions module | ☐ | — | — | 6–9h | — | — |
 | 27 | **Admin Module Views and Panels** | ☐ | — | — | 12–20h | — | — |
 | 28 | Client callbacks / outbound notifications | ☐ | — | — | 4–6h | — | — |
@@ -890,17 +890,50 @@ technique the original Phase 15 Q4 answer specified, verified only at the unit l
 
 **Goal:** ingest provider events safely and idempotently.
 
-**Scope:**
-- `POST /api/v1/webhooks/{provider}`: store the raw event first (`webhook_events`), verify the
-  signature, enqueue processing, protect against duplicates / replays by provider event id.
-  Respond fast; never block on processing.
-- Processor: map the event to the internal record via gateway references, update payment /
-  subscription status, emit domain events.
+**Status: complete.** See `.claude/PhaseResults/Phase25Result.md` for the full summary.
 
-**DB:** `webhook_events`.
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 25 Q1–Q5):
+- **Q1** webhooks only ever update an **existing** `Payment` — never create one, never
+  independently confirm a checkout attempt. Diverges from the recommendation (reusing
+  `ReconcileCheckoutStatusHandler` as a third confirmation trigger); a webhook resolving to a
+  pre-Payment checkout attempt is left `retry_pending` instead.
+- **Q2** dedup key is `(provider_account_id, event_id, raw_status)`, not `event_id` alone —
+  Mollie reuses the payment id as `event_id` for every status change, so `raw_status` has to be
+  part of the key or every change after the first would be dropped as a false duplicate.
+- **Q3** (user-specified, full spec in `PhaseDecisions.md`) — store first, process inline in the
+  same request, keep a failed attempt `retry_pending` (never lost, never immediately terminal),
+  add a cron-invokable `webhook:retry-pending` job reusing the exact same processor. Statuses:
+  `received`/`processing`/`processed`/`retry_pending`/`failed`; `max_attempts` is a code constant.
+- **Q4** the HTTP response to the provider is always `200` once stored+verified, regardless of
+  the inline processing outcome — the cron job is the sole retry mechanism.
+- **Q5** `/api/v1/webhooks/{provider}/{token}` — confirmed the path Phase 9's
+  `AddProviderAccountEndpointHandler` had already hardcoded; `{provider}` is logging-only.
 
-**Exit:** store-first, duplicate-webhook no-double-effect, signature-failure handling, and
-reverse lookup tested.
+**Built:**
+- `webhook_events` table + `Webhooks` module (`Domain`/`Application`/`Infrastructure`) —
+  `WebhookEvent` aggregate, `IngestWebhookEventHandler` (HTTP-triggered: resolve token → verify →
+  parse → store → process inline), `ProcessWebhookEventHandler` (the shared processor both inline
+  ingestion and cron retry call), `PdoWebhookEventRepository`.
+- `POST /api/v1/webhooks/{provider}/{token}` (`WebhooksReceiveAction`) — public, outside the
+  authenticated `/api/v1` group.
+- `src/Jobs/RetryPendingWebhookEvents.php` + `bin/RetryPendingWebhookEvents.php` +
+  `composer webhook:retry-pending` — the cron-invokable retry, same "plain invokable until the
+  Phase 29 job runner exists" shape as `PurgeExpiredIdempotencyKeys` (Phase 5).
+- `ProviderAccountDirectory::findByEndpointToken()` — new reverse lookup from the endpoint token
+  to the owning account.
+- Tests: `ProcessWebhookEventHandlerTest` (6), `IngestWebhookEventHandlerTest` (5),
+  `RetryPendingWebhookEventsTest` (2), `WebhooksReceiveActionTest` (4).
+
+**DB:** `webhook_events` (additive, one new table).
+
+**Exit:** store-first ✓, duplicate-webhook no-double-effect ✓, signature-failure handling ✓
+(stored + `401`, never retried), reverse lookup ✓ (via `GatewayReferenceRepository::findByReference()`,
+tried `PaymentIntent` → `CheckoutSession` → `Order` → `Transaction`). All tested.
+
+**Known limitations:** no sweep job yet for a checkout attempt genuinely stuck pre-payment (Q1's
+narrower scope) — it only self-heals via a later cron retry once something else creates the
+`Payment` first. `Subscriptions` (Phase 26) don't exist yet, so a subscription-related webhook is
+stored but its gateway-reference lookup can't resolve to anything until then.
 
 ## Phase 26 — Subscriptions module
 

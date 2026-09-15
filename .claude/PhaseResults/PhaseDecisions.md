@@ -16,6 +16,146 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 25 — Webhooks module
+
+### Q5 — URL path shape
+
+**Question:** `provider_account_endpoints.token` alone already resolves uniquely to a
+`ProviderAccount` (and thus its provider type) via `findByEndpointToken()` — the `{provider}`
+segment in CLAUDE.md's suggested path isn't actually needed to resolve anything. What's the
+webhook URL path shape?
+
+**Options:**
+
+1. **`/api/v1/webhooks/{provider}/{token}`** — keep the redundant `{provider}` segment for human
+   readability (dashboards, logs, provider-side webhook config screens) and to match the existing
+   `provider_account_endpoints` migration's own code comment. Never trusted for resolution — only
+   `{token}` does that; a mismatched `{provider}` is at most a sanity check.
+2. `/api/v1/webhooks/{token}` — drop the redundant segment; the token alone is sufficient.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `/api/v1/webhooks/{provider}/{token}`. `{provider}` is read for logging/
+readability only; `{token}` alone resolves the `ProviderAccount` via `findByEndpointToken()`.
+
+**Status:** Decided
+
+---
+
+### Q4 — HTTP status returned to the provider when inline processing fails
+
+**Question:** Q3's spec covers Gomrok's own internal retry state (`retry_pending` + cron job) for
+a failed webhook. It leaves one thing open: what HTTP status does the endpoint return to the
+provider itself when inline processing fails (not a duplicate)?
+
+**Options:**
+
+1. **Always 200** — once the event is safely stored, regardless of inline processing outcome.
+   Gomrok's own cron retry is the sole retry mechanism; the provider is never asked to redeliver.
+2. 500 on processing failure — additionally invites the provider's own at-least-once redelivery
+   as a second, typically-faster retry path alongside the cron job.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — always return 200 once the event is stored (verified + persisted),
+regardless of inline processing outcome. The `webhook:retry-pending` cron job is the sole retry
+mechanism; the provider's own redelivery is never relied on or invited.
+
+**Status:** Decided
+
+---
+
+### Q3 — Store vs. process timing (user-specified correction)
+
+**Question:** CLAUDE.md says "Do not block provider webhook responses with long processing.
+Store the webhook first, then process it safely." Gomrok has no real queue/worker yet (Phase 29).
+Claude offered three options (inline-only, cron-only, inline-with-silent-fallback); the user
+rejected the framing and specified the exact design directly instead.
+
+**User's exact specification:**
+
+- Store the raw webhook payload before processing.
+- Process inline immediately after storing, in the same HTTP request.
+- If duplicate, return success safely without reprocessing.
+- If processing succeeds: mark the webhook event `processed`, store `processed_at`.
+- If processing fails: store an error message/code, increment an attempt count, keep the event
+  retryable (never delete the raw payload, never treat it as permanently failed on the first
+  miss), and never create duplicate payments or duplicate state transitions.
+- Webhook processing statuses: `received`, `processing`, `processed`, `retry_pending`, `failed`.
+- A cron-invokable job (`webhook:retry-pending`) picks up retryable events and reuses the exact
+  same processor logic as inline handling — not a separate code path. Retry is idempotent;
+  duplicate delivery stays safe; the retry job never creates duplicate payments.
+- `max_attempts` (if implemented): after it's exceeded, mark the event `failed` and keep the
+  error for admin/debugging — do not keep retrying forever.
+- Explicitly **not** a full queue/worker system — a simple cron-based retry mechanism until the
+  real background job system (Phase 29) exists, designed to be easy to replace with a real
+  queue/worker then.
+- Required tests: webhook stored before processing; inline success; inline failure leaves the
+  event retryable; cron retry processes a retryable event; duplicate webhook is idempotent; retry
+  never creates a duplicate payment; `max_attempts` behavior.
+
+**Selected:** Implemented exactly as specified above.
+
+**Status:** Decided
+
+---
+
+### Q2 — What counts as a duplicate webhook?
+
+**Question:** Mollie's `parseWebhook()` returns the payment id itself as `eventId` — the same
+value for every status change on that payment (`pending→paid`, then later `paid→refunded` both
+reuse the same id). A naive unique-on-event-id dedup would silently drop every status change
+after the first for Mollie.
+
+**Options:**
+
+1. **`event_id` + `raw_status`** — a webhook is a duplicate only if the same event id *and* the
+   same raw provider status were already seen.
+2. `event_id` only — unique on `(provider_account_id, event_id)`, exactly matching CLAUDE.md's
+   literal wording. Correct for Stripe/PayPal; silently drops every Mollie status update after
+   the first ping for a given payment.
+3. No hard dedup gate — store every webhook unconditionally, rely on `PaymentStatus::transitionTo()`'s
+   own same-status-is-a-no-op / illegal-transition-rejected guard for safety.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — dedup key is `(provider_account_id, event_id, raw_status)`. A webhook is
+only treated as already-processed when all three match a stored row; a new raw status for the
+same event id is processed as a new event.
+
+**Status:** Decided
+
+---
+
+### Q1 — Can a webhook independently confirm a checkout attempt (pre-Payment)?
+
+**Question:** When a webhook's resolved gateway reference points to a `checkoutAttemptId` that
+hasn't reached `Confirmed`/converted to a `Payment` yet (e.g. the customer paid but closed the
+tab before the browser returned to Gomrok), should the webhook processor be able to independently
+drive that attempt to `Confirmed`, or should webhooks only ever update an already-existing
+`Payment`?
+
+**Options:**
+
+1. **Reuse `ReconcileCheckoutStatusHandler`** — a webhook resolving to a pre-Payment checkout
+   attempt calls the same shared reconciliation core the return endpoint and status-poll already
+   use; the webhook is just a trigger to re-check with the provider, never trusted directly.
+2. Webhooks only touch existing Payments — a webhook resolving to a checkout attempt with no
+   Payment yet is stored but left unprocessed.
+3. Same as Option 2 for this phase, explicitly noting a future background sweep (later phase) to
+   re-poll stuck pre-payment attempts as the intended eventual mitigation.
+
+**Recommended:** Option 1
+
+**Selected:** Option 3 — webhooks only update an existing `Payment` in this phase (via
+`RecordProviderTransactionHandler`); a webhook resolving to a checkout attempt with no `Payment`
+yet is stored (for audit/replay) but not processed into a confirmation. A background sweep job to
+re-poll stuck pre-payment attempts is noted as future work, not built in this phase.
+
+**Status:** Decided
+
+---
+
 ## Phase 24 — Payment creation flow
 
 ### Q7 — Re-ask of Phase 15 Q5: management surface + which endpoints persist the assignment

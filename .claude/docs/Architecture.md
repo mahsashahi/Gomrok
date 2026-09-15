@@ -89,9 +89,9 @@ Each module lives at `src/Modules/<Name>/` with `Domain/`, `Application/`, `Infr
 | **Pricing** | Pricing groups, default prices, override dimensions, the deterministic price-resolution engine, A/B price lists + visitor assignment. |
 | **Vouchers** | Voucher definitions, eligibility rules, usage limits, discount calculation, and a concurrency-safe redemption lifecycle (Phases 16–17 — implemented). |
 | **Checkout** | The pre-payment lifecycle anchor: `checkout_attempts` and its monotonic-rank status machine, orchestrating pricing resolution, voucher reservation, and provider selection before a payment exists (Phase 18 — implemented). |
-| **Payments** | Payment aggregate, internal status lifecycle, payment attempts, provider transactions, provider customers, gateway references, refunds/captures/cancellations; converts a confirmed `checkout_attempts` row via its `commercialSnapshot()` (Phase 20 — implemented; no real provider adapter or HTTP endpoint yet). |
+| **Payments** | Payment aggregate, internal status lifecycle, payment attempts, provider transactions, provider customers, gateway references; converts a confirmed `checkout_attempts` row via its `commercialSnapshot()` (Phase 20). Real provider adapters + the full HTTP surface (create, return, show, status, cancel/refund/capture) — Phase 24. |
 | **Subscriptions** | Subscription aggregate & ownership model, subscription events, subscription↔payment links, lifecycle from webhooks. |
-| **Webhooks** | Inbound provider webhook ingestion (store-first), signature verification, idempotent processing, replay protection, reverse lookup to internal records. |
+| **Webhooks** | Inbound provider webhook ingestion (store-first), signature verification, dedup, cron-based retry, reverse lookup to internal records (Phase 25 — implemented). |
 | **Notifications** | Outbound client callbacks per provider account, delivery, retry/backoff, dead-letter, admin retry. |
 | **Admin** | Admin auth, RBAC (`admin`, `support_agent`), the server-rendered panel and its screens, error-log viewer, reconciliation views. |
 | **Shared** | Cross-cutting building blocks (below). Depended on by every module; depends on no module. |
@@ -668,6 +668,57 @@ return, show, status, cancel/refund/capture), plus the Phase 15 A/B visitor-assi
     against the payment's own frozen `amountMinor`, since no adapter status-mapper covers that
     distinction (Phase 21's mappers only cover the creation-time vocabulary).
 
+### Webhooks (Phase 25 — complete)
+
+`Modules/Webhooks`. One table, `webhook_events`; `POST /api/v1/webhooks/{provider}/{token}`
+(public, outside the authenticated `/api/v1` group). Endpoint token resolution
+(`provider_account_endpoints` + `ProviderAccountDirectory::findByEndpointToken()`) and per-provider
+signature verification (`PaymentProviderPort::parseWebhook()`) were already built in Phases 9 and
+21–22; this phase is the storage, dedup, and processing/retry machinery around them.
+
+- **Store → verify → process, all before responding (Q3, user-specified).** `IngestWebhookEventHandler`
+  resolves `{token}` to a `ProviderAccount`, calls the adapter's `parseWebhook()` (which verifies
+  the signature internally), stores a `WebhookEvent` row with the parsed
+  `eventId`/`eventType`/`rawStatus`/`providerReference` already populated (or all `null` if
+  verification failed), then calls `ProcessWebhookEventHandler` — the shared processor — inline,
+  in the same request. A signature failure is stored too (for audit) but is a `401`, never
+  retried.
+- **Dedup key is `(providerAccountId, eventId, rawStatus)`, not `eventId` alone (Q2).** Mollie's
+  `parseWebhook()` returns the payment id itself as `eventId` — identical across every status
+  change on that payment — so `rawStatus` has to be part of the key or `pending → paid` and the
+  later `paid → refunded` would collide and the second one would be dropped as a false duplicate.
+  A redelivery of the exact same `(eventId, rawStatus)` reuses the existing row and, if it's
+  already `processed`, short-circuits without reprocessing.
+- **Webhooks only ever update an existing `Payment` (Q1)** — never create one, and never drive a
+  checkout attempt to `confirmed` themselves. A webhook resolving to a checkout attempt with no
+  `Payment` yet is left `retry_pending` (the narrower option was chosen over reusing
+  `ReconcileCheckoutStatusHandler` as a third confirmation trigger); it self-heals on a later
+  retry once the browser-return flow or an authenticated status poll creates the `Payment`.
+- **`ProcessWebhookEventHandler`** is the one processor both the inline path and the cron retry
+  call, unchanged — it never re-verifies the signature or re-contacts the provider, just replays
+  the already-persisted `rawStatus`/`providerReference`. It resolves the `GatewayReference` (trying
+  `PaymentIntent` → `CheckoutSession` → `Order` → `Transaction`, the same "prefer the deeper
+  reference" idea `ResolvePaymentActionContext` already uses for cancel/refund/capture, Phase 24
+  Q5, applied in reverse — given a reference value, find its type), then delegates the actual
+  transition to the existing (Phase 20) `RecordProviderTransactionHandler` — `PaymentStatus::transitionTo()`'s
+  own same-status-no-op / illegal-transition-rejected guard is what makes redelivery and retry
+  safe, not anything webhook-specific. A domain-rule rejection (an illegal transition) is treated
+  as **definitive** — straight to `failed`, no retries consumed, since replaying the same status
+  can never produce a different outcome.
+- **`webhook:retry-pending`** (`src/Jobs/RetryPendingWebhookEvents.php`, `bin/RetryPendingWebhookEvents.php`)
+  is the cron-invokable retry — the same "plain invokable until the Phase 29 job runner exists"
+  shape as `PurgeExpiredIdempotencyKeys` (Phase 5). Picks up `received`/`retry_pending` events
+  (plus any `processing` row stuck past a stale threshold, a crash-recovery net). `max_attempts`
+  is a code constant (`ProcessWebhookEventHandler::MAX_ATTEMPTS = 5`), not a column — once
+  exceeded, the event moves to `failed` and stays there for admin/debugging.
+- **HTTP response is always `200` once stored and verified (Q4)** — regardless of the inline
+  processing outcome. The cron job is the sole retry mechanism; the provider's own at-least-once
+  redelivery is never relied on or invited.
+- **URL shape (Q5)**: `{provider}` is read only for logging, never trusted; `{token}` alone
+  resolves the account. This exact path was already hardcoded into
+  `AddProviderAccountEndpointHandler`'s output back in Phase 9, so Q5 confirmed the existing
+  shape rather than choosing a new one.
+
 ## 9. Resolution pipelines (sketch)
 
 Order is deterministic and will be documented precisely in the Pricing/Vouchers/Providers phases.
@@ -765,11 +816,12 @@ and flagged, never dropped.
 | **Config** | `.env` → typed settings object; secrets from env or a secret store, never committed, never logged. |
 | **Secrets at rest (Phase 9)** | Provider secret keys + webhook signing secrets stored encrypted — `Shared\Application\SecretCipher` port, `SodiumSecretCipher` default (libsodium, key from base64 `APP_ENCRYPTION_KEY`; missing key = boot-time error). Only `Modules\Providers\Application\ProviderAccountCredentials` decrypts (adapters only); everywhere else sees `secret_last_four`. A Vault / KMS `SecretCipher` can replace the default with no schema change. |
 | **Logging** | Structured JSON via `Shared` logger; every payment/subscription flow carries `correlation_id`, `client_id`, `client_user_id?`, `package_id?`, `payment_id?`, `subscription_id?`, `voucher_id?`, `country`, `currency`, `purchase_type`, `payment_method?`, `provider`, provider txn/sub ids. Never log secrets. |
-| **Idempotency** | `Idempotency-Key` on client writes → `IdempotencyMiddleware` + `idempotency_keys` (Phase 5, decision Q1: **lock + entity mapping**, no stored response bodies). Claim `processing` → run handler → `done` (records `target_type`/`target_id`) or `failed`. Replay of `done` re-serialises the entity's *current* state via an `IdempotentReplayResolver`; `processing` → 409; same key, different request fingerprint → 422. 24h TTL, purge job. Middleware wired to routes in Phase 7. Provider webhook event ids deduped separately. |
+| **Idempotency** | `Idempotency-Key` on client writes → `IdempotencyMiddleware` + `idempotency_keys` (Phase 5, decision Q1: **lock + entity mapping**, no stored response bodies). Claim `processing` → run handler → `done` (records `target_type`/`target_id`) or `failed`. Replay of `done` re-serialises the entity's *current* state via an `IdempotentReplayResolver`; `processing` → 409; same key, different request fingerprint → 422. 24h TTL, purge job. Middleware wired to routes in Phase 7. Provider webhook events are deduped separately, by
+`(provider_account_id, event_id, raw_status)` on `webhook_events` — Phase 25 Q2. |
 | **Audit log** | `AuditLogWriter` port + `audit_logs` (Phase 5, decision Q2: **event + full before/after row snapshots**, secret keys redacted). Called by sensitive admin write paths from Phase 6 on. Append-only. |
 | **Error log** | `ErrorLogWriter` port + `error_logs` (Phase 5, decision Q3: **explicit writer only**, never a log handler). Backs the admin Error Logs screen (Phase 27). `JsonErrorHandler` logs unhandled non-HTTP exceptions here; provider/webhook/notification/job call sites added per phase. Writer failures are swallowed. |
 | **Errors** | **Hybrid** (Phase 3 Q3): use cases **return `Result<T>`** (`ok` / `err(DomainError)`) for anything the caller must branch on — validation, business-rule / eligibility / capability rejections, "not found", invalid voucher, unsupported provider·country·method combo, idempotency conflicts. They **throw** for programmer errors, config errors, and infra/transport faults (DB down, provider timeout/5xx). The `Shared\Http` handler maps `DomainError` → 4xx problem body, uncaught `Throwable` → 500/502 (logged with stack trace + correlation id). Provider/network faults use retry-with-backoff first; unrecoverable work → dead-letter / failed-jobs table, retryable from the admin panel. |
-| **Background jobs** | A queue + worker (`src/Jobs/`). Webhook processing, callback delivery + retries, reconciliation, expired-payment cleanup, refund/subscription reconciliation, voucher reservation expiry, expired-idempotency-key purge (`PurgeExpiredIdempotencyKeys` — Phase 5, a plain invokable + `bin/PurgeIdempotencyKeys.php` until the runner exists). Webhook responses never block on processing. |
+| **Background jobs** | A real queue + worker doesn't exist yet (Phase 29) — until then, each job is a plain invokable in `src/Jobs/` run via a `bin/*.php` CLI entrypoint from cron: `PurgeExpiredIdempotencyKeys` (Phase 5, `composer idempotency:purge`) and `RetryPendingWebhookEvents` (Phase 25, `composer webhook:retry-pending`) exist today. Still to land on a real worker: callback delivery + retries, reconciliation, expired-payment cleanup, refund/subscription reconciliation, voucher reservation expiry. Webhook responses never block on processing — inline processing is fast (no outbound calls other than the signature verification step itself), and the cron job is the retry path for whatever it misses. |
 | **Security** | API-key auth + per-client scoping on every request; webhook signature verification; replay protection; admin RBAC enforced at UI **and** backend; provider secrets masked in the UI (reveal-on-demand). A client can never see another client's data. |
 | **API auth (Phase 7)** | `/api/v1` group behind `AuthenticationMiddleware` — `Authorization: Bearer gk_<mode>_<key_id>.<secret>`; `ApiKeyAuthenticator` (Clients) implements the `Shared\Http\ClientAuthenticator` port. Success → `ClientContext` (per-request holder) + `authClient*` attributes; failure → `401 unauthorized` (opaque) / `403 client_disabled`. `last_used_at` stamped throttled; every attempt logged to `client_auth_attempts`. `/health` is the only public route. Writes require `Idempotency-Key`. Rate limiting: deferred (own concern), `client_auth_attempts` is its groundwork. |
 
@@ -792,9 +844,9 @@ and flagged, never dropped.
 - The full domain-event list and handler wiring — grows per module.
 - Admin panel structure and RBAC schema — Phase 27 (+ its schema proposed earlier when needed).
 - Pricing/voucher/routing resolution *precise* ordering and edge cases — Phases 10, 14–17.
-- A/B price-list **visitor→list assignment** (persistence, deterministic bucketing,
-  disable-fallback, `visitor_ref` params) — deferred from Phase 15 (Q4/Q5) to **Phase 24**
-  (Payment creation flow); the `price_lists` data model + resolver hook exist from Phase 15.
+- ~~A/B price-list **visitor→list assignment**~~ — deferred from Phase 15 (Q4/Q5), re-asked with
+  the full option list and **built at Phase 24** (Q6/Q7): `price_list_assignments` +
+  `ResolveVisitorPriceListAssignment`, wired into `/packages` and `/pricing/resolve`.
 - Voucher **stale-reservation sweep** — an abandoned `reserved` row never auto-expires in
   Phase 17 (Q2); deferred to **Phase 29** (background jobs). The originally-planned "Payments
   passes a real payment id as `attempt_reference`" idea is superseded — Phase 18 already reused
@@ -807,12 +859,12 @@ and flagged, never dropped.
   (`CreatePaymentHandler`, **Phase 20**); the `provider_checkout_created` / `redirected_to_provider`
   / `returned_from_provider` / `confirmed` transitions on `checkout_attempts` remain modelled but
   undriven until the provider adapters exist (**Phase 21+**).
-- Payments module leftovers from Phase 20: any HTTP endpoint for payments (**Phase 24**, the
-  payment-creation flow); a `gateway_references` writer wired to a real caller (repository +
-  schema exist; no handler writes to it yet — the same "ahead of a real caller" pattern as
-  `checkout_attempts.abandoned_at`); `gateway_references.subscription_id` (**Phase 26**, additive
-  column once `subscriptions` exists); a `refunds` table for actual capture/refund action records
-  (**Phase 24**).
+- Payments module leftovers from Phase 20, now resolved by **Phase 24**: the full HTTP surface,
+  and `gateway_references` writers wired to real callers. Still open: `gateway_references.subscription_id`
+  (**Phase 26**, additive column once `subscriptions` exists); a dedicated `refunds` table for
+  capture/refund action records — a refund's own provider-issued reference is currently recorded
+  only in `provider_transactions.response_payload`, not its own row (no phase assigned yet; needs
+  its own database-design confirmation first).
 - Provider-adapter leftovers from Phase 21: `StripeAdapter` is built and unit-tested (a real
   Stripe 401/error response, and a real HMAC webhook signature, both verified through the actual
   SDK via a fake transport) but not wired into any Payments-module handler yet — that orchestration

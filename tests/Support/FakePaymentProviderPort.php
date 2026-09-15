@@ -12,6 +12,7 @@ use Gomrok\Modules\Providers\Application\Adapter\ProviderAdapterException;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderPaymentResult;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderPaymentStatus;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderRefundResult;
+use Gomrok\Modules\Providers\Application\Adapter\ProviderWebhookVerificationFailed;
 use Gomrok\Modules\Providers\Application\Adapter\RawWebhook;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsAuthCapture;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsRefunds;
@@ -50,11 +51,18 @@ final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefu
 
     private ?string $paymentIntentReference = null;
 
+    private ParsedWebhookEvent $webhookParseResult;
+
+    private ?ProviderWebhookVerificationFailed $throwOnParseWebhook = null;
+
+    public ?RawWebhook $lastWebhook = null;
+
     public function __construct(
         private ProviderPaymentResult $createPaymentResult = new ProviderPaymentResult('ref_1', 'https://provider.example/checkout/ref_1', 'open'),
         private ProviderRefundResult $refundResult = new ProviderRefundResult('re_1', 0, 'refunded'),
         private ProviderPaymentResult $captureResult = new ProviderPaymentResult('ref_1', '', 'succeeded'),
     ) {
+        $this->webhookParseResult = new ParsedWebhookEvent('evt_1', 'payment.updated', null, 'open', []);
     }
 
     public function throwOnCreatePayment(ProviderAdapterException $exception): void
@@ -70,6 +78,16 @@ final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefu
     public function throwOnCapture(ProviderAdapterException $exception): void
     {
         $this->throwOnCapture = $exception;
+    }
+
+    public function webhookParseResult(ParsedWebhookEvent $result): void
+    {
+        $this->webhookParseResult = $result;
+    }
+
+    public function throwOnParseWebhook(ProviderWebhookVerificationFailed $exception): void
+    {
+        $this->throwOnParseWebhook = $exception;
     }
 
     public function refundResult(ProviderRefundResult $result): void
@@ -124,7 +142,12 @@ final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefu
 
     public function parseWebhook(RawWebhook $webhook): ParsedWebhookEvent
     {
-        return new ParsedWebhookEvent('evt_1', 'payment.updated', null, 'open', []);
+        $this->lastWebhook = $webhook;
+        if ($this->throwOnParseWebhook !== null) {
+            throw $this->throwOnParseWebhook;
+        }
+
+        return $this->webhookParseResult;
     }
 
     public function mapProviderStatusToInternalStatus(string $providerStatus): PaymentStatus

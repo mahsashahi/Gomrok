@@ -809,3 +809,79 @@ two state machines in the codebase.
   client); `gateway_references` rows with `checkout_attempt_id` set are written by the new
   checkout-provider-checkout handler (Phase 24); rows with `payment_id` set are written by
   `RecordProviderTransactionHandler` once a payment exists.
+
+---
+
+## Webhooks (Phase 25)
+
+The `Webhooks` module — one table, `webhook_events`.
+
+### `webhook_events`
+
+- **Store-before-process, literally** (Q3, user-specified): `IngestWebhookEventHandler` resolves
+  the `{token}` to a `ProviderAccount`, verifies the signature via the adapter's `parseWebhook()`,
+  and only *then* inserts the row — with the parsed `event_id`/`event_type`/`raw_status`/
+  `provider_reference` already populated, or all four `null` if verification failed. This
+  resolves a real sequencing puzzle: the dedup key (`provider_account_id`, `event_id`,
+  `raw_status`) isn't known until *after* parsing, so "store the raw payload before processing"
+  is honored in the sense that matters — the raw body is persisted before any payment-state
+  mutation is ever attempted, not literally before the parse step. `raw_payload` is the exact
+  request body string, never re-encoded, so it can be replayed byte-for-byte later.
+- **Why the dedup key includes `raw_status`, not just `event_id`** (Q2): Mollie's `parseWebhook()`
+  returns the payment id itself as `eventId` — the *same* value for every status change on that
+  payment (`pending → paid`, then later `paid → refunded`). A `UNIQUE (provider_account_id,
+  event_id)` constraint alone would make the second delivery collide with the first and be
+  silently treated as a duplicate, permanently losing the `paid → refunded` transition. Including
+  `raw_status` in the key fixes this: each distinct status change gets its own row, while a true
+  redelivery of the identical event (same id, same status) still collapses onto the one row.
+- **Statuses** (Q3, user-specified): `received → processing → processed | retry_pending →
+  failed`. `retry_pending` means `webhook:retry-pending` (the cron job,
+  `src/Jobs/RetryPendingWebhookEvents.php`) will attempt it again; `failed` means either
+  `attempt_count` reached the code constant `ProcessWebhookEventHandler::MAX_ATTEMPTS` (`5`) or
+  the failure was a **definitive** domain-rule rejection (an illegal `PaymentStatus` transition)
+  that retrying the same replayed status could never change — that case skips straight to
+  `failed` without consuming retry attempts pointlessly.
+- **Webhooks never create a `Payment`, only update an existing one** (Q1) — a real decision
+  fork was here: should a webhook be able to independently drive a checkout attempt to
+  `confirmed` (reusing `ReconcileCheckoutStatusHandler` as a third caller alongside the return
+  endpoint and status poll), closing the gap where a customer pays but never returns to Gomrok's
+  browser redirect? The recommendation was yes; the user chose the narrower scope instead — a
+  webhook resolving to a checkout attempt with no `Payment` yet is left `retry_pending`
+  (`error_code = webhook.payment_not_found_yet`) rather than confirming it directly, with a
+  proper sweep job for genuinely-stuck attempts left as explicit future work rather than solved
+  here. In practice the existing retry loop already gives this case a form of self-healing
+  (a later retry succeeds once the browser-return flow independently creates the `Payment`), just
+  not a guarantee — only the browser return / an authenticated status poll can create a `Payment`
+  from a stuck pre-payment attempt today.
+- **The processor never re-contacts the provider on retry** — `ProcessWebhookEventHandler`
+  reads the columns already persisted (`event_id`/`raw_status`/`provider_reference`) rather than
+  re-calling `parseWebhook()`. This is deliberate: a webhook row is the durable record of "this
+  one specific occurrence of a state change," not "ask the provider again" — replaying it means
+  applying that specific known change, cheaply and without hitting Mollie's re-fetch-based
+  "verification" (a real network call) on every retry attempt.
+- **`payment_id`, once resolved, comes from either half of `gateway_references`** — if the
+  matched reference already has `payment_id` set, that's used directly; if only
+  `checkout_attempt_id` is set, `PaymentDirectory::findByCheckoutAttemptId()` is tried (see Q1
+  above for what happens when that comes back empty).
+- **Reference-type lookup order**: `payment_intent` → `checkout_session` → `order` →
+  `transaction`, tried in that order against `GatewayReferenceRepository::findByReference()` — the
+  same "prefer the deeper reference, fall back to the original one" idea `ResolvePaymentActionContext`
+  already uses for cancel/refund/capture (Phase 24 Q5), applied here in the opposite direction
+  (given a reference *value*, find which type it matches, rather than given a payment, find its
+  reference).
+- **URL & auth** (Q5): `POST /api/v1/webhooks/{provider}/{token}`, public (outside the
+  authenticated `/api/v1` group — no provider ever sends a Gomrok API key). `{token}` alone
+  resolves the account via the new `ProviderAccountDirectory::findByEndpointToken()`; `{provider}`
+  in the path is read only for logging, never trusted. This exact path was already hardcoded into
+  `AddProviderAccountEndpointHandler`'s output back in Phase 9, so Q5 confirmed the existing shape
+  rather than picking a new one.
+- **HTTP response contract** (Q4): once the event is stored and its signature verified, the
+  response is always `200` regardless of the inline processing outcome — `webhook:retry-pending`
+  is the sole retry mechanism, never the provider's own at-least-once redelivery. An unknown
+  token is `404`; a signature failure is `401` and is stored (for audit) but never retried.
+- **Set / advanced by** `IngestWebhookEventHandler` (inline, via `ProcessWebhookEventHandler`) and
+  `RetryPendingWebhookEvents` (`src/Jobs/`, cron-invoked via `composer webhook:retry-pending` /
+  `bin/RetryPendingWebhookEvents.php`) — both call the exact same `ProcessWebhookEventHandler`, so
+  retrying is provably identical to the first attempt, just later. A plain invokable, the same
+  "cron until the real job runner exists" shape as `PurgeExpiredIdempotencyKeys` (Phase 5) — meant
+  to be easy to replace with a real queue/worker at Phase 29.

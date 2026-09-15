@@ -17,6 +17,7 @@ flowchart TD
     Vouchers["Vouchers<br/>vouchers + voucher_eligibility_rules + voucher_currency_discounts — definitions & eligibility (P16)<br/>voucher_redemptions — discount calc & redemption lifecycle (P17)<br/>voucher_decision_snapshots — Phase 18"]
     Checkout["Checkout<br/>checkout_attempts — pre-payment lifecycle anchor (P18)"]
     Payments["Payments<br/>payments + payment_attempts + provider_transactions (P20)<br/>provider_customers + gateway_references (P20)"]
+    Webhooks["Webhooks<br/>webhook_events — store-first, dedup, retry (P25)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -42,15 +43,16 @@ flowchart TD
     Pricing --> Payments
     Vouchers --> Payments
     Checkout --> Payments
-    Payments --> Subscriptions
+    Providers --> Webhooks
     Payments --> Webhooks
+    Payments --> Subscriptions
     Payments --> Notifications
     Admin -.-> Payments
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments done;
-    class Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks done;
+    class Subscriptions,Notifications,Admin todo;
 ```
 
 Green = tables exist. Grey = designed in that module's phase.
@@ -921,3 +923,49 @@ branches — `paid` can go to `refunded`, `partially_refunded`, or `disputed`; a
 resolve back to `paid` or escalate to `chargeback`); terminal once `refunded` / `canceled` /
 `expired` / `failed` / `chargeback`. Full detail: `.claude/docs/database-design.md` →
 "Payments — aggregate & lifecycle (Phase 20)".
+
+## Webhooks (Phase 25)
+
+```mermaid
+erDiagram
+    webhook_events {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        varchar provider_type_code "denormalized"
+        varchar event_id "nullable; part of dedup key"
+        varchar event_type "nullable"
+        varchar raw_status "nullable; part of dedup key"
+        varchar provider_reference "nullable"
+        mediumtext raw_payload "exact request body, never re-encoded"
+        json headers "nullable"
+        varchar status "received | processing | processed | retry_pending | failed"
+        smallint attempt_count
+        varchar error_code "nullable"
+        text error_message "nullable"
+        int payment_id FK "-> payments.id (CASCADE); nullable"
+        datetime processed_at "nullable"
+        datetime last_attempted_at "nullable"
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+
+    clients ||--o{ webhook_events : "owns"
+    provider_accounts ||--o{ webhook_events : "sent by"
+    payments ||--o{ webhook_events : "updates"
+```
+
+`UNIQUE (provider_account_id, event_id, raw_status)` is the dedup key (Q2) — `raw_status` is
+included because Mollie's webhooks reuse the payment id as `event_id` for every status change on
+that payment, so `event_id` alone would silently drop every change after the first. Store →
+process is split but happens in the same HTTP request (Q3, user-specified): the row is inserted
+with the parsed fields already populated (or all `null` if the signature failed to verify), then
+`ProcessWebhookEventHandler` runs inline. Webhooks only ever update an **existing** `payments` row
+(Q1) — never create one; a webhook resolving to a checkout attempt with no payment yet is left
+`retry_pending`. `webhook:retry-pending` (`src/Jobs/RetryPendingWebhookEvents.php`, cron-invoked)
+reuses the identical processor for anything left `received`/`retry_pending`, until `attempt_count`
+reaches the code constant `MAX_ATTEMPTS` (`5`). The HTTP response is always `200` once stored and
+verified, regardless of the inline processing outcome (Q4) — the cron job is the sole retry path,
+never the provider's own redelivery. `POST /api/v1/webhooks/{provider}/{token}` (Q5) is public,
+`{token}` (from `provider_account_endpoints`, Phase 9) resolves the account; `{provider}` is
+logging-only. Full detail: `.claude/docs/database-design.md` → "Webhooks (Phase 25)".

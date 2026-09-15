@@ -38,6 +38,7 @@ flowchart TD
     Vouchers["Vouchers&lt;br/&gt;vouchers + eligibility rules + currency discounts (P16)&lt;br/&gt;voucher_redemptions (P17)&lt;br/&gt;voucher_decision_snapshots (P18)"]
     Checkout["Checkout&lt;br/&gt;checkout_attempts — pre-payment anchor (P18)"]
     Payments["Payments&lt;br/&gt;payments + payment_attempts + provider_transactions (P20)&lt;br/&gt;provider_customers + gateway_references (P20)"]
+    Webhooks["Webhooks&lt;br/&gt;webhook_events — store-first, dedup, retry (P25)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
@@ -63,14 +64,15 @@ flowchart TD
     Pricing --&gt; Payments
     Vouchers --&gt; Payments
     Checkout --&gt; Payments
-    Payments --&gt; Subscriptions
+    Providers --&gt; Webhooks
     Payments --&gt; Webhooks
+    Payments --&gt; Subscriptions
     Payments --&gt; Notifications
     Admin -.-&gt; Payments
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments done;
-    class Subscriptions,Webhooks,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks done;
+    class Subscriptions,Notifications,Admin todo;
 </pre>
 
 <h2>Reference data (Phase 4)</h2>
@@ -777,6 +779,35 @@ erDiagram
     provider_accounts ||--o{ gateway_references : "issues"
     checkout_attempts ||--o{ gateway_references : "referenced by (pre-payment)"
     payments ||--o{ gateway_references : "referenced by"
+</pre>
+
+<h2>Webhooks (Phase 25)</h2>
+<pre class="mermaid">
+erDiagram
+    webhook_events {
+        int id PK
+        int client_id FK
+        int provider_account_id FK
+        varchar provider_type_code
+        varchar event_id
+        varchar event_type
+        varchar raw_status
+        varchar provider_reference
+        mediumtext raw_payload
+        json headers
+        varchar status
+        smallint attempt_count
+        varchar error_code
+        text error_message
+        int payment_id FK
+        datetime processed_at
+        datetime last_attempted_at
+        datetime created_at
+        datetime updated_at
+    }
+    clients ||--o{ webhook_events : "owns"
+    provider_accounts ||--o{ webhook_events : "sent by"
+    payments ||--o{ webhook_events : "updates"
 </pre>
 </div>
 

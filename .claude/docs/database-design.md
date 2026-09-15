@@ -48,8 +48,9 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Mollie & PayPal adapters (Phase 22) | (no new tables) |
 | Ziraat adapter (Phase 23) | deferred — no tables |
 | Payment creation flow (Phase 24) | `price_list_assignments` — **1** (Q6/Q7); `gateway_references` gained a nullable `checkout_attempt_id` column (Q1) and `checkout_attempts` gained `hash_return_token` (Q4) |
+| Webhooks module (Phase 25) | `webhook_events` — **1** |
 
-**Total: 52 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 53 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -414,7 +415,7 @@ Verification config for inbound provider messages (Q3). One active per `kind` (a
 | `id` | `INT UNSIGNED` | no | PK, auto-increment |
 | `provider_account_id` | `INT UNSIGNED` | no | FK → `provider_accounts(id)` ON DELETE CASCADE |
 | `kind` | `VARCHAR(10)` | no | `webhook` \| `callback` \| `return` |
-| `token` | `VARCHAR(64)` | yes | **unique** (multi-NULL ok); segment in `/api/v1/webhooks/{provider}/{token}` (consumed Phase 25). Null for `return`. |
+| `token` | `VARCHAR(64)` | yes | **unique** (multi-NULL ok); segment in `/api/v1/webhooks/{provider}/{token}`, resolved via `ProviderAccountDirectory::findByEndpointToken()` (Phase 25). Null for `return`. |
 | `signing_secret_ciphertext` | `TEXT` | yes | `SecretCipher`-encrypted; null for `return` |
 | `is_active` | `TINYINT(1)` | no | default `1` |
 | `created_at` / `updated_at` | — | | |
@@ -1270,6 +1271,87 @@ transition (e.g. an admin-driven cancel).
 
 ---
 
+## Webhooks (Phase 25)
+
+Every inbound provider webhook is stored before any processing is attempted (CLAUDE.md).
+
+### `webhook_events`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
+| `provider_type_code` | VARCHAR(50) | no | denormalized copy, for admin filtering without a join |
+| `event_id` | VARCHAR(191) | yes | the provider's event id (Mollie: the payment id — see below); null when signature verification failed |
+| `event_type` | VARCHAR(100) | yes | null when signature verification failed |
+| `raw_status` | VARCHAR(100) | yes | the unmapped provider status string; null when signature verification failed |
+| `provider_reference` | VARCHAR(191) | yes | the resource id used for the `gateway_references` reverse lookup |
+| `raw_payload` | MEDIUMTEXT | no | the exact request body received, never re-encoded — replayable byte-for-byte |
+| `headers` | JSON | yes | raw request headers (uppercased keys), needed to rebuild a `RawWebhook` (PayPal's verification reads 5 named headers) |
+| `status` | VARCHAR(20) | no | `received` / `processing` / `processed` / `retry_pending` / `failed` (Q3) |
+| `attempt_count` | SMALLINT UNSIGNED | no | default `0`; incremented by `markRetryPending()` / `markFailed()` |
+| `error_code` / `error_message` | VARCHAR(191) / TEXT | yes / yes | set on the last failed attempt; cleared on success |
+| `payment_id` | INT UNSIGNED | yes | FK → `payments(id)` CASCADE; set once processed |
+| `processed_at` | DATETIME | yes | |
+| `last_attempted_at` | DATETIME | yes | stamped by every `markProcessing()` |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (provider_account_id, event_id, raw_status)` = `uniq_webhook_events_dedup` (Q2);
+`INDEX (status)` = `idx_webhook_events_status` (the retry job's query); `INDEX (client_id)`;
+`INDEX (payment_id)`. `max_attempts` is a code constant
+(`ProcessWebhookEventHandler::MAX_ATTEMPTS = 5`), not a column.
+
+**Dedup key is `(provider_account_id, event_id, raw_status)`, not `event_id` alone (Q2).** Mollie's
+`parseWebhook()` returns the payment id itself as `eventId` — the same value for every status
+change on that payment (`pending → paid`, then later `paid → refunded`). Deduping on `event_id`
+alone would silently drop every status change after the first. `raw_status` in the key makes each
+distinct status change its own row while still collapsing a true redelivery of the identical
+event.
+
+### Processing lifecycle (Q1, Q3 — user-specified)
+
+**Webhooks only ever update an existing `Payment` (Q1)** — never create one, and never drive a
+checkout attempt to `confirmed`. A webhook whose resolved gateway reference points to a checkout
+attempt with no `Payment` yet is left `retry_pending` (`error_code = webhook.payment_not_found_yet`);
+it self-heals on a later retry once the browser-return flow (or an authenticated status poll)
+creates the `Payment` — no separate sweep mechanism was needed to make that work, since the
+existing `webhook:retry-pending` retry loop already re-attempts it.
+
+**Store → process split (Q3):** `IngestWebhookEventHandler` resolves the `{token}` to a
+`ProviderAccount`, verifies the signature via the adapter's `parseWebhook()`, stores the row
+(status `received`), then calls `ProcessWebhookEventHandler` — the shared processor — **inline, in
+the same HTTP request**. A signature failure is stored too (status `failed` immediately, never
+retried) but is a `401`, not a processing outcome. Once genuinely stored and verified, the HTTP
+response is always `200` regardless of the inline processing outcome (Q4) — `webhook:retry-pending`
+(a cron-invoked `src/Jobs/RetryPendingWebhookEvents.php`) is the sole retry mechanism, never the
+provider's own redelivery.
+
+`ProcessWebhookEventHandler` never re-contacts the provider or re-verifies the signature on
+retry — it replays the already-parsed `event_id` / `raw_status` / `provider_reference` columns
+already on the row. It resolves the `gateway_references` row (trying `payment_intent` then
+`checkout_session` then `order` then `transaction`, in that order), then delegates the actual
+status transition to the existing (Phase 20) `RecordProviderTransactionHandler` — duplicate
+delivery and retry are both safe because `PaymentStatus::transitionTo()`'s own same-status-no-op /
+illegal-transition-rejected guard is what's actually doing the idempotency work, not anything
+webhook-specific. A domain-rule rejection from that handler (e.g. an illegal transition) is
+treated as a **definitive** failure (straight to `failed`, no retry attempts consumed) since
+replaying the same status will never produce a different outcome; any other failure is
+`retry_pending` until `attempt_count` reaches `MAX_ATTEMPTS`, then `failed`.
+
+### URL & authentication (Q5)
+
+`POST /api/v1/webhooks/{provider}/{token}` — **public**, outside the authenticated `/api/v1`
+group (a provider never sends a Gomrok API key). `{token}` is `provider_account_endpoints.token`
+(Phase 9); `{provider}` is read only for logging/readability, never trusted — this path was
+already hardcoded into `AddProviderAccountEndpointHandler`'s `$inboundPath` output back in Phase 9,
+so Q5 confirmed the existing shape rather than choosing a new one. The endpoint's decrypted
+signing secret comes from `ProviderAccountCredentials::endpointSigningSecret($accountId,
+'webhook')` — resolved fresh on every attempt (inline and retry alike), so a rotated secret is
+picked up immediately without needing to touch any stored webhook row.
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -1328,6 +1410,10 @@ transition (e.g. an admin-driven cancel).
 | `src/Database/Migrations/20260911130001_create_voucher_redemptions_table.php` | `Gomrok\Database\Migrations\CreateVoucherRedemptionsTable` |
 | `src/Database/Migrations/20260911150001_create_checkout_and_decision_snapshot_tables.php` | `Gomrok\Database\Migrations\CreateCheckoutAndDecisionSnapshotTables` |
 | `src/Database/Migrations/20260911180001_create_payment_tables.php` | `Gomrok\Database\Migrations\CreatePaymentTables` |
+| `src/Database/Migrations/20260913090001_add_checkout_attempt_id_to_gateway_references.php` | `Gomrok\Database\Migrations\AddCheckoutAttemptIdToGatewayReferences` |
+| `src/Database/Migrations/20260913090002_add_hash_return_token_to_checkout_attempts.php` | `Gomrok\Database\Migrations\AddHashReturnTokenToCheckoutAttempts` |
+| `src/Database/Migrations/20260913090003_create_price_list_assignments_table.php` | `Gomrok\Database\Migrations\CreatePriceListAssignmentsTable` |
+| `src/Database/Migrations/20260914090001_create_webhook_events_table.php` | `Gomrok\Database\Migrations\CreateWebhookEventsTable` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

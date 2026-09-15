@@ -14,6 +14,7 @@ use Gomrok\Http\Api\PaymentsShowAction;
 use Gomrok\Http\Api\PaymentsStatusAction;
 use Gomrok\Http\Api\PricingResolveAction;
 use Gomrok\Http\Api\VouchersValidateAction;
+use Gomrok\Http\Api\WebhooksReceiveAction;
 use Gomrok\Http\HealthAction;
 use Gomrok\Shared\Http\AuthenticationMiddleware;
 use Gomrok\Shared\Http\IdempotencyMiddleware;
@@ -27,6 +28,10 @@ return static function (App $app): void {
     // Public — no API key exists at this point (Phase 24 Q2): the customer's own
     // browser lands here after leaving the provider's hosted checkout page.
     $app->get('/payments/return', PaymentsReturnAction::class);
+
+    // Public — no API key exists here either (Phase 25 Q5): a provider's own
+    // signature, verified via the opaque {token}, is the authentication.
+    $app->post('/api/v1/webhooks/{provider}/{token}', WebhooksReceiveAction::class);
 
     // Every /api/v1 route is authenticated (Bearer API key) and, for writes, idempotent.
     $app->group('/api/v1', function (RouteCollectorProxy $group): void {

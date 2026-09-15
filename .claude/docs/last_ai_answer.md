@@ -1,81 +1,75 @@
-# Q: Start Phase 24's A/B price-list re-ask
+# Q: Start Phase 25 (Webhooks module)
 
-Re-asked Phase 15's Q4 and Q5 with their full original option lists (per the user's own standing
-instruction not to assume the earlier recommendation), recorded as Phase 24 Q6/Q7, confirmed the
-database design for the one new table needed, and built the whole visitor→price-list assignment
-mechanism. This completes Phase 24.
+Built the whole Webhooks module end to end: inbound webhook ingestion, per-provider signature
+verification, store-before-process, correct dedup (including Mollie's lack of real
+per-occurrence event ids), inline processing, and a cron-invokable retry mechanism. This
+completes Phase 25.
 
-## Decisions (Q6, Q7)
+## Decisions (Q1–Q5)
 
-- **Q6** (re-ask of Phase 15 Q4): **persisted** `price_list_assignments`, not stateless recompute.
-  First visit computes the bucket by deterministic hash and persists it; later visits read the
-  stored row; a since-disabled bucket reassigns to control on that read.
-- **Q7** (re-ask of Phase 15 Q5): **both** `GET /api/v1/packages` and `GET /api/v1/pricing/resolve`
-  accept a `visitor_ref` and persist the assignment on first sight — diverging from the original
-  recommendation of `/pricing/resolve`-only, in favour of symmetry between the two read endpoints.
-
-## Database design confirmed
-
-One new table: `price_list_assignments` — `client_id`, `pricing_group_id`, `visitor_ref_hash`
-(SHA-256, no raw ref stored), `price_list_id`, `assigned_at`/`reassigned_at`,
-`created_at`/`updated_at`; `UNIQUE (pricing_group_id, visitor_ref_hash)`; FKs to
-`clients`/`pricing_groups`/`price_lists`. Purely additive — confirmed before migrating.
+- **Q1** — webhooks only ever update an **existing** `Payment`; never create one, and never
+  independently confirm a checkout attempt to `Payment`. The recommended option (reusing
+  `ReconcileCheckoutStatusHandler` as a third confirmation trigger alongside the return endpoint
+  and status poll) was declined in favor of this narrower scope, with a sweep job for stuck
+  pre-payment attempts explicitly left as future work.
+- **Q2** — the dedup key is `(provider_account_id, event_id, raw_status)`, not `event_id` alone.
+  Mollie's `parseWebhook()` returns the payment id itself as `eventId` — identical across every
+  status change on that payment — so `raw_status` has to be part of the key or `pending → paid`
+  and a later `paid → refunded` would collide and the second one would be silently dropped.
+- **Q3** (user-specified, full spec in `PhaseDecisions.md`) — store the raw event first, process
+  inline in the same HTTP request immediately after, keep a failed attempt `retry_pending`
+  (never lost, never immediately terminal on the first miss), add a cron-invokable
+  `webhook:retry-pending` job that reuses the exact same processor as inline handling. Statuses:
+  `received` / `processing` / `processed` / `retry_pending` / `failed`. `max_attempts` is a code
+  constant (`ProcessWebhookEventHandler::MAX_ATTEMPTS = 5`), not a column.
+- **Q4** — the HTTP response to the provider is always `200` once the event is stored and its
+  signature verified, regardless of the inline processing outcome — the cron job is the sole
+  retry mechanism, never the provider's own at-least-once redelivery.
+- **Q5** — `POST /api/v1/webhooks/{provider}/{token}`. This confirmed a path shape that had
+  already been hardcoded into Phase 9's `AddProviderAccountEndpointHandler` output — `{provider}`
+  is logging-only, `{token}` alone resolves the account.
 
 ## What was built
 
-- `src/Modules/Pricing/Domain/PriceListAssignment.php` + `PriceListAssignmentRepository.php`,
-  `Infrastructure/PdoPriceListAssignmentRepository.php` (the race-safe
-  `insertOrGetExisting()` using MySQL's `INSERT ... ON DUPLICATE KEY UPDATE id =
-  LAST_INSERT_ID(id)` idiom).
-- `src/Modules/Pricing/Application/ResolveVisitorPriceListAssignment.php` — the bucket-assignment
-  service: hashes `pricing_group_id . ':' . visitor_ref`, buckets by `hexdec(hash) %
-  count(enabledLists)` over the group's enabled lists (control first, then by id), persists on
-  first sight, reassigns to control on read if the bucket was later disabled, and degrades to
-  `null` (never throws) for a group with no price list at all.
-- `PriceResolver::resolve()` and `PriceCatalog::resolve()` both gained an optional `?string
-  $visitorRef` param — `PriceCatalog` resolves the visitor's bucket **once** per catalogue request
-  and applies it to every item, which is also the first time `/packages`' displayed price can
-  reflect an A/B experiment (previously it never called `PriceListResolver` at all).
-- `GET /api/v1/packages`, `GET /api/v1/packages/{packageId}`, `GET /api/v1/pricing/resolve` all
-  accept an optional `visitor_ref` query parameter.
-
-## Two things fixed along the way
-
-1. The bucket-resolution service originally asserted a pricing group's control list always
-   exists — but several existing unit tests build `PricingGroup` directly (bypassing
-   `CreatePricingGroupHandler`'s auto-created control row), which would have crashed. Fixed by
-   making the whole resolution chain return `?int` and degrade gracefully to "no list, use base
-   price" instead of asserting.
-2. `tests/Unit/Http/PackagesApiTest.php` (a functional test that boots the real DI container)
-   started throwing a real `PDOException` (`Access denied for user 'gomrok'@'localhost'`) once
-   `PriceCatalog`/`PriceResolver` gained the new repository dependency, because that test hadn't
-   swapped it for an in-memory double the way it already does for every other pricing repository.
-   Fixed by adding the missing container swap.
+- **`webhook_events`** table (confirmed design before migrating) — stores the raw payload
+  (never re-encoded), headers, parsed fields, status, attempt count, and the resolved payment id.
+- **`WebhookEvent`** domain aggregate + **`WebhookEventRepository`** port +
+  **`PdoWebhookEventRepository`**.
+- **`IngestWebhookEventHandler`** — resolves the endpoint token (via a new
+  `ProviderAccountDirectory::findByEndpointToken()`), verifies + parses the webhook through the
+  adapter (already built in Phases 21–22), stores the row, and calls the processor inline.
+- **`ProcessWebhookEventHandler`** — the one processor both inline ingestion and the cron retry
+  call, unchanged. Resolves the `GatewayReference` (trying `PaymentIntent` → `CheckoutSession` →
+  `Order` → `Transaction`), then delegates the actual state transition to the existing (Phase 20)
+  `RecordProviderTransactionHandler` — `PaymentStatus::transitionTo()`'s own guard is what makes
+  redelivery and retry safe, not anything webhook-specific. A domain-rule rejection (an illegal
+  transition) goes straight to `failed` without consuming retry attempts, since replaying the
+  same status can never produce a different outcome.
+- **`POST /api/v1/webhooks/{provider}/{token}`** (`WebhooksReceiveAction`) — public, outside the
+  authenticated `/api/v1` group.
+- **`RetryPendingWebhookEvents`** (`src/Jobs/`) + `bin/RetryPendingWebhookEvents.php` +
+  `composer webhook:retry-pending` — the cron-invokable retry, matching Phase 5's
+  `PurgeExpiredIdempotencyKeys` "plain invokable until the real job runner (Phase 29) exists"
+  pattern exactly.
 
 ## Tests
 
-New coverage across `PriceCatalogTest`, `PriceResolverTest` (stability across calls,
-disable-fallback reassignment, no-list-at-all degradation), and `PackagesApiTest` (end-to-end
-`visitor_ref` acceptance on both endpoints). Full suite: **561 tests, 1870 assertions**;
-`composer ci` (CS + PHPStan + tests) clean. `tests/Integration/*` continues to self-skip (39
-tests) — this local environment's MariaDB is running but the `gomrok` user's credentials
-currently don't authenticate, a pre-existing environment condition unrelated to this work
-(verified directly against the running server).
+17 new tests: `ProcessWebhookEventHandlerTest` (6), `IngestWebhookEventHandlerTest` (5),
+`RetryPendingWebhookEventsTest` (2), `WebhooksReceiveActionTest` (4). Full suite: **578 tests,
+1933 assertions**; `composer ci` (CS + PHPStan + tests) clean.
 
 ## Documentation
 
-`.claude/docs/Architecture.md`, `database-design.md`, `database-diagram.md`/`.html`,
-`db_explain.md`, `.claude/Changelog.md`, `.claude/FileIndex.md`, `.claude/knowledge/Knowledge.md`,
-`.claude/docs/Phases.md` (Phase 24 now marked ☑ complete), `.claude/PhaseResults/PhaseDecisions.md`
-(Q6/Q7 recorded), and — since the whole phase is now done — `.claude/PhaseResults/Phase24Result.md`
-was created recording the full phase (all three increments: creation/return flow,
-cancel/refund/capture, and this A/B visitor-assignment piece).
+`.claude/docs/Architecture.md` (new Webhooks subsection, module map, corrected several stale
+Phase 20/24 notes), `database-design.md`, `database-diagram.md`/`.html`, `db_explain.md` (all
+gained a `webhook_events` section), `.claude/Changelog.md`, `.claude/FileIndex.md`,
+`.claude/knowledge/Knowledge.md`, `.claude/docs/Phases.md` (Phase 25 now ☑ complete),
+`.claude/PhaseResults/PhaseDecisions.md` (Q1–Q5 recorded), and
+`.claude/PhaseResults/Phase25Result.md` created recording the full phase.
 
 ## What's left
 
-Nothing outstanding for Phase 24 itself. No git commit has been made yet for this A/B-assignment
-increment (increments 1 and 2 were committed earlier as `1d19ac4`). Two things intentionally
-deferred beyond this phase, noted in `Phase24Result.md`: `visitor_ref` is not wired into
-`POST /api/v1/payments` or the checkout pricing pipeline (Q7 named exactly two endpoints), and a
-refund's own provider-issued reference isn't stored as its own `GatewayReference` row (needs a
-dedicated `refunds` table, which needs its own database-design confirmation first).
+Nothing outstanding for Phase 25 itself. No git commit has been made yet for this work. Deferred
+beyond this phase: a sweep job for checkout attempts stuck pre-payment (Q1's narrower scope), and
+subscription-related webhook events are stored but can't resolve to anything until Phase 26
+builds the `Subscriptions` module. Next up per `Phases.md` is Phase 26.

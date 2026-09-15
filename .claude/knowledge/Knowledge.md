@@ -714,7 +714,7 @@ duplicate.
   unaffected, and the core provider adapter architecture already supports adding Ziraat later with
   nothing more than one more `match` arm plus a `ZiraatAdapter` class.
 
-## Payment creation flow & return token (Phase 24, in progress)
+## Payment creation flow & return token (Phase 24, complete)
 
 - **`gateway_references` dual-parent columns, not a second table.** Both `checkout_attempt_id`
   and `payment_id` are nullable on the same table; exactly one is set per row, enforced only
@@ -787,6 +787,57 @@ duplicate.
   the declared-capability check alone doesn't prove the adapter class actually implements the
   method; the `instanceof` check alone ignores a client/country config that disables a capability
   the adapter technically supports.
+
+## Webhooks module (Phase 25, complete)
+
+- **A lot of Phase 25's groundwork already existed before Phase 25 started.** `RawWebhook` /
+  `ParsedWebhookEvent` / `ProviderWebhookVerificationFailed` (Phase 21), per-provider
+  `verifyWebhookSignature()`/`parseWebhook()` (Phases 21–22), and `provider_account_endpoints` +
+  `ProviderAccountRepository::findByEndpointToken()` (Phase 9, with a code comment that already
+  spelled out `/api/v1/webhooks/{provider}/{token}`) were all built ahead of schedule with this
+  phase explicitly in mind. Check what already exists before building a "new" primitive — Phase
+  25 itself only needed the storage/dedup/processing/retry layer around all of that.
+- **Mollie's webhooks have no real per-occurrence event id.** `MollieAdapter::parseWebhook()`
+  returns the *payment id itself* as `eventId` — the same value for `pending → paid` and, later,
+  `paid → refunded`. A dedup key of `event_id` alone (which is what CLAUDE.md's literal wording
+  suggests) would silently drop every status change after the first for Mollie. The dedup key is
+  `(provider_account_id, event_id, raw_status)` — `raw_status` is what actually distinguishes one
+  real event from a true redelivery of the identical one.
+- **The processor never re-contacts the provider or re-verifies the signature on retry.**
+  `ProcessWebhookEventHandler` reads the `event_id`/`raw_status`/`provider_reference` columns
+  already persisted on the `WebhookEvent` row — it does not call `parseWebhook()` again. Only the
+  inline ingest path (`IngestWebhookEventHandler`) ever touches the adapter's
+  `parseWebhook()`/signature machinery. This matters for Mollie especially, whose "verification"
+  is a real outbound API call (re-fetching the resource) — retrying would otherwise hammer
+  Mollie's API on every cron pass for something already stuck.
+- **A domain-rule rejection from `RecordProviderTransactionHandler` is treated as *definitive*,
+  not transient.** If the mapped status would be an illegal `PaymentStatus` transition (e.g. the
+  payment is already `Paid` and the webhook claims `RequiresAction`), the event goes straight to
+  `failed` without consuming a `retry_pending` cycle — replaying the exact same already-parsed
+  status will never produce a different outcome, so there's no point waiting for
+  `max_attempts` to grind through it. Only *unexpected* exceptions and "the target doesn't exist
+  yet" cases (`webhook.reference_not_found`, `webhook.payment_not_found_yet`) are genuinely
+  retryable.
+- **Webhooks deliberately cannot create a `Payment` or confirm a checkout attempt (Phase 25 Q1)** —
+  narrower than the recommended option, which would have reused `ReconcileCheckoutStatusHandler`
+  as a third confirmation trigger alongside the return endpoint and status poll. A webhook
+  resolving to a checkout attempt with no `Payment` yet is left `retry_pending`
+  (`webhook.payment_not_found_yet`) and only succeeds later if something *else* creates the
+  Payment first. If a future phase revisits this, `ReconcileCheckoutStatusHandler` is already
+  designed to be called from a third place — see its own docblock.
+- **`PaymentStatus::transitionTo()`'s existing same-status-no-op / illegal-transition-rejected
+  guard is what makes webhook redelivery and retry safe — not anything webhook-specific.** Neither
+  `IngestWebhookEventHandler` nor `ProcessWebhookEventHandler` has its own "have we already
+  applied this status" check beyond the dedup row lookup; they lean entirely on the payment
+  aggregate's own transition guard. Don't add a redundant check here if this code is ever touched
+  again — it would just be duplicating logic that already lives in `Payment::transitionTo()`.
+- **`ContainerFactory`-booting functional tests need `PriceListAssignmentRepository`-style
+  awareness for any new autowired dependency.** `ProviderAccountDirectory` gaining
+  `findByEndpointToken()` didn't break anything here (both implementers — `PdoProviderAccountDirectory`
+  and `StubProviderAccountDirectory` — were updated together), but it's the same class of gap
+  Phase 24's A/B assignment work hit with `PackagesApiTest.php`: a real-container functional test
+  needs every interface implementer kept in sync, or PHP-DI eagerly builds infra (like a real
+  `PDO`) the test never intended to exercise.
 
 ## Gotchas
 

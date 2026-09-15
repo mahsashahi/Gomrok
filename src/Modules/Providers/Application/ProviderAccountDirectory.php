@@ -34,4 +34,11 @@ interface ProviderAccountDirectory
      * @return list<ProviderAccountSummary>
      */
     public function candidates(int $clientId, string $providerTypeCode, ProviderAccountMode $mode): array;
+
+    /**
+     * Reverse lookup for an inbound webhook (Phase 25) — resolves the opaque
+     * `provider_account_endpoints.token` URL segment to the owning account.
+     * Only matches an active `webhook`-kind endpoint.
+     */
+    public function findByEndpointToken(string $token): ?ProviderAccountSummary;
 }

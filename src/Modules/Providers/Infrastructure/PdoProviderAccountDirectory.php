@@ -70,6 +70,18 @@ final readonly class PdoProviderAccountDirectory implements ProviderAccountDirec
         return $this->collect($statement);
     }
 
+    public function findByEndpointToken(string $token): ?ProviderAccountSummary
+    {
+        $statement = $this->pdo->prepare(
+            self::BASE . " JOIN provider_account_endpoints e ON e.provider_account_id = pa.id
+              WHERE e.token = :token AND e.kind = 'webhook' AND e.is_active = 1",
+        );
+        $statement->execute(['token' => $token]);
+        $row = $statement->fetch();
+
+        return \is_array($row) ? $this->toSummary($row) : null;
+    }
+
     /**
      * @return list<ProviderAccountSummary>
      */

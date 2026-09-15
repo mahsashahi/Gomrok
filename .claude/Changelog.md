@@ -7,6 +7,85 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-14 — Phase 25 complete: Webhooks module
+
+**Summary.** Built the whole Webhooks module: `webhook_events` storage, per-provider signature
+verification (reusing Phase 21–22's `PaymentProviderPort::parseWebhook()`), dedup, inline
+processing, and a cron-invokable retry mechanism — `POST /api/v1/webhooks/{provider}/{token}`.
+Endpoint-token resolution and signature-verification primitives were already built ahead of
+schedule (Phases 9, 21–22); this phase is the storage/dedup/processing/retry machinery around
+them.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 25 Q1–Q5):
+- **Q1** webhooks only ever update an **existing** `Payment`, never create one and never
+  independently drive a checkout attempt to `Confirmed` — a webhook resolving to a checkout
+  attempt with no `Payment` yet is left `retry_pending` rather than reusing
+  `ReconcileCheckoutStatusHandler` as a third confirmation trigger (the recommended option).
+- **Q2** the dedup key is `(provider_account_id, event_id, raw_status)`, not `event_id` alone —
+  Mollie's webhooks reuse the payment id as `event_id` for every status change on that payment,
+  so `event_id` alone would silently drop every status change after the first.
+- **Q3** (user-specified, full spec recorded verbatim in `PhaseDecisions.md`) — store the raw
+  event first, process inline in the same request immediately after, keep a failed attempt
+  `retry_pending` (never lose it, never mark permanently failed on the first miss), and add a
+  cron-invokable `webhook:retry-pending` job that reuses the exact same processor. Statuses:
+  `received` / `processing` / `processed` / `retry_pending` / `failed`. `max_attempts` is a code
+  constant, not a column.
+- **Q4** the HTTP response to the provider is always `200` once the event is stored and its
+  signature verified, regardless of the inline processing outcome — the cron job is the sole
+  retry mechanism, never the provider's own redelivery.
+- **Q5** `POST /api/v1/webhooks/{provider}/{token}` — confirmed the path shape Phase 9's
+  `AddProviderAccountEndpointHandler` had already hardcoded into its output; `{provider}` is
+  logging-only, `{token}` alone resolves the account.
+
+**Database design confirmed** before migrating: one new table, `webhook_events`.
+
+**Files created**
+- `src/Database/Migrations/20260914090001_create_webhook_events_table.php`.
+- `src/Modules/Webhooks/Domain/{WebhookEvent,WebhookEventStatus,WebhookEventRepository}.php`.
+- `src/Modules/Webhooks/Infrastructure/{PdoWebhookEventRepository,definitions.php}`.
+- `src/Modules/Webhooks/Application/IngestWebhookEvent/{IngestWebhookEventCommand,IngestWebhookEventResult,IngestWebhookEventHandler}.php`
+  — resolves the token, verifies + parses the webhook, stores it, and calls the processor inline.
+- `src/Modules/Webhooks/Application/ProcessWebhookEvent/{ProcessWebhookEventResult,ProcessWebhookEventHandler}.php`
+  — the shared processor both inline ingestion and the cron retry call unchanged; resolves the
+  `GatewayReference` (trying `PaymentIntent` → `CheckoutSession` → `Order` → `Transaction`) and
+  delegates the actual transition to the existing (Phase 20) `RecordProviderTransactionHandler`.
+- `src/Http/Api/WebhooksReceiveAction.php` — the public HTTP entry point.
+- `src/Jobs/RetryPendingWebhookEvents.php` + `bin/RetryPendingWebhookEvents.php` — the
+  cron-invokable retry, mirroring Phase 5's `PurgeExpiredIdempotencyKeys` "plain invokable until
+  the real job runner (Phase 29) exists" pattern.
+- Tests: `ProcessWebhookEventHandlerTest` (6), `IngestWebhookEventHandlerTest` (5),
+  `RetryPendingWebhookEventsTest` (2), `WebhooksReceiveActionTest` (4).
+- Test doubles: `tests/Support/InMemoryWebhookEventRepository.php`; extended
+  `FakePaymentProviderPort` (`webhookParseResult()`, `throwOnParseWebhook()`) and
+  `StubProviderAccountDirectory` (`withWebhookToken()`, `findByEndpointToken()`).
+
+**Files modified**
+- `src/Modules/Providers/Application/ProviderAccountDirectory.php` /
+  `Infrastructure/PdoProviderAccountDirectory.php` — new `findByEndpointToken()`, the reverse
+  lookup from the opaque `provider_account_endpoints.token` URL segment to the owning account
+  (join against `provider_account_endpoints`, `kind = 'webhook'`, `is_active = 1`).
+- `src/Bootstrap/ContainerFactory.php` — registered the Webhooks module's `definitions.php`.
+- `src/Config/routes.php` — `POST /api/v1/webhooks/{provider}/{token}`, public, outside the
+  authenticated `/api/v1` group (same reasoning as `/payments/return`).
+- `composer.json` — `webhook:retry-pending` script + description.
+- `.claude/docs/Architecture.md`, `database-design.md`, `database-diagram.md`/`.html`,
+  `db_explain.md` — `webhook_events` documented; the module map, cross-cutting "Background jobs"
+  and "Idempotency" rows, and several stale Phase 20/24 "deferred" notes in Architecture.md §13
+  updated to match current reality.
+
+**Database changes.** One additive migration (see above); no destructive changes.
+
+**Tests.** 17 new tests across the four files above. Full suite: 578 tests, 1933 assertions;
+`composer ci` (CS + PHPStan + tests) clean. `tests/Integration/*` continues to self-skip in this
+environment (pre-existing MySQL/MariaDB credential issue unrelated to this change).
+
+**Known limitations.** No sweep job exists yet for a checkout attempt genuinely stuck
+pre-payment (Q1's narrower option, chosen over reusing `ReconcileCheckoutStatusHandler`) — today
+it only self-heals if something else (the browser return, an authenticated status poll) later
+creates the `Payment`, at which point a `retry_pending` webhook naturally succeeds on its next
+cron pass. `Subscriptions` (Phase 26) don't exist yet, so a subscription-related webhook event is
+stored but its `GatewayReference` lookup will simply never resolve to anything until then.
+
 ## 2026-09-13 — Phase 24 complete: A/B price-list visitor assignment
 
 **Summary.** Closes out Phase 24 by re-asking the two decisions Phase 15 deferred (Q4/Q5,

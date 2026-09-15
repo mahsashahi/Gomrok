@@ -16,6 +16,9 @@ final class StubProviderAccountDirectory implements ProviderAccountDirectory
     /** @var list<ProviderAccountSummary> */
     private array $summaries = [];
 
+    /** @var array<string, int> token => account id */
+    private array $webhookTokens = [];
+
     /**
      * @param list<string> $countries
      * @param list<string> $methods
@@ -44,6 +47,13 @@ final class StubProviderAccountDirectory implements ProviderAccountDirectory
             $methods,
             0,
         );
+
+        return $this;
+    }
+
+    public function withWebhookToken(int $accountId, string $token): self
+    {
+        $this->webhookTokens[$token] = $accountId;
 
         return $this;
     }
@@ -87,5 +97,12 @@ final class StubProviderAccountDirectory implements ProviderAccountDirectory
                 && $s->mode === $mode->value
                 && $s->status === 'active',
         ));
+    }
+
+    public function findByEndpointToken(string $token): ?ProviderAccountSummary
+    {
+        $accountId = $this->webhookTokens[$token] ?? null;
+
+        return $accountId !== null ? $this->findById($accountId) : null;
     }
 }
