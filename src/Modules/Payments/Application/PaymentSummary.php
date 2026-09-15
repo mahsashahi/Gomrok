@@ -12,7 +12,7 @@ final readonly class PaymentSummary
     public function __construct(
         public int $id,
         public int $clientId,
-        public int $checkoutAttemptId,
+        public ?int $checkoutAttemptId,
         public ?string $clientUserRef,
         public int $packageId,
         public string $country,

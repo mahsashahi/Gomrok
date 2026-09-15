@@ -18,6 +18,7 @@ flowchart TD
     Checkout["Checkout<br/>checkout_attempts — pre-payment lifecycle anchor (P18)"]
     Payments["Payments<br/>payments + payment_attempts + provider_transactions (P20)<br/>provider_customers + gateway_references (P20)"]
     Webhooks["Webhooks<br/>webhook_events — store-first, dedup, retry (P25)"]
+    Subscriptions["Subscriptions<br/>subscriptions + subscription_events + subscription_payment_links (P26)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -45,14 +46,16 @@ flowchart TD
     Checkout --> Payments
     Providers --> Webhooks
     Payments --> Webhooks
+    Checkout --> Subscriptions
+    Providers --> Subscriptions
     Payments --> Subscriptions
     Payments --> Notifications
     Admin -.-> Payments
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks done;
-    class Subscriptions,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions done;
+    class Notifications,Admin todo;
 ```
 
 Green = tables exist. Grey = designed in that module's phase.
@@ -836,7 +839,7 @@ erDiagram
     payments {
         int id PK
         int client_id FK "-> clients.id (CASCADE)"
-        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); UNIQUE"
+        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); UNIQUE; nullable (P26 Q2)"
         varchar client_user_ref "nullable"
         int package_id FK "-> packages.id (CASCADE)"
         char country FK "-> countries.code (RESTRICT)"
@@ -889,11 +892,12 @@ erDiagram
         varchar reference_value "UNIQUE (provider_account_id, reference_type, reference_value)"
         int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); nullable (P24)"
         int payment_id FK "-> payments.id (CASCADE); nullable"
+        int subscription_id FK "-> subscriptions.id (CASCADE); nullable (P26)"
         datetime created_at "write-once"
     }
 
     clients ||--o{ payments : "owns"
-    checkout_attempts ||--|| payments : "converts to"
+    checkout_attempts |o--|| payments : "converts to (nullable P26)"
     packages ||--o{ payments : "purchases"
     payments ||--o{ payment_attempts : "tries via"
     provider_accounts ||--o{ payment_attempts : "attempted through"
@@ -906,18 +910,22 @@ erDiagram
     payments ||--o{ gateway_references : "referenced by"
 ```
 
-A payment is created from exactly one confirmed `checkout_attempts` row (Q1,
+A payment was originally created from exactly one confirmed `checkout_attempts` row only (Q1,
 `UNIQUE (checkout_attempt_id)`) — `amount_minor` is frozen from the pricing/voucher decision
-snapshots at that moment, never re-derived. `payment_attempts` → `provider_transactions` is a
-deliberate two-level hierarchy (Q3): an attempt is one distinct "try" against a provider (a
-declined card retried with a different method is a *new* attempt, `attempt_number` incrementing),
-while each raw call/response under that attempt gets its own immutable `provider_transactions`
-row. `provider_customers` and `gateway_references` (Q4) are separate concerns — a durable
-customer identity reused across payments vs. a generic, provider-agnostic reverse-lookup table
-(no `subscription_id` column until Phase 26 adds it additively). `gateway_references` also gained
-a nullable `checkout_attempt_id` (Phase 24 Q1) — exactly one of `checkout_attempt_id` /
-`payment_id` is set per row, since a provider checkout-session reference exists before any
-`payments` row does. Lifecycle: an explicit
+snapshots at that moment, never re-derived. **Phase 26 Q2 added a second creation path**:
+`checkout_attempt_id` is now nullable, since a subscription renewal charge is a real `payments`
+row with no checkout attempt of its own (linked to its subscription via
+`subscription_payment_links` instead — see the Subscriptions section below). `payment_attempts` →
+`provider_transactions` is a deliberate two-level hierarchy (Q3): an attempt is one distinct "try"
+against a provider (a declined card retried with a different method is a *new* attempt,
+`attempt_number` incrementing), while each raw call/response under that attempt gets its own
+immutable `provider_transactions` row. `provider_customers` and `gateway_references` (Q4) are
+separate concerns — a durable customer identity reused across payments vs. a generic,
+provider-agnostic reverse-lookup table. `gateway_references` carries three nullable parent
+columns now: `checkout_attempt_id` (Phase 24 Q1) and `subscription_id` (Phase 26) alongside
+`payment_id` — exactly one is set per row, since a provider checkout-session reference exists
+before any `payments` row does, and a real provider Subscription-resource reference exists only
+once a `subscriptions` row does. Lifecycle: an explicit
 allowed-next-statuses graph per `PaymentStatus` (not a single rank, since a payment genuinely
 branches — `paid` can go to `refunded`, `partially_refunded`, or `disputed`; a dispute can
 resolve back to `paid` or escalate to `chargeback`); terminal once `refunded` / `canceled` /
@@ -969,3 +977,74 @@ verified, regardless of the inline processing outcome (Q4) — the cron job is t
 never the provider's own redelivery. `POST /api/v1/webhooks/{provider}/{token}` (Q5) is public,
 `{token}` (from `provider_account_endpoints`, Phase 9) resolves the account; `{provider}` is
 logging-only. Full detail: `.claude/docs/database-design.md` → "Webhooks (Phase 25)".
+
+## Subscriptions (Phase 26)
+
+```mermaid
+erDiagram
+    subscriptions {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        varchar client_user_ref "NOT NULL (Q4) — unlike payments.client_user_ref"
+        int checkout_attempt_id FK "-> checkout_attempts.id (CASCADE); UNIQUE"
+        int package_id FK "-> packages.id (CASCADE)"
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        char currency_code FK "-> currencies.code (RESTRICT)"
+        bigint amount_minor
+        varchar payment_method "nullable"
+        varchar subscription_interval "monthly | quarterly | yearly"
+        varchar status "SubscriptionStatus, default active"
+        datetime trial_ends_at "nullable"
+        datetime current_period_start "nullable"
+        datetime current_period_end "nullable"
+        varchar error_code "nullable"
+        varchar error_message "nullable"
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+    subscription_events {
+        int id PK
+        int subscription_id FK "-> subscriptions.id (CASCADE)"
+        varchar kind "created | renewed | charge_failed | cancelled | ..."
+        varchar provider_status_raw "nullable"
+        json payload "nullable"
+        datetime created_at "write-once, no updated_at"
+    }
+    subscription_payment_links {
+        int id PK
+        int subscription_id FK "-> subscriptions.id (CASCADE)"
+        int payment_id FK "-> payments.id (CASCADE); UNIQUE"
+        datetime billing_period_start "nullable"
+        datetime billing_period_end "nullable"
+        datetime created_at "write-once"
+    }
+
+    clients ||--o{ subscriptions : "owns"
+    checkout_attempts ||--|| subscriptions : "converts to"
+    packages ||--o{ subscriptions : "purchases"
+    provider_accounts ||--o{ subscriptions : "billed through"
+    subscriptions ||--o{ subscription_events : "logs"
+    subscriptions ||--o{ subscription_payment_links : "charges via"
+    payments ||--o| subscription_payment_links : "linked by"
+```
+
+A subscription is created from exactly one confirmed `checkout_attempts` row (Q1, `UNIQUE
+(checkout_attempt_id)`) — reusing the same Checkout pipeline a one-time payment uses, so every
+package/country/provider/method/client-config subscription-capability guard is already enforced
+before `CreateSubscriptionHandler` runs. No `country` column: a direct mid-phase user correction
+("skip the country column for now"), not a Q1-Q4 decision — a handler that needs a subscription's
+country (`RecordSubscriptionPaymentHandler`, building a `Payment`) reads it from
+`checkout_attempts.country` via `checkout_attempt_id` instead. `payment_method` is nullable, also
+a direct correction. `client_user_ref` is the one mandatory field (Q4) where `Subscriptions`
+diverges from `payments`' nullable precedent — CLAUDE.md's Subscription Ownership Model requires
+a known owner for every subscription. Lifecycle (`SubscriptionStatus`): `trialing`/`active` ↔
+`past_due` → `cancelled` (terminal) — an explicit allowed-next-statuses graph, the same pattern
+`PaymentStatus` established, since active↔past_due can cycle. `subscription_payment_links` (Q2)
+is the explicit join answering "which payments belong to this subscription" — a renewal charge is
+a real `payments` row with `checkout_attempt_id = NULL`, linked here instead; `UNIQUE (payment_id)`
+means a payment belongs to at most one subscription. Example: a client user on a monthly Pro
+subscription whose card is declined on renewal gets a new `payments` row (`status = failed`) plus
+a `subscription_payment_links` row tying it to their subscription, a `subscription_events` row
+(`kind = charge_failed`), and their subscription's own `status` moves to `past_due` — all without
+touching `checkout_attempts` at all, since no new checkout ever happened. Full detail:
+`.claude/docs/database-design.md` → "Subscriptions (Phase 26)".

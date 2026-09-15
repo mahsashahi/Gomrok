@@ -49,8 +49,9 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Ziraat adapter (Phase 23) | deferred — no tables |
 | Payment creation flow (Phase 24) | `price_list_assignments` — **1** (Q6/Q7); `gateway_references` gained a nullable `checkout_attempt_id` column (Q1) and `checkout_attempts` gained `hash_return_token` (Q4) |
 | Webhooks module (Phase 25) | `webhook_events` — **1** |
+| Subscriptions module (Phase 26) | `subscriptions`, `subscription_events`, `subscription_payment_links` — **3**; `payments.checkout_attempt_id` made nullable (Q2) and `gateway_references` gained a nullable `subscription_id` column |
 
-**Total: 53 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 56 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 ---
@@ -1142,7 +1143,7 @@ from a real provider response.
 | --- | --- | --- | --- |
 | `id` | INT UNSIGNED AI | no | PK |
 | `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
-| `checkout_attempt_id` | INT UNSIGNED | no | FK → `checkout_attempts(id)` CASCADE; **`UNIQUE`** — one payment per attempt (Q1) |
+| `checkout_attempt_id` | INT UNSIGNED | **yes** (Phase 26 Q2) | FK → `checkout_attempts(id)` CASCADE; **`UNIQUE`** — one payment per attempt (Q1). `NULL` for a subscription renewal charge (no checkout attempt of its own — created via `RecordSubscriptionPaymentHandler`, linked instead through `subscription_payment_links`); MySQL allows multiple `NULL`s under a `UNIQUE` index, so this doesn't weaken the one-payment-per-attempt guarantee |
 | `client_user_ref` | VARCHAR(120) | yes | copied from the checkout attempt |
 | `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
 | `country` | CHAR(2) | no | FK → `countries(code)` RESTRICT |
@@ -1216,20 +1217,23 @@ The generic, provider-agnostic reverse-lookup table (Q4).
 | `reference_value` | VARCHAR(191) | no | the raw provider id string |
 | `checkout_attempt_id` | INT UNSIGNED | yes | FK → `checkout_attempts(id)` CASCADE; set when the reference is recorded before a `payments` row exists (Phase 24 Q1) |
 | `payment_id` | INT UNSIGNED | yes | FK → `payments(id)` CASCADE; null when the reference is subscription-only or predates the payment |
+| `subscription_id` | INT UNSIGNED | yes | FK → `subscriptions(id)` CASCADE (Phase 26) — set for a real provider Subscription-resource reference, recorded once `CreateSubscriptionHandler` creates the `subscriptions` row |
 | `created_at` | DATETIME | no | write-once |
 
 `UNIQUE (provider_account_id, reference_type, reference_value)` =
 `uniq_gateway_references_account_type_value`; `INDEX (payment_id)` =
 `idx_gateway_references_payment`; `INDEX (checkout_attempt_id)` =
-`idx_gateway_references_checkout_attempt` (Phase 24). Exactly one of `checkout_attempt_id` /
-`payment_id` is set on any row — app-enforced (`GatewayReference::forCheckoutAttempt()` /
-`::forPayment()`), not a DB constraint: a provider checkout-session reference (Stripe session id,
-Mollie payment id, PayPal order id) is created at `checkout_attempts.status =
-provider_checkout_created`, before the attempt reaches `confirmed` (`Payment::create()`'s
-precondition, Phase 20 Q1), so `checkout_attempt_id` is the only parent available at that point;
-`payment_id` is filled in for references recorded afterward. **No `subscription_id` column yet** —
-`subscriptions` doesn't exist until Phase 26; it will be added there as an additive, nullable
-column, the same pattern as `checkout_attempt_id`.
+`idx_gateway_references_checkout_attempt` (Phase 24); `INDEX (subscription_id)` =
+`idx_gateway_references_subscription` (Phase 26). Exactly one of `checkout_attempt_id` /
+`payment_id` / `subscription_id` is set on any row — app-enforced (`GatewayReference::forCheckoutAttempt()` /
+`::forPayment()` / `::forSubscription()`), not a DB constraint: a provider checkout-session
+reference (Stripe session id, Mollie payment id, PayPal order id) is created at
+`checkout_attempts.status = provider_checkout_created`, before the attempt reaches `confirmed`
+(`Payment::create()`'s precondition, Phase 20 Q1), so `checkout_attempt_id` is the only parent
+available at that point; `payment_id` is filled in for references recorded afterward;
+`subscription_id` is filled in once a `subscriptions` row exists (Phase 26 — the real provider
+Subscription resource id, Stripe's `sub_...`, distinct from the checkout-session reference the
+subscription's first charge still carries).
 
 ### Lifecycle (`PaymentStatus`, Phase 20 Q2)
 
@@ -1352,6 +1356,120 @@ picked up immediately without needing to touch any stored webhook row.
 
 ---
 
+## Subscriptions (Phase 26)
+
+The `Subscriptions` module. A `Subscription` is created from exactly one confirmed
+`checkout_attempts` row (Q1 — reuses the Checkout pipeline, the same origin `payments` already
+requires) once `ReconcileCheckoutStatusHandler` sees the attempt's `purchaseType` is
+`subscription`; `subscription_events` is a write-once log mirroring `provider_transactions`;
+`subscription_payment_links` ties a subscription to every `payments` row charged under it —
+including renewal charges, which have no `checkout_attempts` row of their own (Q2).
+`subscriptions` has **no `country` column** — a mid-phase user correction (see
+`PhaseDecisions.md`'s Phase 26 addendum); a handler that needs one (e.g.
+`RecordSubscriptionPaymentHandler`) reads it from the origin `checkout_attempts.country` via
+`checkout_attempt_id`.
+
+### `subscriptions`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `client_user_ref` | VARCHAR(120) | no | **mandatory** (Q4) — unlike `payments.client_user_ref`, which stays nullable |
+| `checkout_attempt_id` | INT UNSIGNED | no | FK → `checkout_attempts(id)` CASCADE; **`UNIQUE`** — one subscription per originating attempt |
+| `package_id` | INT UNSIGNED | no | FK → `packages(id)` CASCADE |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
+| `currency_code` | CHAR(3) | no | FK → `currencies(code)` RESTRICT |
+| `amount_minor` | BIGINT UNSIGNED | no | the recurring charge amount, frozen at creation |
+| `payment_method` | VARCHAR(20) | **yes** | nullable — mid-phase user correction (see addendum above) |
+| `subscription_interval` | VARCHAR(20) | no | `SubscriptionInterval`: `monthly` / `quarterly` / `yearly` |
+| `status` | VARCHAR(20) | no | `SubscriptionStatus`, default `active` — see lifecycle below |
+| `trial_ends_at` | DATETIME | yes | set at creation when the package's resolved purchase capability grants a trial (Phase 12) |
+| `current_period_start` / `current_period_end` | DATETIME | yes / yes | set by `recordPeriod()` when a billing period is known |
+| `error_code` / `error_message` | VARCHAR(100) / VARCHAR(500) | yes / yes | set on a `past_due` transition |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (checkout_attempt_id)` = `uniq_subscriptions_checkout_attempt`; `INDEX (client_id,
+client_user_ref)` = `idx_subscriptions_client_user`; `INDEX (client_id, status)` =
+`idx_subscriptions_client_status`; `INDEX (package_id)` = `idx_subscriptions_package`.
+
+### `subscription_events`
+
+Write-once event log — no `updated_at`, no update method on the repository port. Mirrors
+`provider_transactions`.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `subscription_id` | INT UNSIGNED | no | FK → `subscriptions(id)` CASCADE |
+| `kind` | VARCHAR(30) | no | generic label (`created` / `renewed` / `charge_failed` / `cancelled` / …), not FK'd |
+| `provider_status_raw` | VARCHAR(100) | yes | the unmapped provider status string, when one exists |
+| `payload` | JSON | yes | |
+| `created_at` | DATETIME | no | write-once |
+
+`INDEX (subscription_id)` = `idx_subscription_events_subscription`.
+
+### `subscription_payment_links`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `subscription_id` | INT UNSIGNED | no | FK → `subscriptions(id)` CASCADE |
+| `payment_id` | INT UNSIGNED | no | FK → `payments(id)` CASCADE; **`UNIQUE`** — a payment belongs to at most one subscription |
+| `billing_period_start` / `billing_period_end` | DATETIME | yes / yes | |
+| `created_at` | DATETIME | no | write-once |
+
+`UNIQUE (payment_id)` = `uniq_subscription_payment_links_payment`; `INDEX (subscription_id)` =
+`idx_subscription_payment_links_subscription`.
+
+### Lifecycle (`SubscriptionStatus`)
+
+An explicit allowed-next-statuses graph per status, the same pattern `PaymentStatus` established
+(Phase 20 Q2) — active↔past_due can cycle, so a single rank doesn't fit:
+
+```text
+trialing → active, past_due, cancelled
+active   → past_due, cancelled
+past_due → active, cancelled
+cancelled → (none — terminal)
+```
+
+`transitionTo($new)`: (1) terminal (`cancelled`) → always **rejected**; (2) `$new === current` →
+**idempotent no-op**; (3) else → allowed only if `$new` is in `current`'s
+`allowedNextStatuses()` (`subscription.invalid_transition` otherwise). A `past_due` transition
+stores `error_code`/`error_message`; every other transition clears them.
+
+### Resolution
+
+**Creation** (`CreateSubscriptionHandler`): called by `ReconcileCheckoutStatusHandler` right
+after it creates the attempt's first `Payment`, for a `Confirmed` attempt whose `purchaseType` is
+`subscription`. Idempotent by `checkout_attempt_id`. Resolves trial terms from
+`PackagePurchaseCapabilityResolver` (Phase 12) for the attempt's country — never from the
+request. Links the first `Payment` via `subscription_payment_links` and records a `created`
+`subscription_events` row; records a `GatewayReference::forSubscription()` row when the provider
+returned a real Subscription-resource id (Stripe's `subscriptionReference`, surfaced on
+`ProviderPaymentStatus`; `null` for Mollie's provisional support).
+
+**Renewal charges** (`RecordSubscriptionPaymentHandler`, Q2's "second creation path"): the one
+place that creates a `payments` row outside `CreatePaymentHandler`. Idempotent by
+`providerPaymentReference` — checked via the existing `GatewayReferenceType::PaymentIntent` row
+before creating anything, so a duplicate delivery can never create a second payment for the same
+charge. Reads `country` from the subscription's origin checkout attempt (no `country` column on
+`subscriptions`); drives the new `Payment` through the existing `RecordProviderTransactionHandler`
+unchanged; on success transitions the subscription to `active`, on failure to `past_due`.
+**Not yet wired to an automatic trigger this phase** — see Phase26Result.md's Known Limitations
+(webhook-driven renewal automation is deferred to Phase 29, alongside Q3's deferred Mollie
+renewal scheduler).
+
+**Cancellation** (`CancelSubscriptionHandler`): capability-gated on `Capability::SubscriptionCancel`
+AND `adapter instanceof SupportsSubscriptions` (mirrors Phase 24 Q5b's "both" pattern for payment
+actions). Reference resolution (`ResolveSubscriptionActionContext`) prefers the real
+`GatewayReferenceType::Subscription` reference, falling back to the original `CheckoutSession`
+reference recorded at the subscription's first checkout when no deeper one exists (Mollie's
+provisional case, Q3).
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -1414,6 +1532,9 @@ picked up immediately without needing to touch any stored webhook row.
 | `src/Database/Migrations/20260913090002_add_hash_return_token_to_checkout_attempts.php` | `Gomrok\Database\Migrations\AddHashReturnTokenToCheckoutAttempts` |
 | `src/Database/Migrations/20260913090003_create_price_list_assignments_table.php` | `Gomrok\Database\Migrations\CreatePriceListAssignmentsTable` |
 | `src/Database/Migrations/20260914090001_create_webhook_events_table.php` | `Gomrok\Database\Migrations\CreateWebhookEventsTable` |
+| `src/Database/Migrations/20260914120001_create_subscriptions_tables.php` | `Gomrok\Database\Migrations\CreateSubscriptionsTables` |
+| `src/Database/Migrations/20260914120002_make_payments_checkout_attempt_id_nullable.php` | `Gomrok\Database\Migrations\MakePaymentsCheckoutAttemptIdNullable` |
+| `src/Database/Migrations/20260914120003_add_subscription_id_to_gateway_references.php` | `Gomrok\Database\Migrations\AddSubscriptionIdToGatewayReferences` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

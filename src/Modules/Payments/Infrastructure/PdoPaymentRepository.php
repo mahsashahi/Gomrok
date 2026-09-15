@@ -121,7 +121,7 @@ final readonly class PdoPaymentRepository implements PaymentRepository
         return Payment::fromStorage(
             Row::int($row['id'] ?? null),
             Row::int($row['client_id'] ?? null),
-            Row::int($row['checkout_attempt_id'] ?? null),
+            Row::nullableInt($row['checkout_attempt_id'] ?? null),
             Row::nullableStr($row['client_user_ref'] ?? null),
             Row::int($row['package_id'] ?? null),
             Row::str($row['country'] ?? ''),

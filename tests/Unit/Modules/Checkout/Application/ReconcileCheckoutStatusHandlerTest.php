@@ -10,6 +10,7 @@ use Gomrok\Modules\Checkout\Application\ReconcileCheckoutStatus\ReconcileCheckou
 use Gomrok\Modules\Checkout\Application\ResolveCheckoutPayableAmount;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttempt;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttemptStatus;
+use Gomrok\Modules\Packages\Application\PackagePurchaseCapabilityResolver;
 use Gomrok\Modules\Payments\Application\ChangePaymentStatus\ChangePaymentStatusHandler;
 use Gomrok\Modules\Payments\Application\CreatePayment\CreatePaymentHandler;
 use Gomrok\Modules\Payments\Domain\GatewayReference;
@@ -20,13 +21,18 @@ use Gomrok\Modules\Pricing\Application\PricingDecisionSnapshot;
 use Gomrok\Modules\Pricing\Application\ResolvedPrice;
 use Gomrok\Modules\Providers\Application\Routing\ProviderRoutingDecisionSnapshot;
 use Gomrok\Modules\Providers\Domain\PurchaseType;
+use Gomrok\Modules\Subscriptions\Application\CreateSubscription\CreateSubscriptionHandler;
 use Gomrok\Tests\Support\FakePaymentProviderPort;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryCheckoutAttemptRepository;
 use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
+use Gomrok\Tests\Support\InMemoryPackageRepository;
 use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryPricingDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionEventRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionPaymentLinkRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\InMemoryVoucherDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryVoucherRedemptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
@@ -78,6 +84,20 @@ final class ReconcileCheckoutStatusHandlerTest extends TestCase
             new FrozenClock('2026-09-13T12:00:00+00:00'),
         );
 
+        $createSubscription = new CreateSubscriptionHandler(
+            $this->attempts,
+            $this->routingSnapshots,
+            new ResolveCheckoutPayableAmount($this->pricingSnapshots, new InMemoryVoucherDecisionSnapshotRepository(), new InMemoryVoucherRedemptionRepository()),
+            new PackagePurchaseCapabilityResolver(new InMemoryPackageRepository()),
+            new InMemorySubscriptionRepository(),
+            new InMemorySubscriptionEventRepository(),
+            new InMemorySubscriptionPaymentLinkRepository(),
+            $this->gatewayReferences,
+            new RecordingAuditLogWriter(),
+            new SynchronousTransactions(),
+            new FrozenClock('2026-09-13T12:00:00+00:00'),
+        );
+
         $this->handler = new ReconcileCheckoutStatusHandler(
             $this->attempts,
             $this->routingSnapshots,
@@ -85,6 +105,7 @@ final class ReconcileCheckoutStatusHandlerTest extends TestCase
             $this->adapterFactory,
             $createPayment,
             $changePaymentStatus,
+            $createSubscription,
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-13T12:00:00+00:00'),

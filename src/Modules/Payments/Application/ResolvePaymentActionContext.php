@@ -32,6 +32,11 @@ use Gomrok\Modules\Providers\Domain\PaymentMethod;
  * falling back to the original {@see GatewayReferenceType::CheckoutSession}
  * reference when no deeper one was ever recorded (Mollie: the same id serves
  * every action, so no deeper reference exists).
+ *
+ * A subscription renewal charge has no checkout attempt at all (Phase 26 Q2)
+ * — `forPayment()` returns `null` for one today (cancel/refund/capture on a
+ * renewal-originated payment isn't wired up this phase; a future phase could
+ * resolve the provider context via `subscription_payment_links` instead).
  */
 final readonly class ResolvePaymentActionContext
 {
@@ -46,7 +51,12 @@ final readonly class ResolvePaymentActionContext
 
     public function forPayment(Payment $payment): ?PaymentActionContext
     {
-        $routing = $this->routingSnapshots->findByCheckoutAttemptId($payment->checkoutAttemptId());
+        $checkoutAttemptId = $payment->checkoutAttemptId();
+        if ($checkoutAttemptId === null) {
+            return null;
+        }
+
+        $routing = $this->routingSnapshots->findByCheckoutAttemptId($checkoutAttemptId);
         if ($routing === null) {
             return null;
         }

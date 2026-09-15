@@ -1,75 +1,58 @@
-# Q: Start Phase 25 (Webhooks module)
+# Q: Phase 26 Subscriptions module completion
 
-Built the whole Webhooks module end to end: inbound webhook ingestion, per-provider signature
-verification, store-before-process, correct dedup (including Mollie's lack of real
-per-occurrence event ids), inline processing, and a cron-invokable retry mechanism. This
-completes Phase 25.
-
-## Decisions (Q1–Q5)
-
-- **Q1** — webhooks only ever update an **existing** `Payment`; never create one, and never
-  independently confirm a checkout attempt to `Payment`. The recommended option (reusing
-  `ReconcileCheckoutStatusHandler` as a third confirmation trigger alongside the return endpoint
-  and status poll) was declined in favor of this narrower scope, with a sweep job for stuck
-  pre-payment attempts explicitly left as future work.
-- **Q2** — the dedup key is `(provider_account_id, event_id, raw_status)`, not `event_id` alone.
-  Mollie's `parseWebhook()` returns the payment id itself as `eventId` — identical across every
-  status change on that payment — so `raw_status` has to be part of the key or `pending → paid`
-  and a later `paid → refunded` would collide and the second one would be silently dropped.
-- **Q3** (user-specified, full spec in `PhaseDecisions.md`) — store the raw event first, process
-  inline in the same HTTP request immediately after, keep a failed attempt `retry_pending`
-  (never lost, never immediately terminal on the first miss), add a cron-invokable
-  `webhook:retry-pending` job that reuses the exact same processor as inline handling. Statuses:
-  `received` / `processing` / `processed` / `retry_pending` / `failed`. `max_attempts` is a code
-  constant (`ProcessWebhookEventHandler::MAX_ATTEMPTS = 5`), not a column.
-- **Q4** — the HTTP response to the provider is always `200` once the event is stored and its
-  signature verified, regardless of the inline processing outcome — the cron job is the sole
-  retry mechanism, never the provider's own at-least-once redelivery.
-- **Q5** — `POST /api/v1/webhooks/{provider}/{token}`. This confirmed a path shape that had
-  already been hardcoded into Phase 9's `AddProviderAccountEndpointHandler` output — `{provider}`
-  is logging-only, `{token}` alone resolves the account.
+Phase 26 (Subscriptions module) is complete, with known limitations, and fully documented.
 
 ## What was built
 
-- **`webhook_events`** table (confirmed design before migrating) — stores the raw payload
-  (never re-encoded), headers, parsed fields, status, attempt count, and the resolved payment id.
-- **`WebhookEvent`** domain aggregate + **`WebhookEventRepository`** port +
-  **`PdoWebhookEventRepository`**.
-- **`IngestWebhookEventHandler`** — resolves the endpoint token (via a new
-  `ProviderAccountDirectory::findByEndpointToken()`), verifies + parses the webhook through the
-  adapter (already built in Phases 21–22), stores the row, and calls the processor inline.
-- **`ProcessWebhookEventHandler`** — the one processor both inline ingestion and the cron retry
-  call, unchanged. Resolves the `GatewayReference` (trying `PaymentIntent` → `CheckoutSession` →
-  `Order` → `Transaction`), then delegates the actual state transition to the existing (Phase 20)
-  `RecordProviderTransactionHandler` — `PaymentStatus::transitionTo()`'s own guard is what makes
-  redelivery and retry safe, not anything webhook-specific. A domain-rule rejection (an illegal
-  transition) goes straight to `failed` without consuming retry attempts, since replaying the
-  same status can never produce a different outcome.
-- **`POST /api/v1/webhooks/{provider}/{token}`** (`WebhooksReceiveAction`) — public, outside the
-  authenticated `/api/v1` group.
-- **`RetryPendingWebhookEvents`** (`src/Jobs/`) + `bin/RetryPendingWebhookEvents.php` +
-  `composer webhook:retry-pending` — the cron-invokable retry, matching Phase 5's
-  `PurgeExpiredIdempotencyKeys` "plain invokable until the real job runner (Phase 29) exists"
-  pattern exactly.
+Reused the entire Checkout pipeline for subscription creation (Q1) rather than a parallel one:
+`POST /api/v1/subscriptions` runs `CreateCheckoutAttemptHandler → ResolveCheckoutPricingHandler →
+(ReserveCheckoutVoucherHandler) → SelectCheckoutProviderHandler → CreateProviderSubscriptionHandler`,
+the exact same shape as the payment-creation flow. `ReconcileCheckoutStatusHandler` was extended
+so a `Confirmed` subscription-purchase-type attempt also gets a `Subscription` row created (via
+the new `CreateSubscriptionHandler`), right after its first `Payment`.
 
-## Tests
+A renewal charge becomes a real `payments` row via a second creation path (Q2):
+`payments.checkout_attempt_id` is now nullable, and `RecordSubscriptionPaymentHandler` creates
+the `Payment` directly from subscription context, linked via a new `subscription_payment_links`
+table instead of a checkout attempt. It's idempotent by `providerPaymentReference`, reuses the
+existing `RecordProviderTransactionHandler` unchanged, and transitions the subscription to
+`active`/`past_due` based on the outcome.
 
-17 new tests: `ProcessWebhookEventHandlerTest` (6), `IngestWebhookEventHandlerTest` (5),
-`RetryPendingWebhookEventsTest` (2), `WebhooksReceiveActionTest` (4). Full suite: **578 tests,
-1933 assertions**; `composer ci` (CS + PHPStan + tests) clean.
+`CancelSubscriptionHandler` is capability-gated on `Capability::SubscriptionCancel` **and**
+`instanceof SupportsSubscriptions` (the same "both, not either" pattern Phase 24 established for
+payment actions), with reference resolution preferring the real provider Subscription-resource
+reference and falling back to the original checkout-session reference for Mollie's provisional
+support.
+
+`subscriptions.client_user_ref` is mandatory (Q4) — the one place this module diverges from
+`payments`' nullable precedent, per CLAUDE.md's Subscription Ownership Model. Mid-phase, the user
+gave a direct correction: `payment_method` is nullable and there's no `country` column on
+`subscriptions` at all (a handler that needs one reads it from the origin checkout attempt
+instead).
+
+36 new tests across 9 files, including a dedicated `SubscriptionOwnershipTest` that directly
+exercises both ownership-model queries CLAUDE.md names (gateway subscription id → internal
+record; client user → their subscriptions). Full suite: 575 tests, 2064 assertions, all passing;
+`composer stan` and `composer cs` both clean.
+
+## Known limitations
+
+1. **Webhook-driven subscription automation is not wired this phase.**
+   `ProcessWebhookEventHandler` (Phase 25) doesn't resolve `Subscription`-typed gateway
+   references or call `RecordSubscriptionPaymentHandler` automatically — deferred to Phase 29,
+   alongside Q3's deferred Mollie renewal scheduler. The handler itself is built and fully tested
+   as the reusable unit a future trigger will call unchanged.
+2. Cancel/refund/capture don't work on a renewal-originated `Payment` yet (no checkout attempt to
+   resolve provider context from).
+3. No admin panel views for subscriptions yet (Phase 27).
+4. Migrations were not re-verified against a live database this session (Docker daemon
+   unavailable locally) — schema correctness rests on the earlier design confirmation and the
+   repository layer's test coverage.
 
 ## Documentation
 
-`.claude/docs/Architecture.md` (new Webhooks subsection, module map, corrected several stale
-Phase 20/24 notes), `database-design.md`, `database-diagram.md`/`.html`, `db_explain.md` (all
-gained a `webhook_events` section), `.claude/Changelog.md`, `.claude/FileIndex.md`,
-`.claude/knowledge/Knowledge.md`, `.claude/docs/Phases.md` (Phase 25 now ☑ complete),
-`.claude/PhaseResults/PhaseDecisions.md` (Q1–Q5 recorded), and
-`.claude/PhaseResults/Phase25Result.md` created recording the full phase.
+Full pass completed across `PhaseDecisions.md` (addendum), `database-design.md`,
+`database-diagram.md`/`.html`, `db_explain.md`, `Architecture.md`, `Changelog.md`, `FileIndex.md`,
+`Knowledge.md`, `Phases.md` (marked complete), and the new `PhaseResults/Phase26Result.md`.
 
-## What's left
-
-Nothing outstanding for Phase 25 itself. No git commit has been made yet for this work. Deferred
-beyond this phase: a sweep job for checkout attempts stuck pre-payment (Q1's narrower scope), and
-subscription-related webhook events are stored but can't resolve to anything until Phase 26
-builds the `Subscriptions` module. Next up per `Phases.md` is Phase 26.
+Ready for a "Commit this" from the user.

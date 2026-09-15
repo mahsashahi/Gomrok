@@ -7,6 +7,124 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-14 — Phase 26 complete: Subscriptions module
+
+**Summary.** Built the whole Subscriptions module by reusing the Checkout pipeline (Q1): a
+`Subscription` aggregate, its ownership model, `subscription_events`, and
+`subscription_payment_links`; a second `Payment`-creation path for renewal charges (Q2, no
+checkout attempt precursor); creation, show, and capability-gated cancel HTTP endpoints. Not a
+breaking change for existing one-time-payment flows — every schema change is additive/nullable.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 26 Q1–Q4, plus a mid-phase addendum):
+- **Q1** reuse the Checkout pipeline for subscription creation — `CreateCheckoutSubscriptionHandler`
+  runs the same `CreateCheckoutAttemptHandler → ResolveCheckoutPricingHandler →
+  (ReserveCheckoutVoucherHandler) → SelectCheckoutProviderHandler` steps as the payment flow,
+  ending in a new `CreateProviderSubscriptionHandler` instead of `CreateProviderCheckoutHandler`;
+  `ReconcileCheckoutStatusHandler` (Phase 24) is extended to also create the `Subscription` once a
+  subscription-purchase-type attempt is `Confirmed`; the existing `GET /payments/return` handles
+  the redirect back for subscriptions too — no separate return endpoint.
+- **Q2** a renewal charge becomes a real `payments` row via a second creation path —
+  `payments.checkout_attempt_id` is now nullable; `RecordSubscriptionPaymentHandler` creates the
+  `Payment` directly from subscription context, linked via the new `subscription_payment_links`
+  table instead of a checkout attempt.
+- **Q3** Mollie's renewal automation is deferred to Phase 29 — Mollie's `createSubscription()`
+  stays provisional (customer + first payment only, `sequenceType: FIRST`, no real recurring
+  mechanism); Stripe's real Subscription resource auto-renews on its own, but wiring Gomrok to
+  react to that via webhooks is *also* deferred this phase (see Known Limitations).
+- **Q4** `subscriptions.client_user_ref` is `NOT NULL`, unlike `payments.client_user_ref` — the
+  one place CLAUDE.md's Subscription Ownership Model requires a mandatory owner.
+- **Addendum** (direct user correction, not a Q1–Q4 option): "Make payment_method nullable and
+  skip the country column for now" — `subscriptions.payment_method` is nullable, and
+  `subscriptions` has **no `country` column at all**; a handler that needs one
+  (`RecordSubscriptionPaymentHandler`) reads it from the origin checkout attempt instead.
+
+**Database design confirmed** before migrating: two new tables plus one existing table's schema
+change.
+
+**Files created**
+- `src/Database/Migrations/20260914120001_create_subscriptions_tables.php` — `subscriptions`,
+  `subscription_events`, `subscription_payment_links`.
+- `src/Database/Migrations/20260914120002_make_payments_checkout_attempt_id_nullable.php`.
+- `src/Database/Migrations/20260914120003_add_subscription_id_to_gateway_references.php`.
+- `src/Modules/Subscriptions/Domain/{Subscription,SubscriptionStatus,SubscriptionRepository,SubscriptionEvent,SubscriptionEventRepository,SubscriptionPaymentLink,SubscriptionPaymentLinkRepository}.php`.
+- `src/Modules/Subscriptions/Infrastructure/{PdoSubscriptionRepository,PdoSubscriptionEventRepository,PdoSubscriptionPaymentLinkRepository,PdoSubscriptionDirectory,definitions.php}.php`.
+- `src/Modules/Subscriptions/Application/{SubscriptionSummary,SubscriptionDirectory,SubscriptionAuditSnapshot,SubscriptionActionContext,ResolveSubscriptionActionContext}.php`.
+- `src/Modules/Subscriptions/Application/CreateSubscription/{CreateSubscriptionCommand,CreateSubscriptionResult,CreateSubscriptionHandler}.php`
+  — creates the `Subscription`, idempotent by `checkout_attempt_id`; trial terms resolved from
+  `PackagePurchaseCapabilityResolver` (Phase 12), never from the request.
+- `src/Modules/Subscriptions/Application/CancelSubscription/{CancelSubscriptionCommand,CancelSubscriptionResult,CancelSubscriptionHandler}.php`
+  — capability-gated on `Capability::SubscriptionCancel` **and** `instanceof SupportsSubscriptions`
+  (Phase 24 Q5b's "both" pattern).
+- `src/Modules/Subscriptions/Application/RecordSubscriptionPayment/{RecordSubscriptionPaymentCommand,RecordSubscriptionPaymentResult,RecordSubscriptionPaymentHandler}.php`
+  — the Q2 second creation path; idempotent by `providerPaymentReference`; drives the new payment
+  through the existing `RecordProviderTransactionHandler` unchanged.
+- `src/Modules/Checkout/Application/CreateProviderSubscription/{CreateProviderSubscriptionCommand,CreateProviderSubscriptionResult,CreateProviderSubscriptionHandler}.php`
+  — subscription counterpart to `CreateProviderCheckoutHandler`; requires the resolved adapter to
+  implement `SupportsSubscriptions`.
+- `src/Modules/Checkout/Application/CreateCheckoutSubscription/{CreateCheckoutSubscriptionCommand,CreateCheckoutSubscriptionResult,CreateCheckoutSubscriptionHandler}.php`
+  — subscription counterpart to `CreateCheckoutPaymentHandler`.
+- `src/Http/Api/{SubscriptionsCreateAction,SubscriptionsShowAction,SubscriptionsCancelAction}.php`.
+- Tests: `CreateSubscriptionHandlerTest` (6), `RecordSubscriptionPaymentHandlerTest` (6),
+  `CancelSubscriptionHandlerTest` (5), `SubscriptionOwnershipTest` (2),
+  `CreateProviderSubscriptionHandlerTest` (6), `CreateCheckoutSubscriptionHandlerTest` (3),
+  `SubscriptionsCreateActionTest` (3), `SubscriptionsShowActionTest` (3),
+  `SubscriptionsCancelActionTest` (2).
+- Test doubles: `tests/Support/{InMemorySubscriptionRepository,InMemorySubscriptionEventRepository,InMemorySubscriptionPaymentLinkRepository,InMemorySubscriptionDirectory}.php`.
+
+**Files modified**
+- `src/Modules/Checkout/Application/ReconcileCheckoutStatus/ReconcileCheckoutStatusHandler.php`
+  — new `CreateSubscriptionHandler` constructor dependency; calls it after creating a Confirmed
+  subscription attempt's first `Payment`.
+- `src/Modules/Payments/Domain/GatewayReference.php` — third nullable parent `subscriptionId` +
+  new `forSubscription()` named constructor.
+- `src/Modules/Payments/Domain/GatewayReferenceRepository.php` /
+  `Infrastructure/PdoGatewayReferenceRepository.php` — new `forSubscription(int): array`.
+- `src/Modules/Payments/Domain/Payment.php` — `checkoutAttemptId` is `?int` everywhere (Q2).
+- `src/Modules/Payments/Infrastructure/PdoPaymentRepository.php`,
+  `Application/PaymentSummary.php`, `Infrastructure/PdoPaymentDirectory.php` — ripple from the
+  nullable `checkoutAttemptId`.
+- `src/Modules/Payments/Application/ResolvePaymentActionContext.php` — `forPayment()` returns
+  `null` early for a renewal-originated payment (no checkout attempt to resolve provider context
+  from) — a documented, honest Phase 26 limitation, not silently broken behavior.
+- `src/Modules/Providers/Application/Adapter/ProviderPaymentStatus.php` — new field
+  `?string $subscriptionReference` (Stripe's `mode: subscription` checkout session's own
+  `subscription` field).
+- `src/Modules/Providers/Infrastructure/Adapter/Stripe/StripeAdapter.php` — `getPaymentStatus()`
+  extracts and passes `subscriptionReference`.
+- `src/Bootstrap/ContainerFactory.php` — registered the Subscriptions module's `definitions.php`.
+- `src/Config/routes.php` — `POST /subscriptions`, `GET /subscriptions/{id}`,
+  `POST /subscriptions/{id}/cancel` inside the existing authenticated `/api/v1` group.
+- `tests/Support/FakePaymentProviderPort.php` — extended to also implement
+  `SupportsSubscriptions` (`createSubscription()`, `getSubscriptionStatus()`,
+  `cancelSubscription()`, `mapProviderSubscriptionStatusToInternalStatus()`).
+- Existing tests updated for the new `CreateSubscriptionHandler` constructor dependency:
+  `ReconcileCheckoutStatusHandlerTest.php`, `PaymentsStatusActionTest.php`,
+  `PaymentsReturnActionTest.php`.
+- `.claude/docs/Architecture.md`, `database-design.md`, `database-diagram.md`/`.html`,
+  `db_explain.md` — the new tables documented, `payments.checkout_attempt_id` and
+  `gateway_references.subscription_id` changes reflected, a Subscriptions module section added,
+  stale Phase 20/25 "deferred to Phase 26" notes in Architecture.md §13 updated to match reality.
+
+**Database changes.** Two new tables (`subscriptions`, `subscription_events`,
+`subscription_payment_links` — three, from one migration), one nullable-column change
+(`payments.checkout_attempt_id`), one additive nullable column
+(`gateway_references.subscription_id`). No destructive changes — every change is additive or
+widens an existing constraint (`NOT NULL` → nullable), never the reverse.
+
+**Tests.** 36 new tests across the nine files above. Full suite: 575 tests, 2064 assertions;
+`composer stan` (PHPStan) and `composer cs` (PHP-CS-Fixer) both clean. Migrations were not
+re-verified against a live database this session (Docker daemon unavailable locally) — schema
+correctness rests on the earlier database-design confirmation and the repository layer's own test
+coverage, not a fresh `composer migrate` run.
+
+**Known limitations.** (1) Webhook-driven subscription automation is not wired this phase —
+`ProcessWebhookEventHandler` (Phase 25) doesn't resolve `Subscription`-typed gateway references
+or call `RecordSubscriptionPaymentHandler`; deferred to Phase 29 alongside Q3's deferred Mollie
+renewal scheduler (`CreateSubscriptionHandler` and `RecordSubscriptionPaymentHandler` are built
+and fully tested as the reusable units a future trigger will call unchanged). (2) Cancel/refund/
+capture don't work on a renewal-originated `Payment` yet. (3) No admin panel views for
+subscriptions yet (Phase 27).
+
 ## 2026-09-14 — Phase 25 complete: Webhooks module
 
 **Summary.** Built the whole Webhooks module: `webhook_events` storage, per-provider signature
@@ -83,8 +201,9 @@ environment (pre-existing MySQL/MariaDB credential issue unrelated to this chang
 pre-payment (Q1's narrower option, chosen over reusing `ReconcileCheckoutStatusHandler`) — today
 it only self-heals if something else (the browser return, an authenticated status poll) later
 creates the `Payment`, at which point a `retry_pending` webhook naturally succeeds on its next
-cron pass. `Subscriptions` (Phase 26) don't exist yet, so a subscription-related webhook event is
-stored but its `GatewayReference` lookup will simply never resolve to anything until then.
+cron pass. `Subscriptions` (Phase 26) didn't exist yet at the time this phase was written; as of
+Phase 26, `ProcessWebhookEventHandler` still doesn't resolve `Subscription`-typed gateway
+references — see Phase 26's own Known Limitations above for why that stayed deferred to Phase 29.
 
 ## 2026-09-13 — Phase 24 complete: A/B price-list visitor assignment
 

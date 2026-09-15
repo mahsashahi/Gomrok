@@ -16,6 +16,143 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 26 — Subscriptions module
+
+### Q4 — Is `subscriptions.client_user_ref` mandatory?
+
+**Question:** CLAUDE.md's Subscription Ownership Model explicitly requires "one client user
+reference" as a mandatory ownership axis for subscriptions specifically — unlike
+`payments.client_user_ref`, which is nullable/optional today. Should
+`subscriptions.client_user_ref` be `NOT NULL` (mandatory, request-validated) instead of following
+`Payment`'s nullable precedent?
+
+**Options:**
+
+1. **`NOT NULL`, required at creation** — `POST /api/v1/subscriptions` requires
+   `client_user_ref` in the request body (validation error if missing);
+   `subscriptions.client_user_ref` is a `NOT NULL` column. Matches CLAUDE.md's explicit wording —
+   a subscription without a known owner can't answer "which active subscriptions does this user
+   have," one of the ownership questions CLAUDE.md names directly.
+2. Nullable, matching `Payment`'s precedent — consistent across the two tables, but an ownerless
+   subscription Gomrok can never resolve back to an end user becomes possible.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `subscriptions.client_user_ref` is `NOT NULL`; `POST /api/v1/subscriptions`
+requires `client_user_ref` in the request body.
+
+**Status:** Decided
+
+---
+
+### Q3 — Scope of Mollie's ongoing recurring-charge automation this phase
+
+**Question:** Mollie's `createSubscription()` is provisional — it sets up a customer + mandate
+via a first payment, but Mollie has no real Subscription resource, so nothing actually triggers a
+renewal charge on schedule. Should this phase build the real recurring-charge engine, or ship
+Mollie subscription creation now with renewal automation explicitly deferred?
+
+**Options:**
+
+1. **Defer to Phase 29** — build subscription ownership/status/cancel now for both Stripe and
+   Mollie; document that Mollie subscriptions don't yet auto-renew (Stripe's do, since Stripe's
+   own billing engine handles it and sends webhooks). The actual "find subscriptions due, charge
+   the mandate" cron job is Phase 29's job (Background Jobs already lists "refund/subscription
+   reconciliation").
+2. Build the recurring-charge job now — a cron-invokable `RunDueSubscriptionRenewals` job (same
+   shape as Phase 25's webhook retry) that charges Mollie mandates on schedule this phase.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — deferred to Phase 29. Mollie subscription creation ships; the renewal
+scheduler does not exist yet and is documented as a known limitation.
+
+**Status:** Decided
+
+---
+
+### Q2 — How does a subscription renewal charge become a `Payment`?
+
+**Question:** A renewal charge is webhook-driven (Stripe's/Mollie's own billing schedule) with no
+checkout attempt precursor at all. `Payment::create()`'s current precondition (Phase 20 Q1) is
+"exactly one confirmed `checkout_attempts` row" — a renewal has none.
+
+**Options:**
+
+1. **Real `payments` row, second creation path** — a new `RecordSubscriptionPaymentHandler`
+   creates a `Payment` directly from subscription context (no checkout attempt), with a nullable
+   `checkout_attempt_id` on `payments` (`NULL` for subscription-originated rows) and a
+   `subscription_payment_links` row tying it to the subscription + billing period. Renewal
+   charges show up in the main `payments` table like any other charge.
+2. No `payments` row — renewal charges recorded only in `subscription_events` (amount, provider
+   status, timestamp). Keeps Phase 20 Q1's invariant fully intact, but a renewal charge can't be
+   refunded/captured through the existing payments endpoints, and revenue reporting has to look
+   in two tables.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — `payments.checkout_attempt_id` becomes nullable; renewal charges get a
+real `payments` row via a new subscription-context creation path, linked through
+`subscription_payment_links`.
+
+**Status:** Decided
+
+---
+
+### Q1 — Reuse the Checkout pipeline for subscription creation?
+
+**Question:** `CreateCheckoutAttemptHandler` already accepts `purchaseType=subscription`
+end-to-end (pricing, voucher reservation, and provider routing all already work unmodified for
+it — provider/country/package subscription-capability filtering is already enforced by the
+existing routing pipeline). Should `POST /api/v1/subscriptions` reuse that exact same Checkout
+pipeline (adding one new terminal step + reusing the existing `/payments/return` reconciliation),
+or should it be a separate, subscriptions-only pipeline that doesn't touch `checkout_attempts` at
+all?
+
+**Options:**
+
+1. **Reuse the Checkout pipeline** — `POST /api/v1/subscriptions` runs
+   `CreateCheckoutAttemptHandler` → `ResolveCheckoutPricingHandler` →
+   `(ReserveCheckoutVoucherHandler)` → `SelectCheckoutProviderHandler` exactly as payments do,
+   then a new `CreateProviderSubscriptionHandler` (mirroring `CreateProviderCheckoutHandler`)
+   calls `createSubscription()`. The provider's hosted checkout still redirects back to the
+   existing `GET /payments/return`, and `ReconcileCheckoutStatusHandler` is extended to create a
+   `Subscription` (+ first `Payment`) instead of a bare `Payment` when the attempt's
+   `purchaseType` is `subscription`. Reuses all the pricing/voucher/routing/capability-guard
+   machinery for free — CLAUDE.md's 5 creation guards (package/country/provider/method/client
+   config) are already enforced by the existing routing pipeline.
+2. Separate subscriptions-only pipeline — independent Subscriptions-module handlers duplicating
+   pricing resolution, voucher reservation, and provider routing, plus a dedicated
+   `GET /subscriptions/return` endpoint. More isolated but duplicates substantial already-working,
+   already-tested logic.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — reuse the Checkout pipeline, extending `ReconcileCheckoutStatusHandler`
+and reusing `GET /payments/return` for subscription confirmation too.
+
+**Status:** Decided
+
+---
+
+### Addendum — mid-phase database design correction
+
+While confirming the `subscriptions`/`subscription_events`/`subscription_payment_links` schema
+(Q1-Q4's implementation), the user gave a direct correction rather than a multiple-choice
+decision: **"Make payment_method nullable and skip the country column for now."** Applied as-is:
+
+- `subscriptions.payment_method` is `NULLABLE` (not `NOT NULL` as first proposed).
+- `subscriptions` has **no `country` column at all** — not deferred as nullable, omitted
+  entirely. Where a subscription-context handler needs a country (e.g.
+  `RecordSubscriptionPaymentHandler` building a `Payment`, which does require `country`), it is
+  read from the subscription's origin `checkout_attempts.country` via `checkout_attempt_id`
+  rather than duplicated onto `subscriptions`.
+
+**Status:** Applied (not a multiple-choice question — a direct user correction to the proposed
+design, recorded here per the Database Design Confirmation Rule).
+
+---
+
 ## Phase 25 — Webhooks module
 
 ### Q5 — URL path shape

@@ -839,6 +839,58 @@ duplicate.
   needs every interface implementer kept in sync, or PHP-DI eagerly builds infra (like a real
   `PDO`) the test never intended to exercise.
 
+## Subscriptions module (Phase 26, complete)
+
+- **`GatewayReference`'s dual-parent pattern (Phase 24 Q1) extends cleanly to a triple parent.**
+  Adding `subscriptionId` alongside `checkoutAttemptId`/`paymentId` was a one-column additive
+  migration + one new named constructor (`forSubscription()`) + one new repository method
+  (`forSubscription(int): array`) — no change to the existing two constructors or any existing
+  caller. This is the reusable shape for "a reference needs a third kind of owner": add a nullable
+  column, add a named constructor, never touch the existing ones. Worth remembering if a fourth
+  parent is ever needed.
+- **A second `Payment`-creation path is a legitimate pattern, not a violation of "one creation
+  path per aggregate."** `Payment::create()`'s original precondition (Phase 20 Q1) was "exactly
+  one confirmed checkout attempt" — true for every payment *until* a genuinely different kind of
+  charge (a subscription renewal, triggered by the provider's own schedule, not a customer
+  checkout) needs to exist as a real `Payment` too. Rather than stretching `CreatePaymentHandler`
+  to cover a case it was never designed for, `RecordSubscriptionPaymentHandler` is a second,
+  narrower creation path with `checkoutAttemptId = null`, linked to its true origin
+  (`subscription_payment_links`) instead. The tell for when this pattern is right: the new case
+  genuinely has no instance of the thing the original precondition required (no checkout attempt
+  exists, full stop — not "one exists but is inconvenient to use").
+- **The explicit branching-status-graph pattern (`allowedNextStatuses()` per status, not a rank)
+  now has three implementations**: `PaymentStatus` (Phase 20), and `SubscriptionStatus` (Phase 26)
+  — `CheckoutAttemptStatus` stayed a linear rank since its happy path genuinely doesn't branch.
+  The tell for which pattern an aggregate needs: does any status have more than one *semantically
+  distinct* successor it can legitimately reach next (payment: `paid` → refund vs. dispute;
+  subscription: `active` ↔ `past_due` can cycle)? If yes, it needs the graph, not a rank.
+- **The capability-gated action pattern (`Capability::X` AND `instanceof SupportsX`, Phase 24
+  Q5b) generalizes beyond payments.** `CancelSubscriptionHandler` uses the identical shape
+  `CancelPaymentHandler` established: a provider might declare a capability at the type level
+  (PayPal declares `subscription` support, Mollie declares `SubscriptionCancel`) without its
+  concrete adapter actually implementing the interface yet — checking only one half would let a
+  request through to a method call that doesn't exist. Reach for this exact pattern any time a
+  post-creation action needs to call an optional adapter interface.
+- **A subscription renewal payment needs a `country`, but `subscriptions` has none (a mid-phase
+  user correction, not a design gap).** `Payment::create()` requires `country` (non-nullable,
+  FK'd). Rather than duplicate `country` onto `subscriptions` after the user explicitly said to
+  skip it, `RecordSubscriptionPaymentHandler` reads it from the subscription's origin
+  `checkout_attempts.country` via `checkout_attempt_id` — every subscription has exactly one, so
+  this is always resolvable. Worth remembering as the general move when a "skip this column for
+  now" correction creates a data need elsewhere: look for an existing FK path back to a table that
+  already has the value, before reaching for a new column.
+- **Building a fully-tested, reusable handler with no automatic trigger yet is a legitimate,
+  honest phase boundary — not a half-finished feature.** `RecordSubscriptionPaymentHandler` is
+  complete and has its own full test suite, but nothing calls it automatically this phase —
+  `ProcessWebhookEventHandler` doesn't resolve `Subscription`-typed gateway references yet, and
+  wiring that requires adapter-layer changes (parsing a subscription id out of an invoice webhook)
+  plus formalizing `mapProviderSubscriptionStatusToInternalStatus()`'s still-provisional
+  pass-through — both judged out of scope this phase and deferred to Phase 29 alongside Q3's
+  deferred Mollie renewal scheduler. The distinction that makes this not a violation of "no
+  half-finished implementations": the *built* part (the handler) is complete, tested, and correct
+  on its own terms; only its *trigger* is missing, and that's declared explicitly rather than
+  silently absent.
+
 ## Gotchas
 
 - `brick/money 0.10.3` calls `BigDecimal::dividedBy()` without a scale internally (via

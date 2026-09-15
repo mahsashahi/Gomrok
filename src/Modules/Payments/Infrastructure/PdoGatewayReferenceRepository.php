@@ -20,8 +20,8 @@ final readonly class PdoGatewayReferenceRepository implements GatewayReferenceRe
     public function save(GatewayReference $reference): int
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO gateway_references (client_id, provider_account_id, reference_type, reference_value, checkout_attempt_id, payment_id, created_at)
-             VALUES (:client_id, :provider_account_id, :reference_type, :reference_value, :checkout_attempt_id, :payment_id, :now)',
+            'INSERT INTO gateway_references (client_id, provider_account_id, reference_type, reference_value, checkout_attempt_id, payment_id, subscription_id, created_at)
+             VALUES (:client_id, :provider_account_id, :reference_type, :reference_value, :checkout_attempt_id, :payment_id, :subscription_id, :now)',
         );
         $statement->execute([
             'client_id' => $reference->clientId,
@@ -30,6 +30,7 @@ final readonly class PdoGatewayReferenceRepository implements GatewayReferenceRe
             'reference_value' => $reference->referenceValue,
             'checkout_attempt_id' => $reference->checkoutAttemptId,
             'payment_id' => $reference->paymentId,
+            'subscription_id' => $reference->subscriptionId,
             'now' => $reference->createdAt->format('Y-m-d H:i:s'),
         ]);
 
@@ -77,6 +78,21 @@ final readonly class PdoGatewayReferenceRepository implements GatewayReferenceRe
         return $references;
     }
 
+    public function forSubscription(int $subscriptionId): array
+    {
+        $statement = $this->pdo->prepare('SELECT * FROM gateway_references WHERE subscription_id = :s ORDER BY id ASC');
+        $statement->execute(['s' => $subscriptionId]);
+
+        $references = [];
+        while (($row = $statement->fetch()) !== false) {
+            if (\is_array($row)) {
+                $references[] = $this->hydrate($row);
+            }
+        }
+
+        return $references;
+    }
+
     /**
      * @param array<array-key, mixed> $row
      */
@@ -90,6 +106,7 @@ final readonly class PdoGatewayReferenceRepository implements GatewayReferenceRe
             Row::str($row['reference_value'] ?? ''),
             Row::nullableInt($row['checkout_attempt_id'] ?? null),
             Row::nullableInt($row['payment_id'] ?? null),
+            Row::nullableInt($row['subscription_id'] ?? null),
             new DateTimeImmutable(Row::str($row['created_at'] ?? 'now')),
         );
     }

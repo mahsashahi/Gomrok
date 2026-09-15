@@ -39,6 +39,7 @@ flowchart TD
     Checkout["Checkout&lt;br/&gt;checkout_attempts — pre-payment anchor (P18)"]
     Payments["Payments&lt;br/&gt;payments + payment_attempts + provider_transactions (P20)&lt;br/&gt;provider_customers + gateway_references (P20)"]
     Webhooks["Webhooks&lt;br/&gt;webhook_events — store-first, dedup, retry (P25)"]
+    Subscriptions["Subscriptions&lt;br/&gt;subscriptions + subscription_events + subscription_payment_links (P26)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
@@ -66,13 +67,15 @@ flowchart TD
     Checkout --&gt; Payments
     Providers --&gt; Webhooks
     Payments --&gt; Webhooks
+    Checkout --&gt; Subscriptions
+    Providers --&gt; Subscriptions
     Payments --&gt; Subscriptions
     Payments --&gt; Notifications
     Admin -.-&gt; Payments
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks done;
-    class Subscriptions,Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions done;
+    class Notifications,Admin todo;
 </pre>
 
 <h2>Reference data (Phase 4)</h2>
@@ -765,10 +768,11 @@ erDiagram
         varchar reference_value
         int checkout_attempt_id FK
         int payment_id FK
+        int subscription_id FK
         datetime created_at
     }
     clients ||--o{ payments : "owns"
-    checkout_attempts ||--|| payments : "converts to"
+    checkout_attempts |o--|| payments : "converts to (nullable P26)"
     packages ||--o{ payments : "purchases"
     payments ||--o{ payment_attempts : "tries via"
     provider_accounts ||--o{ payment_attempts : "attempted through"
@@ -808,6 +812,54 @@ erDiagram
     clients ||--o{ webhook_events : "owns"
     provider_accounts ||--o{ webhook_events : "sent by"
     payments ||--o{ webhook_events : "updates"
+</pre>
+
+<h2>Subscriptions (Phase 26)</h2>
+<pre class="mermaid">
+erDiagram
+    subscriptions {
+        int id PK
+        int client_id FK
+        varchar client_user_ref
+        int checkout_attempt_id FK
+        int package_id FK
+        int provider_account_id FK
+        char currency_code FK
+        bigint amount_minor
+        varchar payment_method
+        varchar subscription_interval
+        varchar status
+        datetime trial_ends_at
+        datetime current_period_start
+        datetime current_period_end
+        varchar error_code
+        varchar error_message
+        datetime created_at
+        datetime updated_at
+    }
+    subscription_events {
+        int id PK
+        int subscription_id FK
+        varchar kind
+        varchar provider_status_raw
+        json payload
+        datetime created_at
+    }
+    subscription_payment_links {
+        int id PK
+        int subscription_id FK
+        int payment_id FK
+        datetime billing_period_start
+        datetime billing_period_end
+        datetime created_at
+    }
+    clients ||--o{ subscriptions : "owns"
+    checkout_attempts ||--|| subscriptions : "converts to"
+    packages ||--o{ subscriptions : "purchases"
+    provider_accounts ||--o{ subscriptions : "billed through"
+    subscriptions ||--o{ subscription_events : "logs"
+    subscriptions ||--o{ subscription_payment_links : "charges via"
+    payments ||--o| subscription_payment_links : "linked by"
 </pre>
 </div>
 

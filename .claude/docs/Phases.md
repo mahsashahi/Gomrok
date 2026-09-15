@@ -43,7 +43,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 23 | Ziraat adapter (deferred) | ☐ | — | — | 4–7h | — | — |
 | 24 | Payment creation flow | ☑ | 2026-09-13 09:00 | 2026-09-13 18:58 | 5–8h | N/A (spans multiple sessions) | N/A |
 | 25 | Webhooks module | ☑ | 2026-09-14 12:00 | 2026-09-14 19:31 | 5–8h | N/A | N/A |
-| 26 | Subscriptions module | ☐ | — | — | 6–9h | — | — |
+| 26 | Subscriptions module | ☑ | N/A | N/A | 6–9h | N/A | N/A |
 | 27 | **Admin Module Views and Panels** | ☐ | — | — | 12–20h | — | — |
 | 28 | Client callbacks / outbound notifications | ☐ | — | — | 4–6h | — | — |
 | 29 | Background jobs, reconciliation & observability | ☐ | — | — | 6–9h | — | — |
@@ -655,8 +655,8 @@ another client's package by numeric id is `404`, never leaked); client-supplied 
   is one immutable raw call/response under an attempt.
 - **`provider_customers`** / **`gateway_references`** (Q4): a durable customer identity vs. a
   generic, provider-agnostic reverse-lookup table (`reference_type` enum, not one column per
-  provider's id kind) — the mechanism the Gateway Reference Lookup Rule calls for. No
-  `subscription_id` column yet (Phase 26 adds it additively).
+  provider's id kind) — the mechanism the Gateway Reference Lookup Rule calls for.
+  `subscription_id` was added additively at Phase 26.
 - **`CreatePaymentHandler`** / **`RecordProviderTransactionHandler`** / **`ChangePaymentStatusHandler`**
   / **`LinkProviderCustomerHandler`** (Q5) — one handler per step, matching every prior module's
   pattern, + `payment:*` CLI. No real provider adapter exists yet (Phase 21+), so every status
@@ -737,8 +737,8 @@ mid-PayPal-implementation, all in `PhaseResults/PhaseDecisions.md`):**
   `verifyWebhookSignature()`/`parseWebhook()` re-fetch the payment by the id embedded in the
   payload instead (Q5, alongside `RawWebhook`'s new `headers` bag). Mollie subscriptions are
   provisional (Q6): `createSubscription()` performs only the first-payment/mandate step and
-  returns that payment's id/checkout URL — the real Mollie Subscription resource is deferred to
-  Phase 25's webhook processing.
+  returns that payment's id/checkout URL — the real Mollie Subscription resource and its renewal
+  automation are deferred to Phase 29 (Phase 26 Q3).
 - **PayPal adapter** — raw REST over `guzzlehttp/guzzle` (Q2), not an SDK; no OAuth2 token
   caching (a fresh client-credentials token is fetched per call, matching the established
   "adapters are fresh per call" design). Credentials are a `{client_id, client_secret}` JSON pair
@@ -932,28 +932,85 @@ tried `PaymentIntent` → `CheckoutSession` → `Order` → `Transaction`). All 
 
 **Known limitations:** no sweep job yet for a checkout attempt genuinely stuck pre-payment (Q1's
 narrower scope) — it only self-heals via a later cron retry once something else creates the
-`Payment` first. `Subscriptions` (Phase 26) don't exist yet, so a subscription-related webhook is
-stored but its gateway-reference lookup can't resolve to anything until then.
+`Payment` first. `Subscriptions` (Phase 26) didn't exist yet at the time this phase was written;
+as of Phase 26, its `Subscription`-typed gateway-reference lookup still isn't wired in (see Phase
+26's own Known limitations below).
 
 ## Phase 26 — Subscriptions module
 
 **Goal:** subscriptions with unambiguous ownership.
 
-**Scope:**
-- `subscriptions` (always exactly one client, one client-user reference, one package when
-  package-based, one provider, one internal record), `subscription_events`,
-  `subscription_payment_links`.
-- Creation guarded: package + country + provider + payment method + client configuration must all
-  allow subscription.
-- Status lifecycle (`active`, `trialing`, `past_due`, `cancelled`); renewal / failed-charge /
-  card-update events fed from webhooks.
+**Status: complete, with known limitations.** See `.claude/PhaseResults/Phase26Result.md` for the
+full summary.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 26 Q1–Q4, plus a mid-phase addendum):
+- **Q1** reuse the Checkout pipeline for subscription creation (`CreateCheckoutSubscriptionHandler`
+  mirrors `CreateCheckoutPaymentHandler`, ending in `CreateProviderSubscriptionHandler`);
+  `ReconcileCheckoutStatusHandler` extended to also create the `Subscription`; the existing
+  `GET /payments/return` handles subscription returns too.
+- **Q2** a renewal charge becomes a real `payments` row via a second creation path —
+  `payments.checkout_attempt_id` is now nullable; `RecordSubscriptionPaymentHandler` creates it
+  directly, linked via the new `subscription_payment_links` table.
+- **Q3** Mollie's renewal automation deferred to Phase 29 (unchanged from the roadmap's original
+  framing) — broadened during the phase to cover webhook-driven renewal automation generally, for
+  every provider, not just Mollie (see Known limitations).
+- **Q4** `subscriptions.client_user_ref` is `NOT NULL` — the mandatory-owner axis CLAUDE.md's
+  Subscription Ownership Model calls for.
+- **Addendum** (direct correction, not a Q1–Q4 option): `subscriptions.payment_method` is
+  nullable; `subscriptions` has no `country` column at all.
+
+**Scope actually built:**
+- `subscriptions` (one client, one **mandatory** client-user reference, one package, one
+  provider, one internal record — no `country` column, per the mid-phase correction),
+  `subscription_events`, `subscription_payment_links`.
+- Creation guarded via the reused Checkout pipeline: package + country + provider + payment
+  method + client configuration are all enforced by the existing routing pipeline before
+  `CreateSubscriptionHandler` ever runs (Q1) — no new guard logic duplicated.
+- Status lifecycle (`active`, `trialing`, `past_due`, `cancelled`) — an explicit
+  allowed-next-statuses graph (`SubscriptionStatus`), the same pattern `PaymentStatus` uses.
 - `POST /api/v1/subscriptions`, `GET /api/v1/subscriptions/{id}`,
-  `POST /api/v1/subscriptions/{id}/cancel`.
+  `POST /api/v1/subscriptions/{id}/cancel` — all built, all `{id}` = checkout attempt id,
+  mirroring the Payments endpoints' addressing.
+- `RecordSubscriptionPaymentHandler` (renewal / failed-charge outcomes) is built and fully
+  tested, but **not** fed from webhooks this phase — see Known limitations.
 
-**DB:** subscription tables.
+**Built:**
+- `subscriptions` / `subscription_events` / `subscription_payment_links` tables +
+  `Subscriptions` module (`Domain`/`Application`/`Infrastructure`) — `Subscription` aggregate,
+  `CreateSubscriptionHandler`, `CancelSubscriptionHandler`, `RecordSubscriptionPaymentHandler`,
+  `SubscriptionDirectory` (`forClientUser()`), `PdoSubscriptionRepository` + friends.
+- `payments.checkout_attempt_id` made nullable; `gateway_references.subscription_id` added
+  (third nullable parent, `GatewayReference::forSubscription()`).
+- `CreateProviderSubscriptionHandler` / `CreateCheckoutSubscriptionHandler` (Checkout module) —
+  subscription counterparts to the Phase 24 payment-creation handlers.
+- `POST /api/v1/subscriptions`, `GET /api/v1/subscriptions/{id}`,
+  `POST /api/v1/subscriptions/{id}/cancel` (`Subscriptions{Create,Show,Cancel}Action`).
+- Tests: `CreateSubscriptionHandlerTest` (6), `RecordSubscriptionPaymentHandlerTest` (6),
+  `CancelSubscriptionHandlerTest` (5), `SubscriptionOwnershipTest` (2),
+  `CreateProviderSubscriptionHandlerTest` (6), `CreateCheckoutSubscriptionHandlerTest` (3), plus
+  3 HTTP action test files (8 tests) — 36 new tests total.
 
-**Exit:** ownership queries (gateway sub id ↔ internal record; client user → active
-subscriptions) and every guard rejection tested.
+**DB:** `subscriptions` / `subscription_events` / `subscription_payment_links` (new, additive),
+`payments.checkout_attempt_id` (`NOT NULL` → nullable), `gateway_references.subscription_id`
+(new, additive nullable column).
+
+**Exit:** ownership queries tested directly (`SubscriptionOwnershipTest`) — gateway sub id ↔
+internal record via `GatewayReferenceRepository::findByReference(..., GatewayReferenceType::Subscription, ...)`
+→ `SubscriptionRepository::findById()`; client user → active subscriptions via
+`SubscriptionDirectory::forClientUser()`. Every guard rejection tested (interval missing,
+client_user_ref missing, provider not selected, non-subscription purchase type, provider doesn't
+implement `SupportsSubscriptions`, already-cancelled, capability not supported, unknown
+subscription/checkout-attempt id).
+
+**Known limitations:** (1) webhook-driven subscription automation is **not wired this phase** —
+`ProcessWebhookEventHandler` (Phase 25) doesn't resolve `Subscription`-typed gateway references
+or call `RecordSubscriptionPaymentHandler` automatically; deferred to **Phase 29**, alongside Q3's
+deferred Mollie renewal scheduler and the real queue/worker system Phase 25 already flagged — the
+handler itself is built and fully tested as the reusable unit a future trigger will call
+unchanged. (2) Cancel/refund/capture don't work on a renewal-originated `Payment` yet
+(`ResolvePaymentActionContext::forPayment()` returns `null` for one, by design). (3) No admin
+panel views for subscriptions yet (Phase 27). (4) Migrations were not re-verified against a live
+database this session (Docker daemon unavailable locally).
 
 ## Phase 27 — Admin Module Views and Panels
 

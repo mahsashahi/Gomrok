@@ -711,11 +711,16 @@ purely the aggregate, schema, and lifecycle.
 
 ### `payments`
 
-- **Why it can only come from a confirmed checkout attempt** (Q1): the user was explicit that
-  every payment should be able to answer "which checkout attempt produced you" the same
-  unambiguous way, and `checkout_attempts.status = confirmed` → `converted_to_payment` was
-  designed in Phase 18 specifically for this hand-off — `payments.checkout_attempt_id` is a
-  required, `UNIQUE` FK, never nullable, never populated any other way.
+- **Why it can only come from a confirmed checkout attempt — originally** (Q1): the user was
+  explicit that every payment should be able to answer "which checkout attempt produced you" the
+  same unambiguous way, and `checkout_attempts.status = confirmed` → `converted_to_payment` was
+  designed in Phase 18 specifically for this hand-off — `payments.checkout_attempt_id` was a
+  required, `UNIQUE` FK. **Phase 26 Q2 added a second creation path**: a subscription renewal
+  charge has no checkout attempt at all (it's triggered by the provider's own billing schedule),
+  so `checkout_attempt_id` became nullable; MySQL allows multiple `NULL`s under a `UNIQUE` index,
+  so the one-payment-per-attempt guarantee is untouched for checkout-originated rows. A renewal
+  payment is created by `RecordSubscriptionPaymentHandler` instead of `CreatePaymentHandler`, and
+  linked to its subscription via `subscription_payment_links` rather than `checkout_attempt_id`.
 - **`amount_minor` is frozen, not re-derived** — `CreatePaymentHandler` reads
   `pricing_decision_snapshots.amount_minor` for the base case, or
   `voucher_redemptions.payable_minor` (via the linked `voucher_decision_snapshots` row) when a
@@ -793,22 +798,28 @@ two state machines in the codebase.
   client/payment it belongs to via one `findByReference(providerAccountId, type, value)` call,
   with no schema change needed when Phase 22/23 bring Mollie/PayPal/Ziraat's differently-shaped
   ids.
-- **No `subscription_id` column yet** — `subscriptions` doesn't exist until Phase 26; per the
-  project's incremental-schema strategy, it's added there as an additive, nullable column rather
-  than reserved now against a table that doesn't exist.
 - **`checkout_attempt_id` (Phase 24 Q1, additive)** — a provider checkout-session reference
   (Stripe session id, Mollie payment id, PayPal order id) is created at
   `checkout_attempts.status = provider_checkout_created`, well before the attempt reaches
   `confirmed` (`Payment::create()`'s precondition, Phase 20 Q1) — so no `payments` row exists yet
   at write time. Rather than relax the Phase 20 Q1 rule, `gateway_references` gained a second
-  nullable parent column: exactly one of `checkout_attempt_id` / `payment_id` is set per row,
-  enforced by which named constructor is used (`GatewayReference::forCheckoutAttempt()` /
-  `::forPayment()`), not a DB-level check constraint.
+  nullable parent column: exactly one of `checkout_attempt_id` / `payment_id` / `subscription_id`
+  is set per row, enforced by which named constructor is used
+  (`GatewayReference::forCheckoutAttempt()` / `::forPayment()` / `::forSubscription()`), not a
+  DB-level check constraint.
+- **`subscription_id` (Phase 26, additive)** — a third nullable parent column, added once
+  `subscriptions` existed, per the project's incremental-schema strategy (it was deliberately not
+  reserved in Phase 24 against a table that didn't exist yet). Set for the real provider
+  Subscription-resource reference, once `CreateSubscriptionHandler` creates the `subscriptions`
+  row — distinct from the `checkout_session` reference the subscription's first charge still
+  carries under `checkout_attempt_id`.
 - **Set / advanced by** `LinkProviderCustomerHandler` (idempotent by `(provider_account_id,
   provider_customer_id)`, `conflict` if the same provider customer id is claimed by a different
-  client); `gateway_references` rows with `checkout_attempt_id` set are written by the new
-  checkout-provider-checkout handler (Phase 24); rows with `payment_id` set are written by
-  `RecordProviderTransactionHandler` once a payment exists.
+  client); `gateway_references` rows with `checkout_attempt_id` set are written by the
+  checkout-provider-checkout handlers (Phase 24); rows with `payment_id` set are written by
+  `RecordProviderTransactionHandler` once a payment exists; rows with `subscription_id` set are
+  written by `CreateSubscriptionHandler` (Phase 26), when the provider returned a real
+  Subscription-resource id.
 
 ---
 
@@ -885,3 +896,70 @@ The `Webhooks` module — one table, `webhook_events`.
   retrying is provably identical to the first attempt, just later. A plain invokable, the same
   "cron until the real job runner exists" shape as `PurgeExpiredIdempotencyKeys` (Phase 5) — meant
   to be easy to replace with a real queue/worker at Phase 29.
+
+---
+
+## Subscriptions (Phase 26)
+
+The `Subscriptions` module — three tables: `subscriptions`, `subscription_events`,
+`subscription_payment_links`.
+
+### `subscriptions`
+
+- **No `country` column** — a direct mid-phase user correction ("skip the country column for
+  now"), not a multiple-choice decision (see `PhaseDecisions.md`'s Phase 26 addendum). Where a
+  handler needs one — `RecordSubscriptionPaymentHandler`, building a `Payment` (which does
+  require `country`) — it reads `checkout_attempts.country` via `checkout_attempt_id` rather than
+  duplicating the value onto `subscriptions`.
+- **`payment_method` is nullable** — also a direct mid-phase correction, overriding what was
+  first proposed as `NOT NULL`.
+- **`client_user_ref` is mandatory** (Q4) — the one place `Subscriptions` diverges from
+  `payments.client_user_ref`'s nullable precedent. CLAUDE.md's Subscription Ownership Model names
+  "one client user reference" as a mandatory ownership axis for subscriptions specifically; an
+  ownerless subscription could never answer "which active subscriptions does this user have."
+- **`checkout_attempt_id` is required and `UNIQUE`** (Q1) — a subscription, like a payment, comes
+  from exactly one confirmed checkout attempt; reusing the same Checkout pipeline
+  (`CreateCheckoutAttemptHandler` → pricing → voucher → provider routing) means every existing
+  guard (package/country/provider/method/client-config subscription-capability filtering) is
+  already enforced before `CreateSubscriptionHandler` ever runs.
+- **Set / advanced by** `CreateSubscriptionHandler` (creation, idempotent by
+  `checkout_attempt_id`), `RecordSubscriptionPaymentHandler` (renewal outcomes — transitions to
+  `active`/`past_due`), `CancelSubscriptionHandler` (`cancelled`).
+
+### `subscription_events`
+
+- Write-once, mirrors `provider_transactions` exactly — no `updated_at`, no update method on the
+  repository port. `kind` is a free-form, generic label (`created`/`renewed`/`charge_failed`/
+  `cancelled`/…), not FK'd to an enum table, the same choice `provider_transactions.kind` made in
+  Phase 20.
+- **Set / advanced by** `CreateSubscriptionHandler` (`created`), `RecordSubscriptionPaymentHandler`
+  (`renewed` / `charge_failed`), `CancelSubscriptionHandler` (`cancelled`).
+
+### `subscription_payment_links`
+
+- **Why it exists at all** (Q2): a subscription renewal charge is a real `payments` row (see the
+  `payments` entry above), but it has no `checkout_attempt_id` to tie it back to its subscription
+  — `checkout_attempt_id` is `NULL` for a renewal payment. `subscription_payment_links` is the
+  explicit join that answers "which payments belong to this subscription," one of CLAUDE.md's
+  named Subscription Ownership Model queries.
+- **`UNIQUE (payment_id)`** — a payment belongs to at most one subscription, enforced at the DB
+  level (unlike the `gateway_references` triple-parent, which is app-enforced only — here a real
+  uniqueness constraint applies since every row in this table exists specifically to link one
+  payment to one subscription).
+- **Set / advanced by** `CreateSubscriptionHandler` (links the first payment) and
+  `RecordSubscriptionPaymentHandler` (links each renewal payment).
+
+### Not wired this phase — a real, named limitation
+
+`ProcessWebhookEventHandler` (Phase 25) was **not** extended to resolve `subscription_id`
+gateway references or call `RecordSubscriptionPaymentHandler` automatically. Two reasons, both
+concrete rather than time-pressure: (1) `mapProviderSubscriptionStatusToInternalStatus()` is
+documented as a provisional pass-through, not real business logic yet, so wiring real automation
+on top of it would be exactly the kind of half-finished feature CLAUDE.md warns against; (2)
+properly resolving a renewal charge's own subscription id from a Stripe invoice webhook needs an
+adapter-layer change (`ParsedWebhookEvent` doesn't currently carry a subscription reference) that
+wasn't built this phase. `CreateSubscriptionHandler` and `RecordSubscriptionPaymentHandler` are
+both fully built and tested as the reusable processing units a future trigger will call
+unchanged — consistent with Q3's explicit deferral of Mollie's renewal automation, the broader
+webhook-driven recurring-billing mechanism is deferred to Phase 29 alongside the real queue/worker
+system Phase 25 already flagged.

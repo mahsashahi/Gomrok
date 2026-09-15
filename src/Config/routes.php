@@ -13,6 +13,9 @@ use Gomrok\Http\Api\PaymentsReturnAction;
 use Gomrok\Http\Api\PaymentsShowAction;
 use Gomrok\Http\Api\PaymentsStatusAction;
 use Gomrok\Http\Api\PricingResolveAction;
+use Gomrok\Http\Api\SubscriptionsCancelAction;
+use Gomrok\Http\Api\SubscriptionsCreateAction;
+use Gomrok\Http\Api\SubscriptionsShowAction;
 use Gomrok\Http\Api\VouchersValidateAction;
 use Gomrok\Http\Api\WebhooksReceiveAction;
 use Gomrok\Http\HealthAction;
@@ -49,6 +52,10 @@ return static function (App $app): void {
         $group->post('/payments/{id}/cancel', PaymentsCancelAction::class);
         $group->post('/payments/{id}/refund', PaymentsRefundAction::class);
         $group->post('/payments/{id}/capture', PaymentsCaptureAction::class);
+        // Phase 26 — the end-to-end subscription creation flow.
+        $group->post('/subscriptions', SubscriptionsCreateAction::class);
+        $group->get('/subscriptions/{id}', SubscriptionsShowAction::class);
+        $group->post('/subscriptions/{id}/cancel', SubscriptionsCancelAction::class);
     })
         ->add(IdempotencyMiddleware::class)   // inner: runs after auth has set authClientId
         ->add(AuthenticationMiddleware::class); // outer: runs first

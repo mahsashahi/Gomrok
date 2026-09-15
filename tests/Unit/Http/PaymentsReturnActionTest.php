@@ -12,6 +12,7 @@ use Gomrok\Modules\Checkout\Application\ResolveCheckoutPayableAmount;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttempt;
 use Gomrok\Modules\Checkout\Domain\CheckoutAttemptStatus;
 use Gomrok\Modules\Clients\Domain\EndpointPurpose;
+use Gomrok\Modules\Packages\Application\PackagePurchaseCapabilityResolver;
 use Gomrok\Modules\Payments\Application\ChangePaymentStatus\ChangePaymentStatusHandler;
 use Gomrok\Modules\Payments\Application\CreatePayment\CreatePaymentHandler;
 use Gomrok\Modules\Payments\Domain\GatewayReference;
@@ -21,15 +22,20 @@ use Gomrok\Modules\Pricing\Application\PricingDecisionSnapshot;
 use Gomrok\Modules\Pricing\Application\ResolvedPrice;
 use Gomrok\Modules\Providers\Application\Routing\ProviderRoutingDecisionSnapshot;
 use Gomrok\Modules\Providers\Domain\PurchaseType;
+use Gomrok\Modules\Subscriptions\Application\CreateSubscription\CreateSubscriptionHandler;
 use Gomrok\Shared\Http\JsonResponder;
 use Gomrok\Tests\Support\FakePaymentProviderPort;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryCheckoutAttemptRepository;
 use Gomrok\Tests\Support\InMemoryClientDirectory;
 use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
+use Gomrok\Tests\Support\InMemoryPackageRepository;
 use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryPricingDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionEventRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionPaymentLinkRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\InMemoryVoucherDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryVoucherRedemptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
@@ -80,7 +86,20 @@ final class PaymentsReturnActionTest extends TestCase
             $clock,
         );
         $changePaymentStatus = new ChangePaymentStatusHandler($payments, $audit, $transactions, $clock);
-        $reconcile = new ReconcileCheckoutStatusHandler($this->attempts, $routingSnapshots, $gatewayReferences, $adapterFactory, $createPayment, $changePaymentStatus, $audit, $transactions, $clock);
+        $createSubscription = new CreateSubscriptionHandler(
+            $this->attempts,
+            $routingSnapshots,
+            new ResolveCheckoutPayableAmount($pricingSnapshots, new InMemoryVoucherDecisionSnapshotRepository(), new InMemoryVoucherRedemptionRepository()),
+            new PackagePurchaseCapabilityResolver(new InMemoryPackageRepository()),
+            new InMemorySubscriptionRepository(),
+            new InMemorySubscriptionEventRepository(),
+            new InMemorySubscriptionPaymentLinkRepository(),
+            $gatewayReferences,
+            $audit,
+            $transactions,
+            $clock,
+        );
+        $reconcile = new ReconcileCheckoutStatusHandler($this->attempts, $routingSnapshots, $gatewayReferences, $adapterFactory, $createPayment, $changePaymentStatus, $createSubscription, $audit, $transactions, $clock);
 
         $this->clients = new InMemoryClientDirectory();
         $handler = new ConfirmCheckoutReturnHandler($this->attempts, $reconcile, $this->clients, self::SECRET);

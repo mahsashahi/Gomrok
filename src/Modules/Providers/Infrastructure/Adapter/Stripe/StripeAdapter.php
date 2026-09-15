@@ -113,7 +113,11 @@ final readonly class StripeAdapter implements
             $mapped = $this->mapper->fromPaymentIntent($paymentIntent->status);
         }
 
-        return new ProviderPaymentStatus($providerReference, $sessionStatus, $mapped, $paymentIntentId);
+        // `mode: subscription` sessions carry a `subscription` id instead of
+        // `payment_intent` — mutually exclusive with the branch above (Phase 26).
+        $subscriptionId = \is_string($session->subscription ?? null) ? $session->subscription : null;
+
+        return new ProviderPaymentStatus($providerReference, $sessionStatus, $mapped, $paymentIntentId, $subscriptionId);
     }
 
     public function verifyWebhookSignature(RawWebhook $webhook): bool

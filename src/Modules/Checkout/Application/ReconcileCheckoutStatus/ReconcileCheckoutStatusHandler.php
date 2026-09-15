@@ -18,6 +18,9 @@ use Gomrok\Modules\Payments\Domain\PaymentStatus;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderAdapterException;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderAdapterFactory;
 use Gomrok\Modules\Providers\Application\Routing\ProviderRoutingDecisionSnapshotRepository;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
+use Gomrok\Modules\Subscriptions\Application\CreateSubscription\CreateSubscriptionCommand;
+use Gomrok\Modules\Subscriptions\Application\CreateSubscription\CreateSubscriptionHandler;
 use Gomrok\Shared\Application\Audit\AuditEntry;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
 use Gomrok\Shared\Application\Transactions;
@@ -33,6 +36,13 @@ use Psr\Clock\ClockInterface;
  * CLAUDE.md: "verify payment status with the gateway API when needed") drive
  * through. Idempotent: an already-terminal attempt is reported as-is without
  * a second provider call.
+ *
+ * A `subscription`-purchase-type attempt gets the same treatment as a
+ * one-time payment up through creating its first `Payment` (Phase 26 Q1),
+ * then an extra step: {@see CreateSubscriptionHandler} creates the
+ * `Subscription` record and links that same `Payment` to it — a subscription
+ * always has a real first-charge `Payment` row, never a payment-less
+ * placeholder.
  */
 final readonly class ReconcileCheckoutStatusHandler
 {
@@ -43,6 +53,7 @@ final readonly class ReconcileCheckoutStatusHandler
         private ProviderAdapterFactory $adapterFactory,
         private CreatePaymentHandler $createPayment,
         private ChangePaymentStatusHandler $changePaymentStatus,
+        private CreateSubscriptionHandler $createSubscription,
         private AuditLogWriter $audit,
         private Transactions $transactions,
         private ClockInterface $clock,
@@ -157,6 +168,22 @@ final readonly class ReconcileCheckoutStatusHandler
                     $created->paymentId,
                     $now,
                 ));
+            }
+
+            // A subscription checkout attempt also owns a Subscription record
+            // (Phase 26 Q1) — created here, right after its first Payment,
+            // linked via `subscription_payment_links` rather than a second
+            // checkout attempt.
+            if ($attempt->purchaseType() === PurchaseType::Subscription) {
+                $subscriptionResult = $this->createSubscription->handle(new CreateSubscriptionCommand(
+                    $attempt->clientId(),
+                    $checkoutAttemptId,
+                    $created->paymentId,
+                    $status->subscriptionReference,
+                ));
+                if ($subscriptionResult->isErr()) {
+                    return $subscriptionResult;
+                }
             }
         }
 

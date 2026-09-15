@@ -26,4 +26,9 @@ interface GatewayReferenceRepository
      * @return list<GatewayReference>
      */
     public function forCheckoutAttempt(int $checkoutAttemptId): array;
+
+    /**
+     * @return list<GatewayReference>
+     */
+    public function forSubscription(int $subscriptionId): array;
 }

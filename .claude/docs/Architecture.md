@@ -90,7 +90,7 @@ Each module lives at `src/Modules/<Name>/` with `Domain/`, `Application/`, `Infr
 | **Vouchers** | Voucher definitions, eligibility rules, usage limits, discount calculation, and a concurrency-safe redemption lifecycle (Phases 16–17 — implemented). |
 | **Checkout** | The pre-payment lifecycle anchor: `checkout_attempts` and its monotonic-rank status machine, orchestrating pricing resolution, voucher reservation, and provider selection before a payment exists (Phase 18 — implemented). |
 | **Payments** | Payment aggregate, internal status lifecycle, payment attempts, provider transactions, provider customers, gateway references; converts a confirmed `checkout_attempts` row via its `commercialSnapshot()` (Phase 20). Real provider adapters + the full HTTP surface (create, return, show, status, cancel/refund/capture) — Phase 24. |
-| **Subscriptions** | Subscription aggregate & ownership model, subscription events, subscription↔payment links, lifecycle from webhooks. |
+| **Subscriptions** | Subscription aggregate & ownership model, subscription events, subscription↔payment links; creation reuses the Checkout pipeline, cancellation is capability-gated, renewal charges are a second `Payment`-creation path (Phase 26 — implemented; webhook-driven renewal automation deferred to Phase 29). |
 | **Webhooks** | Inbound provider webhook ingestion (store-first), signature verification, dedup, cron-based retry, reverse lookup to internal records (Phase 25 — implemented). |
 | **Notifications** | Outbound client callbacks per provider account, delivery, retry/backoff, dead-letter, admin retry. |
 | **Admin** | Admin auth, RBAC (`admin`, `support_agent`), the server-rendered panel and its screens, error-log viewer, reconciliation views. |
@@ -571,8 +571,8 @@ than transient in-memory state.
 - **`provider_customers` / `gateway_references`** (Q4) — a durable customer identity reused
   across payments vs. a generic, provider-agnostic reverse-lookup table
   (`reference_type` ∈ `checkout_session`/`payment_intent`/`order`/`transaction`/`subscription`/
-  `customer`/`other`), the mechanism CLAUDE.md's Gateway Reference Lookup Rule calls for. No
-  `subscription_id` column until Phase 26 adds it additively.
+  `customer`/`other`), the mechanism CLAUDE.md's Gateway Reference Lookup Rule calls for.
+  `subscription_id` was added additively at Phase 26.
 - **`CreatePaymentHandler`** / **`RecordProviderTransactionHandler`** / **`ChangePaymentStatusHandler`**
   / **`LinkProviderCustomerHandler`** (Q5) — the same one-handler-per-step pattern as every prior
   module. `RecordProviderTransactionHandler` reuses the payment's latest attempt while it's still
@@ -719,6 +719,76 @@ signature verification (`PaymentProviderPort::parseWebhook()`) were already buil
   `AddProviderAccountEndpointHandler`'s output back in Phase 9, so Q5 confirmed the existing
   shape rather than choosing a new one.
 
+### Subscriptions (Phase 26 — complete, with known limitations)
+
+`Modules/Subscriptions`. Three tables — `subscriptions`, `subscription_events`,
+`subscription_payment_links` — and reuses the entire Checkout pipeline for creation (Q1) rather
+than building a parallel one.
+
+- **Reuses the Checkout pipeline end to end (Q1).** `POST /api/v1/subscriptions`
+  (`CreateCheckoutSubscriptionHandler`) runs the exact same steps as
+  `CreateCheckoutPaymentHandler` — `CreateCheckoutAttemptHandler → ResolveCheckoutPricingHandler →
+  (ReserveCheckoutVoucherHandler) → SelectCheckoutProviderHandler` — ending in a new
+  `CreateProviderSubscriptionHandler` (mirrors `CreateProviderCheckoutHandler`, but calls the
+  adapter's `createSubscription()` and requires `SupportsSubscriptions`) instead of
+  `CreateProviderCheckoutHandler`. `client_user_ref` and `subscription_interval` are mandatory
+  request fields (Q4), unlike the payment flow's optional `client_user_ref`. The provider's hosted
+  checkout still redirects back to the existing `GET /payments/return` — no separate
+  `/subscriptions/return` endpoint exists. `ReconcileCheckoutStatusHandler` (Phase 24) was
+  extended: after creating a `Confirmed` attempt's first `Payment` as usual, if
+  `attempt->purchaseType() === PurchaseType::Subscription` it also calls the new
+  `CreateSubscriptionHandler`, passing along `ProviderPaymentStatus::$subscriptionReference`
+  (Stripe's checkout session's own `subscription` field, extracted this phase) so a
+  `GatewayReference::forSubscription()` row gets recorded when the provider returned one.
+- **`CreateSubscriptionHandler`** creates the `subscriptions` row, idempotent by
+  `checkout_attempt_id`. Resolves trial terms from `PackagePurchaseCapabilityResolver` (Phase 12)
+  for the attempt's country — never from the request, so a client can't grant itself an
+  undeclared trial. Links the originating `Payment` via `subscription_payment_links` and records a
+  `created` `subscription_events` row.
+- **A renewal charge becomes a real `payments` row via a second creation path (Q2).**
+  `payments.checkout_attempt_id` is now nullable; `RecordSubscriptionPaymentHandler` creates a
+  `Payment` directly from subscription context (no checkout attempt precursor), linked through
+  `subscription_payment_links` instead. Idempotent by `providerPaymentReference`, checked against
+  the existing `GatewayReferenceType::PaymentIntent` row before creating anything — a duplicate
+  delivery can never create a second payment for the same charge. `country` is read from the
+  subscription's origin `checkout_attempts.country` (`subscriptions` itself has no `country`
+  column — a direct mid-phase user correction, not a Q1-Q4 decision; see `PhaseDecisions.md`'s
+  Phase 26 addendum). Drives the new `Payment` through the existing (unchanged)
+  `RecordProviderTransactionHandler` — `created → pending → paid|failed` — then transitions the
+  subscription itself to `active` (success) or `past_due` (failure, storing `error_code`/`error_message`).
+- **`SubscriptionStatus`** is the third aggregate (after `PaymentStatus`, `CheckoutAttemptStatus`)
+  using the explicit allowed-next-statuses-graph pattern rather than a single rank:
+  `trialing`/`active` ↔ `past_due` → `cancelled` (terminal) — active↔past_due can genuinely cycle.
+- **`CancelSubscriptionHandler`** (`POST /api/v1/subscriptions/{id}/cancel`) is capability-gated
+  on both `Capability::SubscriptionCancel` **and** `adapter instanceof SupportsSubscriptions`
+  (mirrors Phase 24 Q5b's "both, not either alone" pattern for payment actions). Reference
+  resolution (`ResolveSubscriptionActionContext`, mirrors `ResolvePaymentActionContext`) prefers
+  the real `GatewayReferenceType::Subscription` reference, falling back to the original
+  `CheckoutSession` reference when no deeper one exists yet (Mollie's provisional subscription
+  support, Q3).
+- **The Subscription Ownership Model queries** CLAUDE.md names are answered directly:
+  `SubscriptionDirectory::forClientUser(clientId, clientUserRef)` ("which active subscriptions
+  does this user have"), and `GatewayReferenceRepository::findByReference(..., GatewayReferenceType::Subscription, ...)`
+  → `SubscriptionRepository::findById()` ("given a gateway subscription id, which internal
+  subscription does it belong to").
+- **HTTP surface:**
+  - `POST /api/v1/subscriptions` (auth, idempotent via `Idempotency-Key`) — mirrors
+    `PaymentsCreateAction` exactly; requires `client_user_ref` and `subscription_interval` in
+    addition to `PaymentsCreateAction`'s fields. Returns `201` with the same shape as the payment
+    creation response.
+  - `GET /api/v1/subscriptions/{id}` (auth) — `{id}` is the checkout attempt id, mirroring
+    `PaymentsShowAction`'s addressing exactly: reports the checkout attempt's own pre-conversion
+    state until a `subscriptions` row exists, then the real subscription's.
+  - `POST /api/v1/subscriptions/{id}/cancel` (auth) — `{id}` is the checkout attempt id, resolved
+    to the real `subscriptions.id` before calling `CancelSubscriptionHandler`.
+- **Known limitations (see `.claude/PhaseResults/Phase26Result.md` for the full list):**
+  webhook-driven renewal automation is **not wired this phase** — `ProcessWebhookEventHandler`
+  (Phase 25) was not extended to resolve `Subscription`-typed gateway references or call
+  `RecordSubscriptionPaymentHandler` automatically, deferred to Phase 29 alongside Q3's deferred
+  Mollie renewal scheduler and the real queue/worker system Phase 25 already flagged;
+  cancel/refund/capture don't work on a renewal-originated `Payment` yet
+  (`ResolvePaymentActionContext::forPayment()` returns `null` for one, by design this phase).
+
 ## 9. Resolution pipelines (sketch)
 
 Order is deterministic and will be documented precisely in the Pricing/Vouchers/Providers phases.
@@ -860,18 +930,28 @@ and flagged, never dropped.
   / `returned_from_provider` / `confirmed` transitions on `checkout_attempts` remain modelled but
   undriven until the provider adapters exist (**Phase 21+**).
 - Payments module leftovers from Phase 20, now resolved by **Phase 24**: the full HTTP surface,
-  and `gateway_references` writers wired to real callers. Still open: `gateway_references.subscription_id`
-  (**Phase 26**, additive column once `subscriptions` exists); a dedicated `refunds` table for
-  capture/refund action records — a refund's own provider-issued reference is currently recorded
-  only in `provider_transactions.response_payload`, not its own row (no phase assigned yet; needs
-  its own database-design confirmation first).
+  and `gateway_references` writers wired to real callers. `gateway_references.subscription_id`
+  was added at **Phase 26** (additive column, `GatewayReference::forSubscription()`). Still open:
+  a dedicated `refunds` table for capture/refund action records — a refund's own provider-issued
+  reference is currently recorded only in `provider_transactions.response_payload`, not its own
+  row (no phase assigned yet; needs its own database-design confirmation first).
 - Provider-adapter leftovers from Phase 21: `StripeAdapter` is built and unit-tested (a real
   Stripe 401/error response, and a real HMAC webhook signature, both verified through the actual
   SDK via a fake transport) but not wired into any Payments-module handler yet — that orchestration
   is **Phase 24**'s job by design (Phase 21 Q5). Mollie and PayPal adapters — **Phase 22**; Ziraat
   — **Phase 23**. `SupportsManualPolling` has no implementer yet (Ziraat is the first, Phase 23).
-  `mapProviderSubscriptionStatusToInternalStatus()`'s return type is a provisional `string`
-  pass-through — the real `Subscriptions` module and its own status enum don't exist until
-  **Phase 26**, expected to formalize this method's return type then.
+  `mapProviderSubscriptionStatusToInternalStatus()`'s return type is **still** a provisional
+  `string` pass-through as of **Phase 26** — the `Subscriptions` module and its own `SubscriptionStatus`
+  enum now exist, but formalizing this method's return type against real webhook-driven status
+  syncing was deliberately left for **Phase 29**, alongside the webhook-driven renewal-automation
+  gap below (building real automation on top of a still-provisional mapping was judged premature).
+- **Subscriptions module leftovers from Phase 26**, deferred to **Phase 29**: `ProcessWebhookEventHandler`
+  (Phase 25) does not resolve `Subscription`-typed `gateway_references` or route renewal/status
+  webhook events to `RecordSubscriptionPaymentHandler` — that handler is built and fully tested,
+  just not wired to an automatic trigger yet. This is the same scope as Q3's explicit deferral of
+  Mollie's renewal-automation scheduler, broadened to cover the general webhook-driven recurring-
+  billing mechanism for every provider (including Stripe, whose own billing engine already sends
+  the relevant webhooks today). Also: cancel/refund/capture don't work on a renewal-originated
+  `Payment` (one with no `checkout_attempt_id`) — no phase assigned yet.
 - Queue technology choice (DB-backed vs Redis vs …) — Phase 29 (a `Jobs` port is defined earlier).
 - `mkdocs` site + DB docs location convention (repo-root vs `.claude/docs/`) — Phase 4.

@@ -16,13 +16,20 @@ use Gomrok\Shared\Domain\DomainError;
  * `commercialSnapshot()` supplies every field below except `amountMinor` —
  * that comes from the checkout attempt's pricing/voucher decision snapshots,
  * frozen here and never re-derived. `id` is null until persisted.
+ *
+ * `checkoutAttemptId` is nullable (Phase 26 Q2) — a subscription renewal
+ * charge has no checkout attempt of its own (it's triggered by the
+ * provider's own billing schedule); it's created directly via
+ * `Subscriptions\Application\RecordSubscriptionPayment\RecordSubscriptionPaymentHandler`
+ * instead of `CreatePaymentHandler`, and linked to its subscription through
+ * `subscription_payment_links` rather than `checkout_attempt_id`.
  */
 final class Payment
 {
     private function __construct(
         private ?int $id,
         private readonly int $clientId,
-        private readonly int $checkoutAttemptId,
+        private readonly ?int $checkoutAttemptId,
         private readonly ?string $clientUserRef,
         private readonly int $packageId,
         private readonly string $country,
@@ -41,7 +48,7 @@ final class Payment
 
     public static function create(
         int $clientId,
-        int $checkoutAttemptId,
+        ?int $checkoutAttemptId,
         ?string $clientUserRef,
         int $packageId,
         string $country,
@@ -75,7 +82,7 @@ final class Payment
     public static function fromStorage(
         int $id,
         int $clientId,
-        int $checkoutAttemptId,
+        ?int $checkoutAttemptId,
         ?string $clientUserRef,
         int $packageId,
         string $country,
@@ -162,7 +169,7 @@ final class Payment
         return $this->clientId;
     }
 
-    public function checkoutAttemptId(): int
+    public function checkoutAttemptId(): ?int
     {
         return $this->checkoutAttemptId;
     }
