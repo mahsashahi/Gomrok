@@ -1,0 +1,84 @@
+{% extends 'layouts/base.html.twig' %}
+
+{% block body %}
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-name">Gomrok</div>
+    </div>
+
+    {% if active_client is defined and active_client %}
+    <div x-data="{ open: false }" style="position:relative;margin-bottom:10px">
+      <div class="client-switch" @click="open = !open">
+        <div class="client-avatar">{{ active_client.name|slice(0, 1)|upper }}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ active_client.name }}</div>
+          <div style="font-size:11px;color:var(--text-muted)">{{ active_client.status.value }}</div>
+        </div>
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="var(--text-muted)" stroke-width="1.6" stroke-linecap="round"><polyline points="5,7 10,12 15,7"></polyline></svg>
+      </div>
+      <div x-show="open" @click.outside="open = false" x-cloak style="position:absolute;top:calc(100% + 6px);left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(20,20,43,.12);z-index:20;padding:6px">
+        {% for c in clients %}
+        <form method="post" action="/admin/active-client">
+          <input type="hidden" name="client_id" value="{{ c.id }}">
+          <input type="hidden" name="return_to" value="{{ current_path|default('/admin') }}">
+          <button type="submit" style="display:flex;align-items:center;gap:10px;padding:8px 8px;border-radius:7px;cursor:pointer;width:100%;border:none;background:transparent;text-align:left;font:inherit">
+            <div class="client-avatar" style="width:22px;height:22px;font-size:11px">{{ c.name|slice(0, 1)|upper }}</div>
+            <span style="flex:1;font-size:13px;font-weight:600">{{ c.name }}</span>
+          </button>
+        </form>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <nav class="nav-group">
+      {{ _self.nav_item('home', 'Home', '/admin', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,10 10,4 17,10"></polyline><path d="M5 9v7a1 1 0 0 0 1 1h3v-5h2v5h3a1 1 0 0 0 1-1V9"></path></svg>') }}
+      {{ _self.nav_item('sales', 'Sales', '/admin/sales', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"></circle><line x1="10" y1="10" x2="10" y2="6.2"></line><line x1="10" y1="10" x2="12.8" y2="12"></line></svg>') }}
+      {{ _self.nav_item('customers', 'Customers', '/admin/customers', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7" r="3.1"></circle><path d="M4 16.2c0-2.7 2.7-4.4 6-4.4s6 1.7 6 4.4"></path></svg>') }}
+      {{ _self.nav_item('packaging', 'Packaging &amp; Pricing', '/admin/packaging', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.2 10 3l7 3.2-7 3.2z"></path><path d="M3 6.2v7.6L10 17l7-3.2V6.2"></path><line x1="10" y1="9.4" x2="10" y2="17"></line></svg>') }}
+      {{ _self.nav_item('providers', 'Providers', '/admin/providers', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v4M13 3v4"></path><rect x="5" y="7" width="10" height="6" rx="2"></rect><line x1="10" y1="13" x2="10" y2="17"></line></svg>') }}
+      {{ _self.nav_item('vouchers', 'Vouchers', '/admin/vouchers', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10V4.5a1 1 0 0 1 1-1H10l7 6.5-7 6.5-7-6z"></path><circle cx="7" cy="6.5" r="1"></circle></svg>') }}
+    </nav>
+
+    <div class="nav-label">System</div>
+    <nav class="nav-group">
+      {{ _self.nav_item('clients', 'Clients', '/admin/clients', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="3"></circle><path d="M2 17c0-3.2 2.2-5.4 5-5.4s5 2.2 5 5.4"></path><circle cx="15" cy="8" r="2.3"></circle><path d="M13.2 17c.2-2.1 1.3-3.7 3-4.3"></path></svg>') }}
+      {{ _self.nav_item('notifications', 'Notifications', '/admin/notifications', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3a5 5 0 0 0-5 5v3l-1.6 3h13.2L15 11V8a5 5 0 0 0-5-5z"></path><path d="M8 17a2 2 0 0 0 4 0"></path></svg>') }}
+      {{ _self.nav_item('admin_users', 'Admin users', '/admin/admin-users', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.2 16.5 5v5c0 5-3 6.8-6.5 7.8-3.5-1-6.5-2.8-6.5-7.8V5z"></path><polyline points="7,10 9.2,12.2 13,7.8"></polyline></svg>') }}
+      {{ _self.nav_item('audit_logs', 'Audit logs', '/admin/audit-logs', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="12" height="14" rx="2"></rect><rect x="7" y="2.4" width="6" height="3" rx="1"></rect><line x1="6.5" y1="9.5" x2="13.5" y2="9.5"></line><line x1="6.5" y1="12.5" x2="13.5" y2="12.5"></line><line x1="6.5" y1="15.5" x2="11" y2="15.5"></line></svg>') }}
+      {{ _self.nav_item('error_logs', 'Error logs', '/admin/error-logs', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"></circle><line x1="10" y1="6.5" x2="10" y2="11"></line><circle cx="10" cy="13.6" r="0.15" fill="currentColor"></circle></svg>') }}
+      {{ _self.nav_item('settings', 'Settings', '/admin/settings', active_nav, '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.6"></circle><path d="M10 2.4v2.3M10 15.3v2.3M17.6 10h-2.3M4.7 10H2.4M15.6 4.4l-1.6 1.6M5.98 14.1l-1.63 1.6M15.6 15.6l-1.6-1.6M5.98 5.9 4.4 4.4"></path></svg>') }}
+    </nav>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-search">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8.5" cy="8.5" r="5.5"></circle><line x1="12.7" y1="12.7" x2="17" y2="17"></line></svg>
+        <span>Search</span>
+      </div>
+      <div class="topbar-spacer"></div>
+      <span class="topbar-toggle-label">Test mode</span>
+      <button type="button" class="toggle-track" aria-label="Toggle test mode"><span class="toggle-knob"></span></button>
+      <form method="post" action="/admin/logout" style="display:contents">
+        <button type="submit" class="icon-btn" title="Log out ({{ admin.name }})">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 4H4.5A1.5 1.5 0 0 0 3 5.5v9A1.5 1.5 0 0 0 4.5 16H8"></path><path d="M13 14l3-4-3-4"></path><line x1="16" y1="10" x2="7.5" y2="10"></line></svg>
+        </button>
+      </form>
+      <button type="button" class="avatar-btn" title="{{ admin.name }} ({{ admin.role }})">{{ admin.name|slice(0, 1)|upper }}</button>
+    </header>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+</div>
+{% endblock %}
+
+{% macro nav_item(key, label, href, active, icon) %}
+<a href="{{ href }}" class="nav-item{{ key == active ? ' active' : '' }}">{{ icon|raw }}{{ label|raw }}</a>
+{% endmacro %}

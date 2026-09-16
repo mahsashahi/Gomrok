@@ -47,6 +47,11 @@ final class StubClientDirectory implements ClientDirectory
         return $id === $this->clientId;
     }
 
+    public function all(): array
+    {
+        return [$this->snapshot()];
+    }
+
     public function findActiveEndpointUrl(int $clientId, EndpointPurpose $purpose): ?string
     {
         return $clientId === $this->clientId ? ($this->endpoints[$purpose->value] ?? null) : null;

@@ -1,0 +1,109 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Customers — Gomrok Admin{% endblock %}
+
+{% block content %}
+{% if customers is null %}
+  <h1 class="page-title" style="font-size:22px">Customers</h1>
+  <p style="color:var(--text-muted);font-size:14px">No clients exist yet — create one from the Clients screen.</p>
+{% else %}
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px 16px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h1 class="page-title" style="font-size:22px">Customers</h1>
+      <span style="font-size:11.5px;font-weight:600;color:var(--text-muted)">{{ customers.totalCount }} total</span>
+    </div>
+    <form method="get" action="/admin/customers">
+      <input type="text" name="q" value="{{ current_query|default('') }}" placeholder="Search by client user reference…" class="search-input">
+    </form>
+  </div>
+
+  <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;max-width:760px;line-height:1.5">
+    One row per client user reference. Gomrok doesn't collect a customer's contact details itself — the reference
+    is whatever id the client application sent us — but every provider identity linked to it is real and shown below.
+  </p>
+
+  {% if customers.rows is empty %}
+  <div style="padding:40px 0;max-width:420px">
+    <div style="font-size:15px;font-weight:700;margin-bottom:5px">No customers found</div>
+    <div style="font-size:12px;color:var(--text-muted);line-height:1.5">
+      {% if current_query %}Nothing matches "{{ current_query }}".{% else %}No payments or subscriptions exist yet for this client.{% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div style="border:1px solid var(--border);border-radius:9px;overflow-x:auto;background:#fff">
+    <div style="min-width:820px">
+      <div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) minmax(0,0.9fr) 90px 28px;column-gap:12px;padding:8px 14px;font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--surface-alt);background:var(--bg)">
+        <div>Customer</div><div>Provider references</div><div>Subscriptions</div><div>Status</div><div></div>
+      </div>
+      {% for c in customers.rows %}
+      <div x-data="{ open: false }" style="border-bottom:1px solid var(--surface-alt)">
+        <div @click="open = !open" style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) minmax(0,0.9fr) 90px 28px;column-gap:12px;padding:11px 14px;font-size:12.5px;align-items:center;cursor:pointer">
+          <div style="min-width:0">
+            <div style="font-weight:700;color:oklch(20% 0.01 264);font-family:ui-monospace,Menlo,monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis">{{ c.clientUserRef }}</div>
+            <div style="font-size:10.5px;color:var(--text-faint)">joined {{ c.joined|slice(0, 10) }}</div>
+          </div>
+          <div style="min-width:0;display:flex;flex-wrap:wrap;gap:5px">
+            {% for r in c.providerRefs %}
+            <span class="provider-ref-pill">{{ r.providerName }}: {{ r.providerCustomerId }}</span>
+            {% else %}
+            <span style="color:var(--text-faint);font-size:11px">—</span>
+            {% endfor %}
+          </div>
+          <div style="min-width:0">
+            <div style="font-weight:600;color:oklch(25% 0.01 264)">{{ c.subscriptionsCount }} ({{ c.activeSubscriptionsCount }} active)</div>
+            <div style="font-size:10.5px;color:var(--text-faint)">{{ c.lifetimeSpend }} lifetime</div>
+          </div>
+          <div><span class="status-pill status-{{ c.status|lower }}">{{ c.status }}</span></div>
+          <div style="display:flex;justify-content:flex-end;color:var(--text-muted)">
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" :style="open ? 'transform:rotate(180deg)' : ''"><polyline points="5,7 10,12 15,7"></polyline></svg>
+          </div>
+        </div>
+        <div x-show="open" x-cloak class="customer-detail">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:oklch(35% 0.01 264);margin-bottom:8px">Identity &amp; provider references</div>
+            <div class="detail-card">
+              <div class="detail-row">
+                <div>
+                  <div class="detail-label">Client user reference</div>
+                  <div class="detail-hint">The id the client application sent us</div>
+                </div>
+                <span class="detail-value">{{ c.clientUserRef }}</span>
+              </div>
+              {% for r in c.providerRefs %}
+              <div class="detail-row">
+                <div>
+                  <div class="detail-label">{{ r.providerName }}</div>
+                  <div class="detail-hint">Provider customer id</div>
+                </div>
+                <span class="detail-value">{{ r.providerCustomerId }}</span>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:700;color:oklch(35% 0.01 264);margin-bottom:8px">Subscriptions &amp; purchases</div>
+            <div class="detail-card">
+              {% for s in c.subscriptions %}
+              <div class="detail-row">
+                <div style="min-width:0">
+                  <div style="font-size:12px;font-weight:600;color:oklch(25% 0.01 264)">{{ s.packageName }} &middot; {{ s.price }}</div>
+                  <div class="detail-hint">{{ s.providerAccountName }} &middot; #{{ s.subscriptionId }}</div>
+                </div>
+                <div style="text-align:right;flex:none">
+                  <span class="status-pill status-{{ s.status|lower }}">{{ s.status }}</span>
+                  {% if s.renewLabel %}<div class="detail-hint" style="margin-top:3px">{{ s.renewLabel|slice(0, 10) }}</div>{% endif %}
+                </div>
+              </div>
+              {% else %}
+              <div class="detail-row"><span style="color:var(--text-faint)">No subscriptions.</span></div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

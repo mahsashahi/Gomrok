@@ -1,0 +1,22 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Settings — Gomrok Admin{% endblock %}
+
+{% block content %}
+<h1 class="page-title" style="font-size:22px;margin-bottom:6px">Settings</h1>
+
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 20px;max-width:640px">
+  <div style="font-size:12.5px;font-weight:700;margin-bottom:6px">No settings screen yet</div>
+  <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;line-height:1.5">
+    This nav entry exists to match the admin panel's design shell, but there is no
+    admin-editable settings domain or database table behind it. Gomrok's configuration today
+    is plain environment variables loaded once at boot — not rows an operator can view or
+    change from this panel.
+  </p>
+  <p style="font-size:12px;color:var(--text-muted);margin:0;line-height:1.5">
+    If a real operational-settings feature is wanted (for example a maintenance-mode toggle or
+    a feature flag an admin can flip live), that needs its own database design, proposed and
+    confirmed first — not invented to fill this placeholder.
+  </p>
+</div>
+{% endblock %}

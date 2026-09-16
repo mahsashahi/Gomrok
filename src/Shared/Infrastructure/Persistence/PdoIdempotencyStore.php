@@ -183,14 +183,15 @@ final readonly class PdoIdempotencyStore implements IdempotencyStore
         $statement = $this->pdo->prepare(
             'INSERT INTO idempotency_keys
                 (client_id, idempotency_key, request_fingerprint, status, created_at, updated_at, expires_at)
-             VALUES (:client_id, :key, :fingerprint, :status, :now, :now, :expires_at)',
+             VALUES (:client_id, :key, :fingerprint, :status, :created_at, :updated_at, :expires_at)',
         );
         $statement->execute([
             'client_id' => $clientId,
             'key' => $key,
             'fingerprint' => $requestFingerprint,
             'status' => IdempotencyStatus::Processing->value,
-            'now' => $now->format(self::SQL_DATETIME),
+            'created_at' => $now->format(self::SQL_DATETIME),
+            'updated_at' => $now->format(self::SQL_DATETIME),
             'expires_at' => $expiresAt->format(self::SQL_DATETIME),
         ]);
     }
@@ -206,13 +207,14 @@ final readonly class PdoIdempotencyStore implements IdempotencyStore
             'UPDATE idempotency_keys
                 SET status = :status, request_fingerprint = :fingerprint,
                     target_type = NULL, target_id = NULL, response_status = NULL,
-                    created_at = :now, updated_at = :now, expires_at = :expires_at
+                    created_at = :created_at, updated_at = :updated_at, expires_at = :expires_at
               WHERE client_id = :client_id AND idempotency_key = :key',
         );
         $statement->execute([
             'status' => IdempotencyStatus::Processing->value,
             'fingerprint' => $requestFingerprint,
-            'now' => $now->format(self::SQL_DATETIME),
+            'created_at' => $now->format(self::SQL_DATETIME),
+            'updated_at' => $now->format(self::SQL_DATETIME),
             'expires_at' => $expiresAt->format(self::SQL_DATETIME),
             'client_id' => $clientId,
             'key' => $key,

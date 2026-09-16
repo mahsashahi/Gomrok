@@ -22,13 +22,14 @@ final readonly class PdoDefaultPackagePriceRepository implements DefaultPackageP
         $now = gmdate(self::DT);
         $this->pdo->prepare(
             'INSERT INTO default_package_prices (package_id, amount_minor, currency_code, created_at, updated_at)
-             VALUES (:package_id, :amount_minor, :currency_code, :now, :now)
+             VALUES (:package_id, :amount_minor, :currency_code, :created_at, :updated_at)
              ON DUPLICATE KEY UPDATE amount_minor = VALUES(amount_minor), currency_code = VALUES(currency_code), updated_at = VALUES(updated_at)',
         )->execute([
             'package_id' => $price->packageId,
             'amount_minor' => $price->amountMinor,
             'currency_code' => $price->currencyCode,
-            'now' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
         ]);
     }
 

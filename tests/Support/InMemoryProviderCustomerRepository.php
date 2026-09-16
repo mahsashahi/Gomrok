@@ -45,4 +45,12 @@ final class InMemoryProviderCustomerRepository implements ProviderCustomerReposi
 
         return null;
     }
+
+    public function forClientUser(int $clientId, string $clientUserRef): array
+    {
+        return array_values(array_filter(
+            $this->byId,
+            static fn (ProviderCustomer $c): bool => $c->clientId() === $clientId && $c->clientUserRef() === $clientUserRef,
+        ));
+    }
 }

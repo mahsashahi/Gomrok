@@ -47,6 +47,14 @@ final class InMemoryClientDirectory implements ClientDirectory
         return isset($this->byId[$id]);
     }
 
+    public function all(): array
+    {
+        $snapshots = array_values($this->byId);
+        usort($snapshots, static fn (ClientSnapshot $a, ClientSnapshot $b): int => $a->name <=> $b->name);
+
+        return $snapshots;
+    }
+
     public function findActiveEndpointUrl(int $clientId, EndpointPurpose $purpose): ?string
     {
         return $this->endpoints["{$clientId}:{$purpose->value}"] ?? null;

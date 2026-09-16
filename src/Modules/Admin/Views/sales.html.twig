@@ -1,0 +1,62 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Sales — Gomrok Admin{% endblock %}
+
+{% block content %}
+{% if sales is null %}
+  <h1 class="page-title">Sales</h1>
+  <p style="color:var(--text-muted);font-size:14px">No clients exist yet — create one from the Clients screen.</p>
+{% else %}
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <h1 class="page-title" style="font-size:22px">Sales</h1>
+      <span class="page-subtitle">{{ active_client.name }}</span>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    {% for tab in sales.tabs %}
+    <a href="/admin/sales{{ tab.key == 'all' ? '' : '?status=' ~ tab.key }}" class="stat-tab{{ tab.active ? ' active' : '' }}">
+      <span class="stat-tab-label">{{ tab.label }}</span>
+      <span class="stat-tab-value">{{ tab.count }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff">
+    <div style="display:grid;grid-template-columns:0.3fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;padding:11px 20px;font-size:12.5px;font-weight:700;border-bottom:1px solid var(--border)">
+      <div></div><div>Amount</div><div>Customer</div><div>Provider</div><div>Method</div><div>Purchase type</div><div>Status</div><div>Created</div>
+    </div>
+    {% for row in sales.rows %}
+    <div x-data="{ open: false }">
+      <div class="timeline-toggle" @click="open = !open" style="display:grid;grid-template-columns:0.3fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;padding:13px 20px;font-size:14px;border-bottom:1px solid var(--surface-alt);align-items:center">
+        <div style="color:var(--text-faint)" x-text="open ? '▾' : '▸'"></div>
+        <div style="font-weight:600">{{ row.amount }}</div>
+        <div style="color:oklch(35% 0.01 264)">{{ row.customer }}</div>
+        <div style="color:oklch(35% 0.01 264)">{{ row.provider }}</div>
+        <div style="color:oklch(35% 0.01 264)">{{ row.method ?? '—' }}</div>
+        <div style="color:oklch(35% 0.01 264)">{{ row.purchaseType }}</div>
+        <div><span class="status-pill status-{{ row.status|lower|replace({' ': '_'}) }}">{{ row.status }}</span></div>
+        <div style="color:var(--text-muted)">{{ row.createdAt }}</div>
+      </div>
+      <div x-show="open" x-cloak class="timeline-row">
+        {% if row.timeline is empty %}
+        <div style="color:var(--text-faint)">No provider transactions recorded yet.</div>
+        {% else %}
+        {% for entry in row.timeline %}
+        <div class="timeline-entry">
+          <span class="kind">{{ entry.kind }}</span>
+          <span>{{ entry.providerStatusRaw }}</span>
+          <span>{{ entry.createdAt }}</span>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
+    <div style="padding:24px 20px;font-size:13px;color:var(--text-muted)">No payments yet for this client.</div>
+    {% endfor %}
+  </div>
+  <div style="margin-top:8px;font-size:13px;color:var(--text-muted)">{{ sales.totalCount }} results</div>
+{% endif %}
+{% endblock %}

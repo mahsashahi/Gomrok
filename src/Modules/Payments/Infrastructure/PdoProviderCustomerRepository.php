@@ -61,6 +61,22 @@ final readonly class PdoProviderCustomerRepository implements ProviderCustomerRe
         return $this->hydrate($statement->fetch());
     }
 
+    public function forClientUser(int $clientId, string $clientUserRef): array
+    {
+        $statement = $this->pdo->prepare('SELECT * FROM provider_customers WHERE client_id = :c AND client_user_ref = :u ORDER BY id');
+        $statement->execute(['c' => $clientId, 'u' => $clientUserRef]);
+
+        $out = [];
+        while (($row = $statement->fetch()) !== false) {
+            $customer = $this->hydrate($row);
+            if ($customer !== null) {
+                $out[] = $customer;
+            }
+        }
+
+        return $out;
+    }
+
     private function hydrate(mixed $row): ?ProviderCustomer
     {
         if (!\is_array($row)) {

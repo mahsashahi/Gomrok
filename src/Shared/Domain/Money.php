@@ -35,6 +35,26 @@ final readonly class Money implements Stringable
         return new self(BrickMoney::zero($currency->toBrickCurrency()));
     }
 
+    /**
+     * Parses a human-entered decimal amount (e.g. admin panel form input
+     * `"29.00"`) into minor units for the given currency. `null` on anything
+     * that isn't a valid decimal for that currency's scale (wrong number of
+     * decimal places, non-numeric, negative).
+     */
+    public static function fromDecimalInput(string $amount, Currency $currency): ?self
+    {
+        $amount = trim($amount);
+        if (preg_match('/^\d+(\.\d+)?$/', $amount) !== 1) {
+            return null;
+        }
+
+        try {
+            return new self(BrickMoney::of($amount, $currency->toBrickCurrency(), roundingMode: RoundingMode::UNNECESSARY));
+        } catch (\Brick\Math\Exception\RoundingNecessaryException) {
+            return null;
+        }
+    }
+
     public function currency(): Currency
     {
         return Currency::of($this->money->getCurrency()->getCurrencyCode());

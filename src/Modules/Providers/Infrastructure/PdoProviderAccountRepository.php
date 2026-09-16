@@ -183,7 +183,7 @@ final readonly class PdoProviderAccountRepository implements ProviderAccountRepo
         $insert = $this->pdo->prepare(
             'INSERT INTO provider_account_endpoints
                 (provider_account_id, kind, token, signing_secret_ciphertext, is_active, created_at, updated_at)
-             VALUES (:id, :kind, :token, :secret, :active, :now, :now)',
+             VALUES (:id, :kind, :token, :secret, :active, :created_at, :updated_at)',
         );
         $update = $this->pdo->prepare(
             'UPDATE provider_account_endpoints
@@ -199,7 +199,8 @@ final readonly class PdoProviderAccountRepository implements ProviderAccountRepo
                     'token' => $endpoint->token(),
                     'secret' => $endpoint->signingSecretCiphertext(),
                     'active' => $endpoint->isActive() ? 1 : 0,
-                    'now' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
                 ]);
                 $endpoint->assignId((int) $this->pdo->lastInsertId());
             } else {

@@ -47,4 +47,12 @@ final class InMemorySubscriptionRepository implements SubscriptionRepository
             static fn (Subscription $s): bool => $s->clientId() === $clientId && $s->clientUserRef() === $clientUserRef,
         ));
     }
+
+    /**
+     * @return list<Subscription>
+     */
+    public function forClient(int $clientId): array
+    {
+        return array_values(array_filter($this->byId, static fn (Subscription $s): bool => $s->clientId() === $clientId));
+    }
 }

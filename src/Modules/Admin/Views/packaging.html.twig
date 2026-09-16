@@ -1,0 +1,464 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Packaging & Pricing — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div x-data="packagingModals()">
+{% if error %}<div class="form-error">{{ error }}</div>{% endif %}
+{% if success %}<div class="form-success">{{ success }}</div>{% endif %}
+
+{% if packages_tab is null and groups_tab is null %}
+  <h1 class="page-title" style="font-size:22px">Packaging &amp; Pricing</h1>
+  <p style="color:var(--text-muted);font-size:14px">No clients exist yet — create one from the Clients screen.</p>
+{% else %}
+  <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+    <h1 class="page-title" style="font-size:22px">Packaging &amp; Pricing</h1>
+    <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-muted);background:var(--surface-alt);border:1px solid var(--border);border-radius:5px;padding:3px 7px">client {{ active_client.id }}</span>
+    <span style="flex:1"></span>
+    {% if active_tab == 'packages' and 'packages.create' in permissions %}
+    <button type="button" class="btn btn-primary btn-sm" @click="open('create-package', {code:'',name:'',description:'',badge:'',highlighted:false,supports_one_time:true,supports_subscription:false,duration_months:'',has_trial:false,trial_days:'',default_price_amount:'',default_price_currency:'{{ active_client.defaultCurrency }}'})">+ New package</button>
+    {% endif %}
+    {% if active_tab == 'groups' and 'pricing.create' in permissions %}
+    <button type="button" class="btn btn-primary btn-sm" @click="open('create-group', {name:'',slug:'',currency:'{{ active_client.defaultCurrency }}',is_default:false,device_type:'',priority:100,countries:''})">+ New pricing group</button>
+    {% endif %}
+  </div>
+
+  <div class="tab-bar">
+    <a href="/admin/packaging?tab=packages" class="tab-link{{ active_tab == 'packages' ? ' active' : '' }}">Packages</a>
+    <a href="/admin/packaging?tab=groups" class="tab-link{{ active_tab == 'groups' ? ' active' : '' }}">Pricing groups</a>
+  </div>
+
+  {% if active_tab == 'packages' %}
+    {% if packages_tab.packages is empty %}
+    <div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:4px">No packages yet</div>
+      <div style="font-size:11.5px;color:var(--text-muted)">This client has no packages in its catalogue.</div>
+    </div>
+    {% else %}
+    <div class="master-detail">
+      <div class="master-panel">
+        <div class="master-panel-header">
+          <div class="master-eyebrow">Packages ({{ packages_tab.packages|length }})</div>
+        </div>
+        {% for p in packages_tab.packages %}
+        <a href="/admin/packaging?tab=packages&package={{ p.code }}" class="master-row{{ p.selected ? ' active' : '' }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+            <span class="master-row-title">{{ p.name }}</span>
+            {% if p.defaultPrice %}<span style="font-size:11.5px;font-weight:700;color:oklch(30% 0.01 264)">{{ p.defaultPrice }}</span>{% endif %}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span class="master-row-sub">{{ p.durationLabel }}</span>
+            {% if p.trialLabel %}<span style="font-size:9.5px;font-weight:700;padding:0 4px;border-radius:3px;background:oklch(95% 0.05 145);color:oklch(45% 0.12 145)">{{ p.trialLabel }}</span>{% endif %}
+            {% if p.badge %}<span style="font-size:9.5px;font-weight:700;padding:0 4px;border-radius:3px;background:var(--accent-soft);color:var(--accent-soft-text)">{{ p.badge }}</span>{% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+
+      <div class="detail-panel">
+        {% set d = packages_tab.selected %}
+        {% if d %}
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none"></span>
+          <div style="font-size:16px;font-weight:700">{{ d.name }}</div>
+          {% if d.badge %}<span style="font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--accent-soft);color:var(--accent-soft-text)">{{ d.badge }}</span>{% endif %}
+          <span class="status-pill status-{{ d.status|lower }}">{{ d.status }}</span>
+          {% if 'packages.update' in permissions %}
+          <button type="button" class="link-btn" style="margin-left:auto" @click="open('edit-package', {id:{{ d.id }},code:'{{ d.code }}',name:'{{ d.name|e('js') }}',description:{{ d.description ? ('\'' ~ d.description|e('js') ~ '\'') : "''" }},badge:{{ d.badge ? ('\'' ~ d.badge|e('js') ~ '\'') : "''" }},highlighted:{{ d.highlighted ? 'true' : 'false' }},supports_one_time:{{ d.hasOneTimePayment ? 'true' : 'false' }},supports_subscription:{{ d.hasSubscription ? 'true' : 'false' }},duration_months:{{ d.durationMonthsRaw ?? "''" }},has_trial:{{ d.subscriptionHasTrial ? 'true' : 'false' }},trial_days:{{ d.subscriptionTrialDays ?? "''" }},default_price_amount:{{ d.defaultPriceAmountMinor is not null ? ("'" ~ (d.defaultPriceAmountMinor / 100)|number_format(2, '.', '') ~ "'") : "''" }},default_price_currency:'{{ d.defaultPriceCurrency ?? active_client.defaultCurrency }}',active:{{ d.isActive ? 'true' : 'false' }}})">Edit package</button>
+          {% endif %}
+        </div>
+        {% if d.description %}<div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;max-width:640px;padding-left:14px">{{ d.description }}</div>{% endif %}
+
+        <div class="info-card-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+          <div><div class="info-card-label">Duration</div><div class="info-card-value">{{ d.durationLabel }}</div></div>
+          <div><div class="info-card-label">Default price</div><div class="info-card-value">{{ d.defaultPrice ?? '—' }}</div></div>
+          <div><div class="info-card-label">Trial</div><div class="info-card-value">{{ d.trialLabel ?? 'None' }}</div></div>
+          <div><div class="info-card-label">Status</div><div class="info-card-value">{{ d.status }}</div></div>
+          <div><div class="info-card-label">Code</div><div class="info-card-value">{{ d.code }}</div></div>
+          <div><div class="info-card-label">Client ID</div><div class="info-card-value">{{ d.clientId }}</div></div>
+        </div>
+
+        <div class="section-eyebrow">Provider setup</div>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:10px">
+          {% for row in d.providerSetup %}
+          <div style="display:flex;align-items:flex-start;gap:11px;padding:10px 13px;background:#fff;border:1px solid var(--border-light);border-radius:9px;flex-wrap:wrap">
+            <div style="min-width:150px;flex:1">
+              <div style="display:flex;align-items:center;gap:7px;margin-bottom:2px;flex-wrap:wrap">
+                <span style="font-size:12.5px;font-weight:700">{{ row.accountName }}</span>
+                <span style="font-size:9.5px;font-weight:700;color:var(--text-faint);text-transform:uppercase">{{ row.providerTypeCode }}</span>
+                <span class="status-pill status-{{ row.syncState|lower }}">{{ row.syncState }}</span>
+              </div>
+              {% if row.providerSideName %}<div style="font-size:11.5px;color:var(--text-muted)">{{ row.providerSideName }}</div>{% endif %}
+              {% if row.remoteId %}<div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text-faint);word-break:break-all">{{ row.remoteId }}</div>{% endif %}
+            </div>
+          </div>
+          {% else %}
+          <div style="font-size:12px;color:var(--text-faint)">No provider accounts have this package created yet.</div>
+          {% endfor %}
+        </div>
+
+        {% if 'provider_configs.update' in permissions and provider_accounts is not empty %}
+        <details style="margin-bottom:24px">
+          <summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--accent)">+ Link a provider account manually</summary>
+          <div style="font-size:10.5px;color:var(--text-faint);margin:6px 0 8px">
+            Gomrok cannot create the product on the provider's side yet — that capability doesn't exist in this build. Create it there yourself first, then enter its remote id here to register the link.
+          </div>
+          <form method="post" action="/admin/packaging/packages/{{ d.id }}/provider" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <input type="hidden" name="code" value="{{ d.code }}">
+            <div class="form-field" style="min-width:160px">
+              <label>Provider account</label>
+              <select name="provider_account_id" required>
+                <option value="">Choose…</option>
+                {% for acc in provider_accounts %}
+                <option value="{{ acc.id }}">{{ acc.name }} ({{ acc.providerTypeCode }})</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="form-field" style="min-width:140px">
+              <label>Provider-side name</label>
+              <input type="text" name="provider_side_name">
+            </div>
+            <div class="form-field" style="min-width:140px">
+              <label>Remote id</label>
+              <input type="text" name="remote_id">
+            </div>
+            <button type="submit" class="btn btn-secondary btn-sm">Link</button>
+          </form>
+        </details>
+        {% endif %}
+
+        <div class="section-eyebrow">Pricing by group</div>
+        <div style="border:1px solid var(--border-light);border-radius:9px;overflow-x:auto;background:#fff">
+          <div style="min-width:520px">
+            <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr);column-gap:12px;padding:8px 14px;font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;border-bottom:1px solid var(--surface-alt);background:var(--bg)">
+              <div>Pricing group</div><div>Price</div><div>In {{ active_client.defaultCurrency }}</div><div>Providers</div>
+            </div>
+            {% for row in d.byGroupRows %}
+            <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr);column-gap:12px;padding:11px 14px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+              <div style="min-width:0">
+                <div style="display:flex;align-items:center;gap:6px"><span style="font-weight:700">{{ row.groupName }}</span><span class="status-pill status-{{ row.status|lower }}">{{ row.status }}</span></div>
+                <div style="font-size:10.5px;color:var(--text-faint)">{{ row.countryLabel }}</div>
+              </div>
+              <div style="font-weight:700">{{ row.price }}</div>
+              <div style="color:oklch(40% 0.01 264)">{{ row.defaultCurrencyPrice ?? '—' }}</div>
+              <div style="font-size:11.5px;color:oklch(45% 0.01 264)">{{ row.providersLabel }}</div>
+            </div>
+            {% else %}
+            <div style="padding:16px 14px;font-size:12px;color:var(--text-faint)">Not priced in any group.</div>
+            {% endfor %}
+          </div>
+        </div>
+        <div style="font-size:10.5px;color:var(--text-faint);margin-top:6px">Per-group prices are edited from the Pricing groups tab.</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  {% else %}
+    {% if groups_tab.groups is empty %}
+    <div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:4px">No pricing groups yet</div>
+    </div>
+    {% else %}
+    <div class="master-detail">
+      <div class="master-panel">
+        <div class="master-panel-header"><div class="master-eyebrow">Pricing groups</div></div>
+        {% for g in groups_tab.groups %}
+        <a href="/admin/packaging?tab=groups&group={{ g.slug }}" class="master-row{{ g.selected ? ' active' : '' }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+            <span class="master-row-title">{{ g.name }}</span>
+            {% if g.isDefault %}<span style="font-size:11px;color:var(--text-faint)">*</span>{% endif %}
+          </div>
+          <div class="master-row-sub">{{ g.countryLabel }}</div>
+        </a>
+        {% endfor %}
+      </div>
+
+      <div class="detail-panel">
+        {% set d = groups_tab.selected %}
+        {% if d %}
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none"></span>
+          <div style="font-size:15px;font-weight:700">{{ d.name }} — pricing &amp; countries</div>
+          <span class="status-pill status-{{ d.isActive ? 'active' : 'cancelled' }}">{{ d.isActive ? 'Active' : 'Disabled' }}</span>
+          {% if not d.isDefault and 'pricing.update' in permissions %}
+          <button type="button" class="link-btn" style="margin-left:auto" @click="open('edit-group', {id:{{ d.id }},slug:'{{ d.slug }}',countries:'{{ d.countriesRaw|join(', ') }}',active:{{ d.isActive ? 'true' : 'false' }}})">Edit group</button>
+          {% endif %}
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;max-width:640px">Countries in a pricing group share one currency and one set of enabled providers. Package prices below apply to every country in this group unless a package is disabled for it.</div>
+
+        <div class="info-card-grid">
+          <div class="info-card"><div class="info-card-label">Countries</div><div class="info-card-value">{{ d.countriesDisplay }}</div></div>
+          <div class="info-card"><div class="info-card-label">Currency</div><div class="info-card-value">{{ d.currency }}</div></div>
+          <div class="info-card"><div class="info-card-label">Providers</div><div class="info-card-value">{{ d.providersDisplay }}</div></div>
+        </div>
+
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <div class="section-eyebrow" style="margin-bottom:0">Price lists (A/B)</div>
+          {% if 'pricing.create' in permissions %}
+          <button type="button" class="link-btn" @click="open('create-price-list', {pricing_group_id:{{ d.id }},name:'',factor:'1.0000'})">+ New list</button>
+          {% endif %}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;margin-top:8px">
+          {% for l in d.priceLists %}
+          <div class="price-list-card{{ l.selected ? ' active' : '' }}{{ l.isEnabled ? '' : ' disabled' }}" style="display:block">
+            <a href="/admin/packaging?tab=groups&group={{ d.slug }}&list={{ l.id }}" style="color:inherit;text-decoration:none;display:block">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:12.5px;font-weight:700">{{ l.name }}</span>
+                {% if l.isControl %}<span style="font-size:9.5px;color:var(--text-faint)">control</span>{% endif %}
+              </div>
+              <div style="font-size:10.5px;color:var(--text-faint);margin-top:3px">{{ l.shareLabel }}</div>
+            </a>
+            {% if not l.isControl and 'pricing.update' in permissions %}
+            <form method="post" action="/admin/packaging/price-lists/{{ l.id }}/status" style="margin-top:6px">
+              <input type="hidden" name="group" value="{{ d.slug }}">
+              <input type="hidden" name="action" value="{{ l.isEnabled ? 'disable' : 'enable' }}">
+              <button type="submit" class="btn btn-secondary btn-sm">{{ l.isEnabled ? 'Disable' : 'Enable' }}</button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <div class="section-eyebrow" style="margin-bottom:0">Package prices — {{ d.activePriceListName }}</div>
+          {% if 'pricing.update' in permissions %}
+          <span style="font-size:10px;color:var(--text-faint)">drag <span class="drag-handle">⠿</span> to reorder priority</span>
+          {% endif %}
+        </div>
+        <div style="border:1px solid var(--border-light);border-radius:9px;overflow-x:auto;background:#fff;margin-bottom:4px;margin-top:8px" {% if 'pricing.update' in permissions %}data-reorder-list{% endif %}>
+          <div style="min-width:560px">
+            <div style="display:grid;grid-template-columns:20px minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) 80px;column-gap:12px;padding:8px 14px;font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;border-bottom:1px solid var(--surface-alt);background:var(--bg)">
+              <div></div><div>Package</div><div>Price in group</div><div>In {{ active_client.defaultCurrency }}</div><div></div>
+            </div>
+            {% for row in d.packageRows %}
+            <div class="{{ 'pricing.update' in permissions ? 'package-row-drag' : '' }}" {% if 'pricing.update' in permissions %}draggable="true" data-package-id="{{ row.packageId }}"{% endif %} style="display:grid;grid-template-columns:20px minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) 80px;column-gap:12px;padding:11px 14px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+              <div class="drag-handle">{% if 'pricing.update' in permissions %}⠿{% endif %}</div>
+              <div style="min-width:0">
+                <div style="display:flex;align-items:center;gap:5px">
+                  {% if row.highlighted %}★{% endif %}
+                  <span style="font-weight:700">{{ row.name }}</span>
+                  {% if row.badge %}<span style="font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:4px;background:var(--accent-soft);color:var(--accent-soft-text)">{{ row.badge }}</span>{% endif %}
+                </div>
+                <div style="font-size:10.5px;color:var(--text-faint)">default {{ row.defaultPrice ?? '—' }}</div>
+              </div>
+              <div style="font-weight:700">{{ row.groupPrice }}</div>
+              <div style="color:oklch(40% 0.01 264)">{{ row.defaultCurrencyPrice ?? '—' }}</div>
+              <div>
+                {% if 'pricing.update' in permissions %}
+                  {% if d.activePriceListIsControl %}
+                  <button type="button" class="link-btn" @click="open('group-price', {group_id:{{ d.id }},group_slug:'{{ d.slug }}',package_id:{{ row.packageId }},package_name:'{{ row.name|e('js') }}',status:'{{ row.overrideStatus }}',amount:{{ row.overrideAmountMinor is not null ? ("'" ~ (row.overrideAmountMinor / 100)|number_format(2, '.', '') ~ "'") : "''" }}})">Edit price</button>
+                  {% else %}
+                  <button type="button" class="link-btn" @click="open('list-price', {list_id:{{ d.activePriceListId }},group_slug:'{{ d.slug }}',package_id:{{ row.packageId }},package_name:'{{ row.name|e('js') }}',amount:''})">Edit price</button>
+                  {% endif %}
+                {% endif %}
+              </div>
+            </div>
+            {% else %}
+            <div style="padding:16px 14px;font-size:12px;color:var(--text-faint)">No packages priced here yet.</div>
+            {% endfor %}
+          </div>
+          {% if 'pricing.update' in permissions %}
+          <form data-reorder-form method="post" action="/admin/packaging/groups/{{ d.id }}/reorder" style="display:none">
+            <input type="hidden" name="order" value="">
+          </form>
+          {% endif %}
+        </div>
+
+        <div class="section-eyebrow">Resolution preview</div>
+        <div style="border:1px solid var(--border);border-radius:9px;background:var(--surface-alt);padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.9;color:oklch(38% 0.01 264)">
+          <div>country in this group &rarr; price from &ldquo;{{ d.name }}&rdquo; / {{ d.activePriceListName }}</div>
+          <div>user &rarr; list = stable hash(user id) % enabled lists &rarr; never changes on refresh</div>
+          <div>country not in any group &rarr; default (fallback) applies</div>
+          <div>package status &ldquo;disabled&rdquo; &rarr; package hidden for these countries</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  {% endif %}
+{% endif %}
+
+{# ---------- Increment B modals (shared, state-driven via Alpine) ---------- #}
+<div x-show="modal !== null" x-cloak class="modal-backdrop" @click.self="close()" @keydown.escape.window="close()">
+
+  <template x-if="modal === 'create-package'">
+    <div class="modal-card">
+      <div class="modal-title">Create package</div>
+      <div class="modal-subtitle">Adds a package to this client's catalogue.</div>
+      <form method="post" action="/admin/packaging/packages">
+        <div class="form-grid">
+          <div class="form-field"><label>Code</label><input type="text" name="code" x-model="form.code" required pattern="[a-z0-9_-]+" placeholder="pro-monthly"></div>
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field span-2"><label>Description</label><textarea name="description" x-model="form.description" rows="2"></textarea></div>
+          <div class="form-field"><label>Badge</label><input type="text" name="badge" x-model="form.badge" placeholder="Popular"></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="highlighted" x-model="form.highlighted"> Highlighted</label></div>
+          <div class="form-field"><label class="checkbox-row"><input type="checkbox" name="supports_one_time" x-model="form.supports_one_time"> One-time payment</label></div>
+          <div class="form-field"><label class="checkbox-row"><input type="checkbox" name="supports_subscription" x-model="form.supports_subscription"> Subscription</label></div>
+          <div class="form-field"><label>Duration (months)</label><input type="number" min="1" name="duration_months" x-model="form.duration_months"></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="has_trial" x-model="form.has_trial"> Has trial</label></div>
+          <div class="form-field" x-show="form.has_trial"><label>Trial days</label><input type="number" min="1" name="trial_days" x-model="form.trial_days"></div>
+          <div class="form-field"><label>Default price amount</label><input type="text" name="default_price_amount" x-model="form.default_price_amount" placeholder="29.00"></div>
+          <div class="form-field"><label>Currency</label><input type="text" name="default_price_currency" x-model="form.default_price_currency" maxlength="3" style="text-transform:uppercase"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create package</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'edit-package'">
+    <div class="modal-card">
+      <div class="modal-title">Edit package</div>
+      <div class="modal-subtitle" x-text="form.code"></div>
+      <form method="post" :action="'/admin/packaging/packages/' + form.id">
+        <input type="hidden" name="code" :value="form.code">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
+          <div class="form-field span-2"><label>Description</label><textarea name="description" x-model="form.description" rows="2"></textarea></div>
+          <div class="form-field"><label>Badge</label><input type="text" name="badge" x-model="form.badge"></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="highlighted" x-model="form.highlighted"> Highlighted</label></div>
+          <div class="form-field"><label class="checkbox-row"><input type="checkbox" name="supports_one_time" x-model="form.supports_one_time"> One-time payment</label></div>
+          <div class="form-field"><label class="checkbox-row"><input type="checkbox" name="supports_subscription" x-model="form.supports_subscription"> Subscription</label></div>
+          <div class="form-field"><label>Duration (months)</label><input type="number" min="1" name="duration_months" x-model="form.duration_months"></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="has_trial" x-model="form.has_trial"> Has trial</label></div>
+          <div class="form-field" x-show="form.has_trial"><label>Trial days</label><input type="number" min="1" name="trial_days" x-model="form.trial_days"></div>
+          <div class="form-field"><label>Default price amount</label><input type="text" name="default_price_amount" x-model="form.default_price_amount"></div>
+          <div class="form-field"><label>Currency</label><input type="text" name="default_price_currency" x-model="form.default_price_currency" maxlength="3" style="text-transform:uppercase"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'create-group'">
+    <div class="modal-card">
+      <div class="modal-title">Create pricing group</div>
+      <div class="modal-subtitle">A set of countries sharing one currency and one set of package prices.</div>
+      <form method="post" action="/admin/packaging/groups">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label>Slug (optional)</label><input type="text" name="slug" x-model="form.slug" placeholder="auto from name"></div>
+          <div class="form-field"><label>Currency</label><input type="text" name="currency" x-model="form.currency" maxlength="3" style="text-transform:uppercase" required></div>
+          <div class="form-field"><label>Priority</label><input type="number" min="0" name="priority" x-model="form.priority" :disabled="form.is_default"></div>
+          <div class="form-field"><label>Device type (optional)</label>
+            <select name="device_type" x-model="form.device_type">
+              <option value="">Any</option>
+              <option value="web">Web</option>
+              <option value="ios">iOS</option>
+              <option value="android">Android</option>
+            </select>
+          </div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="is_default" x-model="form.is_default"> This is the default (fallback) group</label></div>
+          <div class="form-field span-2" x-show="!form.is_default">
+            <label>Countries (ISO codes, comma or space separated)</label>
+            <textarea name="countries" x-model="form.countries" rows="2" placeholder="DE, AT, CH"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create group</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'edit-group'">
+    <div class="modal-card">
+      <div class="modal-title">Edit pricing group</div>
+      <div class="modal-subtitle" x-text="form.slug"></div>
+      <form method="post" :action="'/admin/packaging/groups/' + form.id">
+        <div class="form-grid">
+          <div class="form-field span-2">
+            <label>Countries (ISO codes, comma or space separated)</label>
+            <textarea name="countries" x-model="form.countries" rows="2"></textarea>
+          </div>
+          <div class="form-field"><label class="checkbox-row"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'create-price-list'">
+    <div class="modal-card">
+      <div class="modal-title">Create A/B price list</div>
+      <div class="modal-subtitle">Visitors are split evenly across every enabled list in the group.</div>
+      <form method="post" action="/admin/packaging/price-lists">
+        <input type="hidden" name="pricing_group_id" :value="form.pricing_group_id">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required placeholder="List B"></div>
+          <div class="form-field"><label>Factor</label><input type="text" name="factor" x-model="form.factor" placeholder="0.9000"></div>
+        </div>
+        <div class="form-field-hint">Factor multiplies the group's resolved base price (e.g. 0.9000 = 10% off) unless a package has an exact price pinned on this list.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create list</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'group-price'">
+    <div class="modal-card">
+      <div class="modal-title">Edit price</div>
+      <div class="modal-subtitle" x-text="form.package_name"></div>
+      <form method="post" :action="'/admin/packaging/groups/' + form.group_id + '/packages/' + form.package_id + '/price'">
+        <div class="form-grid">
+          <div class="form-field span-2">
+            <label>Status in this group</label>
+            <select name="status" x-model="form.status">
+              <option value="default">Default — use the package's base price</option>
+              <option value="override">Override — a group-specific amount</option>
+              <option value="disabled">Disabled — hidden in this group</option>
+            </select>
+          </div>
+          <div class="form-field span-2" x-show="form.status === 'override'">
+            <label>Amount</label>
+            <input type="text" name="amount" x-model="form.amount" placeholder="24.90">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save price</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'list-price'">
+    <div class="modal-card">
+      <div class="modal-title">Edit list price</div>
+      <div class="modal-subtitle" x-text="form.package_name"></div>
+      <form method="post" :action="'/admin/packaging/price-lists/' + form.list_id + '/packages/' + form.package_id + '/price'">
+        <input type="hidden" name="group" :value="form.group_slug">
+        <div class="form-grid">
+          <div class="form-field span-2">
+            <label>Exact price on this list</label>
+            <input type="text" name="amount" x-model="form.amount" placeholder="24.90" required>
+          </div>
+        </div>
+        <div class="form-field-hint">Pins an exact amount for this package on this A/B list, overriding the list's factor.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save price</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+</div>
+</div>
+{% endblock %}
+
+{% block alpine_components %}
+<script src="/packaging.js"></script>
+{% endblock %}

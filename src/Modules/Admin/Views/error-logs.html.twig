@@ -1,0 +1,125 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Error Logs — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+  <h1 class="page-title" style="font-size:22px">Error logs</h1>
+  {% if screen.unresolvedCount > 0 %}
+  <span class="status-pill status-unresolved">{{ screen.unresolvedCount }} unresolved</span>
+  {% endif %}
+</div>
+<p style="font-size:12px;color:var(--text-muted);margin:0 0 16px;max-width:680px">
+  Operator triage surface for internal failures. Opens on unresolved rows by default — mark a
+  row resolved once it's been handled, or reopen one if it turns out not to be.
+</p>
+
+{% if success %}
+<div style="background:oklch(94% 0.06 150);color:oklch(38% 0.1 150);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div style="background:oklch(95% 0.05 25);color:var(--danger);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ error }}</div>
+{% endif %}
+
+<form method="get" action="/admin/error-logs" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+  <div class="form-field" style="min-width:120px">
+    <label>Level</label>
+    <select name="level">
+      <option value="">Any</option>
+      <option value="error" {{ screen.filters.level == 'error' ? 'selected' : '' }}>Error</option>
+      <option value="critical" {{ screen.filters.level == 'critical' ? 'selected' : '' }}>Critical</option>
+    </select>
+  </div>
+  <div class="form-field" style="min-width:160px">
+    <label>Source</label>
+    <select name="source">
+      <option value="">Any</option>
+      {% for s in screen.availableSources %}
+      <option value="{{ s }}" {{ screen.filters.source == s ? 'selected' : '' }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="form-field" style="width:120px">
+    <label>Client ID</label>
+    <input type="text" name="client_id" value="{{ screen.filters.clientId }}" placeholder="any">
+  </div>
+  <div class="form-field" style="min-width:140px">
+    <label>Resolution</label>
+    <select name="resolved">
+      <option value="unresolved" {{ screen.filters.resolved == 'unresolved' ? 'selected' : '' }}>Unresolved</option>
+      <option value="resolved" {{ screen.filters.resolved == 'resolved' ? 'selected' : '' }}>Resolved</option>
+      <option value="all" {{ screen.filters.resolved == 'all' ? 'selected' : '' }}>All</option>
+    </select>
+  </div>
+  <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+  {% if screen.filters.level or screen.filters.source or screen.filters.clientId or screen.filters.resolved != 'unresolved' %}
+  <a href="/admin/error-logs" class="link-btn">Clear</a>
+  {% endif %}
+</form>
+
+{% if screen.rows is empty %}
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+  <div style="font-size:12.5px;font-weight:700">No matching error logs</div>
+</div>
+{% else %}
+<div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff">
+  {% for row in screen.rows %}
+  <div x-data="{ open: false }">
+    <div class="{{ row.hasDetail ? 'timeline-toggle' : '' }}" {% if row.hasDetail %}@click="open = !open"{% endif %} style="display:grid;grid-template-columns:0.85fr 1fr 2fr 0.85fr 1fr 1.1fr 0.2fr;column-gap:12px;padding:11px 16px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+      <div style="color:var(--text-muted)">{{ row.createdLabel }}</div>
+      <div><span class="status-pill status-{{ row.level }}">{{ row.level }}</span></div>
+      <div>
+        <div style="font-weight:600">{{ row.message }}</div>
+        {% if row.exceptionClass %}<div style="font-size:10.5px;color:var(--text-faint);font-family:ui-monospace,Menlo,monospace">{{ row.exceptionClass }}{% if row.code %} &middot; {{ row.code }}{% endif %}</div>{% endif %}
+      </div>
+      <div style="color:var(--text-muted)">{{ row.source }}</div>
+      <div style="color:var(--text-muted)">{{ row.clientLabel ?? '—' }}</div>
+      <div>
+        {% if row.isResolved %}
+        <span class="status-pill status-resolved">resolved</span>
+        {% if row.resolvedByLabel %}<div style="font-size:10px;color:var(--text-faint);margin-top:2px">by {{ row.resolvedByLabel }}</div>{% endif %}
+        {% else %}
+        <span class="status-pill status-unresolved">unresolved</span>
+        {% endif %}
+      </div>
+      <div style="text-align:right;color:var(--text-faint)">{% if row.hasDetail %}▾{% endif %}</div>
+    </div>
+    {% if row.hasDetail %}
+    <div x-show="open" x-cloak class="timeline-row" style="display:flex;flex-direction:column;gap:10px">
+      {% if row.correlationId %}
+      <div style="font-size:10.5px;color:var(--text-faint)">correlation {{ row.correlationId }}</div>
+      {% endif %}
+      {% if row.contextJson %}
+      <div><div style="font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;margin-bottom:3px">Context</div><pre style="margin:0;font-size:11px;background:var(--surface-alt);border-radius:6px;padding:8px 10px;overflow-x:auto">{{ row.contextJson }}</pre></div>
+      {% endif %}
+      {% if row.stackTrace %}
+      <div><div style="font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;margin-bottom:3px">Stack trace</div><pre style="margin:0;font-size:11px;background:var(--surface-alt);border-radius:6px;padding:8px 10px;overflow-x:auto;max-height:280px">{{ row.stackTrace }}</pre></div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if 'error_logs.resolve' in permissions %}
+    <div style="padding:8px 16px;border-bottom:1px solid var(--surface-alt);text-align:right">
+      <form method="post" action="/admin/error-logs/{{ row.id }}/resolution" style="display:inline">
+        <input type="hidden" name="action" value="{{ row.isResolved ? 'reopen' : 'resolve' }}">
+        <input type="hidden" name="return_query" value="{{ filter_query }}{{ filter_query ? '&' : '' }}page={{ screen.page }}">
+        <button type="submit" class="btn btn-secondary btn-sm">{{ row.isResolved ? 'Reopen' : 'Mark resolved' }}</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:11.5px;color:var(--text-faint)">
+  <div>{{ screen.totalCount }} result{{ screen.totalCount == 1 ? '' : 's' }} &middot; page {{ screen.page }} of {{ screen.totalPages }}</div>
+  <div style="display:flex;gap:10px">
+    {% if screen.page > 1 %}
+    <a href="/admin/error-logs?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page - 1 }}">&larr; Newer</a>
+    {% endif %}
+    {% if screen.page < screen.totalPages %}
+    <a href="/admin/error-logs?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page + 1 }}">Older &rarr;</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

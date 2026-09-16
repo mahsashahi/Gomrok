@@ -191,7 +191,7 @@ final readonly class PdoPackageRepository implements PackageRepository
         $insert = $this->pdo->prepare(
             'INSERT INTO package_purchase_capabilities
                 (package_id, purchase_type, has_trial, trial_days, duration_months, created_at, updated_at)
-             VALUES (:id, :type, :has_trial, :trial_days, :duration_months, :now, :now)',
+             VALUES (:id, :type, :has_trial, :trial_days, :duration_months, :created_at, :updated_at)',
         );
         $now = gmdate(self::DT);
         foreach ($capabilities as $capability) {
@@ -201,7 +201,8 @@ final readonly class PdoPackageRepository implements PackageRepository
                 'has_trial' => $capability->hasTrial ? 1 : 0,
                 'trial_days' => $capability->trialDays,
                 'duration_months' => $capability->durationMonths,
-                'now' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
             ]);
         }
     }

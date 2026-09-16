@@ -32,7 +32,7 @@ final class PricingSeeder extends AbstractSeed
      */
     public function getDependencies(): array
     {
-        return [PackagesSeeder::class];
+        return [PackagesSeeder::class, CountriesSeeder::class];
     }
 
     public function run(): void

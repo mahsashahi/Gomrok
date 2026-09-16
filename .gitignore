@@ -1,5 +1,6 @@
 /vendor/
 /.env
+/docker-compose.override.yml
 /.claude/settings.local.json
 /.php-cs-fixer.cache
 /.phpunit.result.cache

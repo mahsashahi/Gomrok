@@ -1,58 +1,42 @@
-# Q: Phase 26 Subscriptions module completion
+# Q: next (close out Phase 27 with its completion writeup)
 
-Phase 26 (Subscriptions module) is complete, with known limitations, and fully documented.
+Phase 27 — Admin Module Views and Panels — is now complete. Wrote
+`.claude/PhaseResults/Phase27Result.md` (the full phase-completion record, per CLAUDE.md's Phase
+Completion Rule) and marked the phase ☑ done in `.claude/docs/Phases.md`'s tracking table (Start
+2026-09-14 15:00, End 2026-09-16 00:40, Actual Duration "N/A (spans multiple sessions)" —
+following the same honesty convention already used for Phases 22/24/25/26 rather than inventing a
+precise hands-on-time figure I don't actually have).
 
-## What was built
+**What the phase delivered, reconstructed from `git status` against the last commit
+(`e072168`), `.claude/PhaseResults/PhaseDecisions.md`'s Phase 27 section, and every screen's own
+`.claude/Changelog.md` entry** (I did not rely on memory alone for file lists — I cross-checked
+actual untracked/modified files on disk before writing the result file):
 
-Reused the entire Checkout pipeline for subscription creation (Q1) rather than a parallel one:
-`POST /api/v1/subscriptions` runs `CreateCheckoutAttemptHandler → ResolveCheckoutPricingHandler →
-(ReserveCheckoutVoucherHandler) → SelectCheckoutProviderHandler → CreateProviderSubscriptionHandler`,
-the exact same shape as the payment-creation flow. `ReconcileCheckoutStatusHandler` was extended
-so a `Confirmed` subscription-purchase-type attempt also gets a `Subscription` row created (via
-the new `CreateSubscriptionHandler`), right after its first `Payment`.
+- Admin auth (DB-backed hashed session cookie, 5-attempt/15-minute lockout), code-defined RBAC
+  (`AdminRole` + `AdminPermission` enum, not DB tables), and a Twig+Alpine.js+hand-written-CSS
+  shell.
+- Eleven sidebar screens: Home, Sales, Customers, Packaging & Pricing (built in two explicit
+  increments per your mid-phase instruction not to defer write functionality), Providers,
+  Vouchers, Clients, Admin Users, Audit Logs, Error Logs, and Settings.
+- Nine screens are fully read+write, real-DB-validated, RBAC-tested (temporary `support_agent`
+  proving both UI hiding and backend 403s), covered by 141 new tests (471 assertions), and
+  Playwright-screenshotted. Two (Audit Logs, Settings) are deliberately non-writable — disclosed
+  as judgment calls or, for Settings, explicitly investigated and confirmed with you before
+  resolving as a placeholder.
+- Seven genuine production bugs were found by actually running the app during live validation
+  (not by unit tests) and fixed: a missing country seed row, a client-API-breaking key-mode bug
+  that silently broke every real payment/subscription creation call, two separate "duplicate
+  named SQL parameter" bugs that broke real UPDATE statements under native MySQL prepares
+  (across six repository files), a silently-unpersisted drag-to-reorder bug (DOM visually
+  reordered, nothing written to the DB) found on two screens, a CSS class collision, and an
+  Alpine.js script-load-order bug that made modals silently dead. All are itemized with exact
+  file/class names in `Phase27Result.md`'s Problems Encountered / Resolutions sections.
 
-A renewal charge becomes a real `payments` row via a second creation path (Q2):
-`payments.checkout_attempt_id` is now nullable, and `RecordSubscriptionPaymentHandler` creates
-the `Payment` directly from subscription context, linked via a new `subscription_payment_links`
-table instead of a checkout attempt. It's idempotent by `providerPaymentReference`, reuses the
-existing `RecordProviderTransactionHandler` unchanged, and transitions the subscription to
-`active`/`past_due` based on the outcome.
+**Final verification, actually run this turn:** `composer stan` (1052 files, no errors),
+`composer test` (716 tests, 2535 assertions, all green), and the admin-specific subset alone
+(141 tests, 471 assertions).
 
-`CancelSubscriptionHandler` is capability-gated on `Capability::SubscriptionCancel` **and**
-`instanceof SupportsSubscriptions` (the same "both, not either" pattern Phase 24 established for
-payment actions), with reference resolution preferring the real provider Subscription-resource
-reference and falling back to the original checkout-session reference for Mollie's provisional
-support.
-
-`subscriptions.client_user_ref` is mandatory (Q4) — the one place this module diverges from
-`payments`' nullable precedent, per CLAUDE.md's Subscription Ownership Model. Mid-phase, the user
-gave a direct correction: `payment_method` is nullable and there's no `country` column on
-`subscriptions` at all (a handler that needs one reads it from the origin checkout attempt
-instead).
-
-36 new tests across 9 files, including a dedicated `SubscriptionOwnershipTest` that directly
-exercises both ownership-model queries CLAUDE.md names (gateway subscription id → internal
-record; client user → their subscriptions). Full suite: 575 tests, 2064 assertions, all passing;
-`composer stan` and `composer cs` both clean.
-
-## Known limitations
-
-1. **Webhook-driven subscription automation is not wired this phase.**
-   `ProcessWebhookEventHandler` (Phase 25) doesn't resolve `Subscription`-typed gateway
-   references or call `RecordSubscriptionPaymentHandler` automatically — deferred to Phase 29,
-   alongside Q3's deferred Mollie renewal scheduler. The handler itself is built and fully tested
-   as the reusable unit a future trigger will call unchanged.
-2. Cancel/refund/capture don't work on a renewal-originated `Payment` yet (no checkout attempt to
-   resolve provider context from).
-3. No admin panel views for subscriptions yet (Phase 27).
-4. Migrations were not re-verified against a live database this session (Docker daemon
-   unavailable locally) — schema correctness rests on the earlier design confirmation and the
-   repository layer's test coverage.
-
-## Documentation
-
-Full pass completed across `PhaseDecisions.md` (addendum), `database-design.md`,
-`database-diagram.md`/`.html`, `db_explain.md`, `Architecture.md`, `Changelog.md`, `FileIndex.md`,
-`Knowledge.md`, `Phases.md` (marked complete), and the new `PhaseResults/Phase26Result.md`.
-
-Ready for a "Commit this" from the user.
+Nothing from this phase is committed — per your standing "no commits yet" instruction. Next
+recommended phase per `.claude/docs/Phases.md`: **Phase 28 — Client callbacks / outbound
+notifications**, since the Notifications module still doesn't exist and this phase deliberately
+deferred it rather than inventing that delivery domain out of order.

@@ -10,6 +10,7 @@
   { "code": "IE", "name": "Ireland", "default_currency": "EUR" },
   { "code": "BE", "name": "Belgium", "default_currency": "EUR" },
   { "code": "AT", "name": "Austria", "default_currency": "EUR" },
+  { "code": "CH", "name": "Switzerland", "default_currency": "CHF" },
   { "code": "PT", "name": "Portugal", "default_currency": "EUR" },
   { "code": "SE", "name": "Sweden", "default_currency": "SEK" },
   { "code": "DK", "name": "Denmark", "default_currency": "DKK" },

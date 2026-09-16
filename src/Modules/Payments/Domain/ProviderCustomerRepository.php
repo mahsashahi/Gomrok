@@ -14,4 +14,13 @@ interface ProviderCustomerRepository
     public function findByProviderCustomerId(int $providerAccountId, string $providerCustomerId): ?ProviderCustomer;
 
     public function find(int $providerAccountId, string $clientUserRef): ?ProviderCustomer;
+
+    /**
+     * Every provider identity linked for one client user, across every
+     * provider account — the admin panel's Customers screen (Phase 27) needs
+     * "all of this customer's provider references," not one account's.
+     *
+     * @return list<ProviderCustomer>
+     */
+    public function forClientUser(int $clientId, string $clientUserRef): array;
 }

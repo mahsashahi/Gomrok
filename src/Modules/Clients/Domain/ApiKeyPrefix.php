@@ -13,4 +13,17 @@ enum ApiKeyPrefix: string
 {
     case Live = 'gk_live';
     case Test = 'gk_test';
+
+    /**
+     * The normalized `live`/`test` mode string other modules key off
+     * (`ClientContext::keyMode()`, `ProviderAccountMode`) — distinct from
+     * this enum's own token-format value (`gk_live`/`gk_test`).
+     */
+    public function mode(): string
+    {
+        return match ($this) {
+            self::Live => 'live',
+            self::Test => 'test',
+        };
+    }
 }

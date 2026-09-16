@@ -52,7 +52,9 @@ final readonly class PdoVoucherRepository implements VoucherRepository
                 updated_at = :updated_at
              WHERE id = :id',
         );
-        $statement->execute($this->params($voucher) + [
+        $params = $this->params($voucher);
+        unset($params['client_id'], $params['code']);
+        $statement->execute($params + [
             'id' => $voucher->id(),
             'updated_at' => $voucher->updatedAt()?->format(self::DT) ?? gmdate(self::DT),
         ]);

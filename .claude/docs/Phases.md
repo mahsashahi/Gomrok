@@ -44,7 +44,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 24 | Payment creation flow | ☑ | 2026-09-13 09:00 | 2026-09-13 18:58 | 5–8h | N/A (spans multiple sessions) | N/A |
 | 25 | Webhooks module | ☑ | 2026-09-14 12:00 | 2026-09-14 19:31 | 5–8h | N/A | N/A |
 | 26 | Subscriptions module | ☑ | N/A | N/A | 6–9h | N/A | N/A |
-| 27 | **Admin Module Views and Panels** | ☐ | — | — | 12–20h | — | — |
+| 27 | **Admin Module Views and Panels** | ☑ | 2026-09-14 15:00 | 2026-09-16 00:40 | 12–20h | N/A (spans multiple sessions) | N/A |
 | 28 | Client callbacks / outbound notifications | ☐ | — | — | 4–6h | — | — |
 | 29 | Background jobs, reconciliation & observability | ☐ | — | — | 6–9h | — | — |
 | 30 | Hardening, docs & first-client go-live | ☐ | — | — | 6–10h | — | — |

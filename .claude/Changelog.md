@@ -7,6 +7,685 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-16 — Phase 27 complete: Admin Module Views and Panels
+
+**Summary.** Phase 27 is done. All eleven admin sidebar screens exist (Home, Sales, Customers,
+Packaging & Pricing, Providers, Vouchers, Clients, Admin Users, Audit Logs, Error Logs, Settings);
+nine are fully read+write with real DB validation, RBAC enforcement, tests, and Playwright
+screenshots, and two (Audit Logs, Settings) are deliberately non-writable for disclosed reasons
+rather than silently degraded. Full narrative, file lists, technical decisions, bugs found/fixed,
+and deferred work are recorded in `.claude/PhaseResults/Phase27Result.md` — this entry just marks
+the phase closed in the tracking table (`.claude/docs/Phases.md`: Status ☑, End Datetime
+2026-09-16 00:40).
+
+**Final verification, actually run:** `composer stan` — 1052 files, no errors. `composer test` —
+716 tests, 2535 assertions, all green. Admin-specific subset (`tests/Unit/Modules/Admin` +
+`AdminAuthenticationMiddlewareTest`) — 141 tests, 471 assertions.
+
+**Nothing in this phase has been committed to git** — per the standing "no commits yet"
+instruction repeated throughout the phase.
+
+**Next recommended phase:** Phase 28 — Client callbacks / outbound notifications (the
+Notifications module doesn't exist yet; this phase deliberately deferred it rather than
+inventing the delivery domain out of order).
+
+## 2026-09-16 — Phase 27 (in progress): Admin panel — Settings screen resolved as a neutral placeholder
+
+**Summary.** Investigated Settings per the user's explicit instruction (inspect first; do not
+invent a fake settings subsystem; report the gap and ask before creating new domain/schema
+concepts). Found no real backing domain anywhere: `src/Config/{Settings,DatabaseSettings}.php`
+are plain environment-variable loader classes, not database-backed or admin-editable; no
+migration or domain aggregate named `Settings` (or similar) exists; CLAUDE.md's Admin Panel
+Requirement section never lists a settings-management capability; and Phase 27's own scope in
+`.claude/docs/Phases.md` lists "Settings" only as a sidebar label to match the shell design — its
+enumerated Screens list never includes it, and that same section already anticipates exactly this
+case: *"Undesigned screens render a neutral titled placeholder."*
+
+Reported this gap and asked the user how to proceed (neutral placeholder / design a real Settings
+domain now / remove the nav item / leave as-is for later). **User chose the neutral placeholder.**
+Built `AdminSettingsAction` (`GET /admin/settings`, no permission gate — there is no data or write
+action to protect) rendering `settings.html.twig`, which states plainly that no settings
+domain/table exists and that a real feature would need its own confirmed database design first.
+No new domain, schema, or fabricated data was created.
+
+**Files added:** `src/Http/Admin/AdminSettingsAction.php`, `src/Modules/Admin/Views/settings.html.twig`.
+**Files changed:** `src/Config/routes.php` (`GET /admin/settings`).
+
+**Verification.** `composer stan` clean (1052 files). `composer test`: 716 tests, 2535 assertions,
+unchanged (no new test surface — nothing to unit-test in a static placeholder). Live-rendered at
+`/admin/settings` (200, real DB-backed admin session), Playwright screenshot captured at
+`tools/screenshots/out/phase27-settings/01-placeholder.png`.
+
+This closes out Phase 27's screen list (Home, Sales, Customers, Packaging & Pricing, Providers,
+Vouchers, Clients, Admin Users, Audit Logs, Error Logs, Settings-as-placeholder). Notifications
+remains explicitly deferred to Phase 28 (module doesn't exist yet).
+
+## 2026-09-16 — Phase 27 (in progress): Admin panel — Error Logs screen
+
+**Summary.** Built the Error Logs screen (CLAUDE.md: "Viewing error logs" / "Basic reconciliation
+and debugging"). Unlike Audit Logs, this screen has a real, schema-backed write action: the
+`error_logs` migration's own docblock already documents `resolved_at`/`resolved_by` as existing
+to "support its 'mark resolved' action" (`src/Database/Migrations/20260908140003_create_error_logs_table.php`).
+So per the standing "complete functionality, not read-only" instruction, this screen ships a real
+"Mark resolved" / "Reopen" toggle backed by an actual DB write, not a read-only view — the
+opposite call from Audit Logs, made for the opposite reason (a real write surface existed here;
+none did there). Filterable (level, source, client, resolution state — defaults to unresolved
+only, since an operator triage surface should open on what still needs attention) and paginated
+(50/page), with an expandable per-row detail showing the stored context JSON and stack trace.
+
+**Three ports over one table, no invented domain aggregate.** `error_logs` rows are plain
+operational records, not a business entity with invariants, so rather than build an `ErrorLog`
+aggregate this adds `ErrorLogDirectory` (read: search/countMatching/distinctSources) and
+`ErrorLogResolver` (write: markResolved/markUnresolved, two methods operating directly on the row)
+in `Shared\Application\ErrorLog\`, alongside the pre-existing create-only `ErrorLogWriter` —
+`PdoErrorLogDirectory` / `PdoErrorLogResolver` implement them in
+`Shared\Infrastructure\Persistence\`. `SetErrorLogResolutionHandler`
+(`Modules\Admin\Application\ErrorLogs\SetErrorLogResolution\`) always reads current state via
+`ErrorLogDirectory::find()` before writing, both to report a clean not-found and because a plain
+`UPDATE`'s `rowCount()` can't distinguish "no such row" from "row already in the target state"
+(MySQL reports rows *changed*, not rows *matched*) — so that ambiguity is never relied on for the
+distinction. The idempotent short-circuit also means re-applying the same resolution doesn't
+double-write the audit log.
+
+**A new permission key added, not reused from `.view`.** CLAUDE.md's suggested permission list
+has `error_logs.view` but no write counterpart, unlike its own parallel
+`webhooks.view`/`webhooks.replay`, `jobs.view`/`jobs.retry`, `notifications.view`/`notifications.retry`
+pairs. Overloading `error_logs.view` for the write action would let `support_agent` (who holds
+every `.view` permission) resolve/reopen errors — a system-state write CLAUDE.md's role
+description says `support_agent` "cannot modify". Added `AdminPermission::ErrorLogsResolve =
+'error_logs.resolve'` instead, mirroring the existing sibling pattern rather than inventing a new
+shape; `AdminPermissionsTest` still passes unmodified since it asserts dynamically over
+`AdminPermission::cases()`.
+
+**Files added:** `src/Shared/Application/ErrorLog/{ErrorLogRecord,ErrorLogFilter,ErrorLogDirectory,ErrorLogResolver}.php`,
+`src/Shared/Infrastructure/Persistence/{PdoErrorLogDirectory,PdoErrorLogResolver}.php`,
+`src/Modules/Admin/Application/ErrorLogs/{ErrorLogRow,ErrorLogsFilterState,ErrorLogsScreenResult,ErrorLogsScreenHandler}.php`,
+`src/Modules/Admin/Application/ErrorLogs/SetErrorLogResolution/{SetErrorLogResolutionCommand,SetErrorLogResolutionHandler}.php`,
+`src/Http/Admin/{AdminErrorLogsAction,AdminErrorLogResolutionAction}.php`,
+`src/Modules/Admin/Views/error-logs.html.twig`,
+`tests/Support/{InMemoryErrorLogDirectory,InMemoryErrorLogResolver}.php`,
+`tests/Unit/Modules/Admin/Application/ErrorLogs/{ErrorLogsScreenHandlerTest,SetErrorLogResolutionHandlerTest}.php`
+(15 tests, 33 assertions).
+
+**Files changed:** `src/Modules/Admin/Application/AdminPermission.php` (added `ErrorLogsResolve`),
+`src/Config/container.php` (registered the two new ports), `src/Config/routes.php` (`GET
+/admin/error-logs`, `POST /admin/error-logs/{errorLogId}/resolution`), `src/Public/admin.css`
+(added `.status-pill.status-critical` / `.status-error` / `.status-resolved` /
+`.status-unresolved`, reusing the existing failed/pending/paid color triads).
+
+**Verification.** `composer stan` clean (1051 files). `composer test`: 716 tests, 2535 assertions,
+all green. Live DB validation against the dev database's real `error_logs` rows (3 real rows
+already present from earlier live-testing sessions, e.g. a genuine `SQLSTATE[HY093]` and a genuine
+invalid-API-key rejection — no fabricated data was needed for the base case; one additional
+`critical`-level test row was inserted to exercise that level and left in place as evidence):
+resolved row #1 via the real endpoint, confirmed `resolved_at`/`resolved_by` were written with the
+real admin's id, confirmed the unresolved count dropped and the "resolved" filter showed "by Ada
+Admin", then reopened it and confirmed the columns cleared back to `NULL`. RBAC validation via a
+temporary `support_agent` (created, tested, deleted, session removed): `GET /admin/error-logs`
+returned 200 with `error_logs.view`; `POST .../resolution` returned 403 (`error_logs.resolve` is
+not a `.view`-suffixed permission, so `support_agent` does not hold it); the rendered HTML for
+that role contained zero `<form action=".../resolution">` write triggers. Playwright screenshots
+under `tools/screenshots/out/phase27-error-logs/`: main unresolved view, expanded
+context/stack-trace detail, mixed resolved+unresolved "all" filter, and the RBAC read-only view.
+
+## 2026-09-15 — Phase 27 (in progress): Admin panel — Audit Logs screen
+
+**Summary.** Built the Audit Logs screen (CLAUDE.md: "Viewing audit logs"). Unlike every prior
+Phase 27 screen, `audit_logs` had a write-only port (`AuditLogWriter`) and no read side at all —
+this screen required building a genuinely new read path over an existing table, not just new
+orchestration over an existing read+write domain (Admin Users' shape) or thin wiring over
+existing CRUD (every other screen's shape). Filterable (actor type, action, client, target type,
+target id) and paginated (50/page) over the real table, with an expandable per-row detail showing
+the redacted `before`/`after`/`context` JSON exactly as stored.
+
+**Deliberately read-only — the second screen this session to make that call, and disclosed for
+the same reason as the first.** CLAUDE.md's admin panel list only ever says "viewing" audit logs,
+never "managing" them, and an audit trail that could be edited or deleted through the very panel
+it audits would defeat its own purpose as a tamper-evident record. This mirrors the Vouchers
+screen's redemption-history section, which was made read-only for the identical reason. "Full
+functionality" here means real filtering, pagination, and detail inspection over the genuine
+table — not a fabricated write action invented just to have one. Because there is no write
+surface, this screen's RBAC validation differs in shape from every other screen's: there is no
+403 case to prove (no write endpoint exists to reject), so validation confirmed instead that both
+roles can view the screen (`audit_logs.view` is a `.view`-suffixed permission `support_agent`
+holds, per `AdminPermissions::for()`), which is the correct and only gate this screen has.
+
+**A new read port added to the Shared layer, mirroring the existing write port's location.**
+`AuditLogDirectory` (search/countMatching/distinctActions) and `AuditLogEntry` /
+`AuditLogFilter` DTOs live in `Shared\Application\Audit\`, alongside the pre-existing
+`AuditLogWriter`/`AuditEntry` — the natural home, since audit logging is a cross-cutting concern
+owned by no single business module, exactly like the writer already wasn't. `PdoAuditLogDirectory`
+(`Shared\Infrastructure\Persistence\`) implements it with a dynamic WHERE clause and decodes the
+already-redacted JSON columns back into arrays — it does not redact again, since
+`PdoAuditLogWriter` already did that at write time.
+
+**Files created**: `src/Shared/Application/Audit/{AuditLogEntry,AuditLogFilter,
+AuditLogDirectory}.php`, `src/Shared/Infrastructure/Persistence/PdoAuditLogDirectory.php`.
+`src/Modules/Admin/Application/AuditLogs/` — `AuditLogRow`, `AuditLogsFilterState`,
+`AuditLogsScreenResult`, `AuditLogsScreenHandler`. `src/Http/Admin/AdminAuditLogsAction.php`.
+`src/Modules/Admin/Views/audit-logs.html.twig`. Tests: `AuditLogsScreenHandlerTest` (8 new); new
+test double `tests/Support/InMemoryAuditLogDirectory.php`.
+
+**Files modified**: `src/Config/routes.php` (1 new route), `src/Config/container.php`
+(`AuditLogDirectory::class => get(PdoAuditLogDirectory::class)`).
+
+**Validation.** Live against the standalone MySQL instance, which by this point in the session
+held 67 real audit rows across 37 distinct actions spanning every prior Phase 27 screen's writes
+plus payments/pricing/checkout activity from earlier phases: confirmed the total count and page
+count matched the real table exactly; filtered by `action=admin_user.created` (2 results, matched
+`SELECT COUNT(*) ... WHERE action = ...` exactly), `actor_type=system` (13, exact match),
+`target_type=client` and `target_type=client&target_id=7` (7 and 4 respectively, both exact
+matches); navigated to page 2 and confirmed older rows (packages, pricing groups, checkout
+attempts from earlier phases) appeared correctly. Expanded a real `client.updated` entry via
+Playwright and confirmed the before/after JSON renders with `notification_signing_secret`
+correctly shown as `"[redacted]"` — proving the write-time redaction survives display without
+being re-redacted or corrupted. Grepped the full rendered page for every plaintext password used
+anywhere this session and confirmed none appear — only the field names touched, never a value,
+matching what the Admin Users screen's own audit entries were built to omit. 4 screenshots under
+`tools/screenshots/out/phase27-audit-logs/`, including the expanded-detail view and a filtered
+page.
+
+**Known limitations (disclosed in the UI).** No write actions of any kind, by design (see above).
+No actor/target search across *all* modules' own friendly names beyond admin users and clients —
+a `target_type`/`target_id` pair displays as e.g. "Pricing Group Package #5" rather than resolving
+to that row's own human-readable identity, since doing so for every possible `target_type` this
+codebase can ever record would mean the audit screen depending on every other module's directory;
+the id is enough to cross-reference manually today.
+
+**Migration notes.** No database changes — `audit_logs` already existed and was already being
+written to since Phase 5/6. **Breaking changes.** None.
+
+## 2026-09-15 — Phase 27 (in progress): Admin panel — Admin Users screen
+
+**Summary.** Built the Admin Users screen full read+write. Unlike every prior Phase 27 screen,
+no Application-layer CRUD existed for `AdminUser` at all beyond authentication — only the Domain
+aggregate (`AdminUser`), its repository, and the login handler existed. This screen's Application
+layer is therefore new orchestration over an already-complete Domain aggregate (exactly the
+pattern Phase 6 used to build `CreateClientHandler` over the already-complete `Client` aggregate),
+not new business logic bolted onto the admin layer — the same discipline held for every other
+Phase 27 screen.
+
+**Screen ordering note.** The literal next item in the sidebar's SYSTEM group is Notifications,
+but no Notifications module exists yet — `src/Modules/Notifications/` is empty, and
+`.claude/docs/Phases.md` scopes the entire client-callback delivery system to **Phase 28
+("Client callbacks / outbound notifications")**, still ☐ not started. Building a "Notifications"
+admin screen now would mean inventing the delivery domain itself out of phase order, breaking the
+pattern every other Phase 27 screen has followed (wire existing handlers, never invent new
+business domains at the admin layer). Admin Users was built next instead — it already had a real,
+complete domain to wire (`AdminUser` + `AdminUserRepository`), unlike Notifications, Audit logs, or
+Error logs (the latter two have write-only ports with no read side yet), or Settings (no backing
+domain at all, not even the design mockup's own copy defines one).
+
+**A real domain constraint discovered and honoured, not routed around.** `AdminUser`'s
+constructor holds `name`, `email`, and `role` as PHP `readonly` properties — the aggregate has
+`setPasswordHash()` and `setStatus()` and nothing else. Nothing in the codebase can ever change an
+admin user's name, email, or role after creation; the `PdoAdminUserRepository::save()` UPDATE
+statement itself only touches `name` (re-persisted unchanged, never actually editable),
+`password_hash`, `status`, `updated_at` — `email` and `role` aren't even in the UPDATE's SET
+clause. Rather than add `rename()`/`changeEmail()`/`changeRole()` mutators to a security-sensitive
+RBAC aggregate (which would be inventing new domain behavior, the one thing avoided all session),
+the screen honours the real constraint: create sets name/email/role once, and only password and
+status can ever change afterward. The UI states this plainly rather than offering an edit
+control that would either silently no-op or crash.
+
+**Write actions (4 endpoints)**, backed by three new Application handlers
+(`CreateAdminUserHandler`, `SetAdminUserStatusHandler`, `ResetAdminUserPasswordHandler`) built
+from scratch over the existing Domain: create admin user (name/email/password/role — a plain
+10-character-minimum password typed by the creating admin, not generated, so unlike Clients'
+API keys there is nothing to reveal once and no redirect-URL secrecy problem), set status
+(`active`/`disabled`/`locked` — one command mirroring the domain's own single `setStatus()`
+mutator, since CLAUDE.md's third status, `locked`, exists on the enum but nothing in the codebase
+currently sets it: `AuthenticateAdminHandler`'s lockout is a rolling failed-attempt-count check,
+never persisted as account status — disclosed rather than silently treated as reachable), reset
+password (typed by the acting admin, same reasoning).
+
+**A new safety rule, consistent with existing precedent.** `SetAdminUserStatusHandler` refuses to
+let an admin leave their own account non-active — you can reactivate yourself (a harmless no-op)
+but never disable or lock your own session out from under you. This mirrors existing
+Application-layer guards already in the codebase for the exact same shape of problem
+(`ChangePricingGroupStatusHandler`'s "cannot disable the default group",
+`ChangePriceListStatusHandler`'s "cannot disable the control list") — a new instance of an
+established pattern, not a novel kind of rule.
+
+**Files created**: `src/Modules/Admin/Application/{CreateAdminUser,SetAdminUserStatus,
+ResetAdminUserPassword}/` (Command + Handler + Result where applicable) and
+`src/Modules/Admin/Application/AdminUsers/` (`AdminUserRow`, `AdminUsersScreenResult`,
+`AdminUsersScreenHandler` — a flat table, no master-detail, since an `AdminUser` has almost
+nothing beyond what one row already shows). `src/Http/Admin/` — `AdminAdminUsersAction`,
+`AdminAdminUsersCreateAction`, `AdminAdminUsersStatusAction`, `AdminAdminUserPasswordResetAction`,
+`RedirectsToAdminUsers`. `src/Modules/Admin/Views/admin-users.html.twig`,
+`src/Public/admin-users.js`. Tests: `CreateAdminUserHandlerTest` (6),
+`SetAdminUserStatusHandlerTest` (8), `ResetAdminUserPasswordHandlerTest` (4),
+`AdminUsersScreenHandlerTest` (2) — 20 new tests.
+
+**Files modified**: `src/Config/routes.php` (4 new routes).
+
+**Validation.** Live against the standalone MySQL instance: created a support-agent and an admin
+account, then logged in as the new support-agent with the exact password submitted through the
+create form — confirming `password_hash()`/`password_verify()` round-trip correctly through the
+real login path, not just a unit-test double. Disabled the account and confirmed login then
+returns 401; re-enabled it and confirmed login succeeds again. Triggered the self-disable guard
+against the currently-authenticated admin and got back the exact rejection message. Reset the
+account's password and confirmed the old password stops working immediately while the new one
+works. Queried the real `audit_logs` table for every action taken and confirmed no plaintext
+password ever appears in any `before`/`after`/`context` column — only field names for status
+changes, only name/email/role (never a password) for creation, and an empty payload for the
+password-reset entry. Both modals confirmed to actually open with real data via Playwright before
+screenshotting. RBAC verified with a temporary `support_agent`: all 4 write endpoints 403, the
+read view 200, and every write trigger absent from the rendered HTML — confirmed the only two
+textual matches for "New admin user" / "Reset password" were the inert `<template>` block's own
+title and submit-button text, never a reachable trigger. 4 screenshots under
+`tools/screenshots/out/phase27-admin-users/`.
+
+**Known limitations (disclosed in the UI).** Name, email and role cannot be edited after
+creation — a real, deliberate domain constraint, not an oversight; the screen's own footer text
+says so and points to disable-and-recreate as the correction path. No admin user deletion
+(disable-only, consistent with every other screen). `AdminUserStatus::Locked` is not currently
+reachable by anything in the codebase — the screen supports clearing it (an "Unlock" action) in
+case a future change starts setting it, but nothing sets it today.
+
+**Migration notes.** No database changes — `admin_users` already existed from the Phase 27 DB
+design confirmation. **Breaking changes.** None.
+
+## 2026-09-15 — Phase 27 (in progress): Admin panel — Clients screen (stat tabs + New client modal)
+
+**Summary.** Built the Clients screen full read+write in one pass, per `.claude/docs/Phases.md`'s
+scope line: "Clients (stat tabs + New client modal)". Unlike Packaging/Providers/Vouchers this
+screen is not scoped to the admin panel's active-client switcher — it manages every client, so it
+lists all of them in a flat table (matching the design reference, not a master-detail), with
+three stat-tab filters (All / Live / Disabled) and a detail panel per selected row covering
+market defaults, API keys, and enabled provider accounts. Every Application handler already
+existed from Phase 6/7, so this is thin HTTP/Twig wiring — no new orchestrator handlers were
+needed, only one new read-model handler (`ClientsScreenHandler`).
+
+**Write actions (5 endpoints)**: create client (mints the client's first API key atomically, via
+the pre-existing `CreateClientHandler`), edit client (name/currency/country/timezone —
+`clients.update`; there is no separate `clients.disable` key, so enable/disable also gates on
+`clients.update`), enable/disable, issue an additional API key, revoke a key.
+
+**The one-time-secret rule extended past the Providers screen's shape.** Providers' secret has a
+real ciphertext, so that screen could offer masking only. A client API key's `secret_hash` is a
+one-way SHA-256 (`.claude/docs/database-design.md`) — there is nothing to decrypt, ever; the
+plaintext exists exclusively in `CreateClientResult`/`IssueApiKeyResult` at the instant of
+creation. Putting that plaintext in a redirect URL (the pattern every other write action on every
+other Phase 27 screen uses for its flash message) would leak it into browser history, server
+access logs, and `Referer` headers — unacceptable for a credential. So `AdminClientsCreateAction`
+and `AdminClientApiKeyIssueAction` render the Clients screen **directly** (a 200 response, not a
+302 redirect) on success, with the plaintext token in the response body only, never the URL. Every
+other write action on this screen still uses the normal redirect-with-flash-message pattern, since
+none of them carry a secret.
+
+**A design/domain mismatch resolved, not asked.** The design reference's mock data has `mode` as a
+per-client field; the real domain has no such thing — only individual `ClientApiKey` rows carry a
+`ApiKeyPrefix`. "Environment" is therefore derived: a client with any active `gk_live_…` key reads
+"Live"; with only active `gk_test_…` keys, "Test"; with none, "No active keys". This also drives
+the "Live" stat tab's count, matching the design's mock exactly for any client that actually has
+live keys.
+
+**A ClientSnapshot published-DTO gap closed additively.** The list view's design-mandated "Created"
+column had no backing field — `ClientDirectory`'s read DTO (`ClientSnapshot`) carries no
+timestamp, and eight other call sites across five test files construct it positionally. Rather
+than touch every call site, `createdAt` was added as a **trailing, optional (`= null`) 8th
+constructor parameter** — every existing positional construction keeps compiling unchanged;
+`PdoClientDirectory` now selects and populates it, `ClientSnapshot::fromClient()` populates it
+from the aggregate's own `createdAt()`. No other file needed to change.
+
+**Files created**: `src/Modules/Admin/Application/Clients/` — `ClientRow`, `ApiKeyRow`,
+`ClientDetail`, `ClientStats`, `ClientsScreenResult`, `ClientsScreenHandler`. `src/Http/Admin/` —
+`AdminClientsAction`, `AdminClientsCreateAction`, `AdminClientsUpdateAction`,
+`AdminClientsStatusAction`, `AdminClientApiKeyIssueAction`, `AdminClientApiKeyRevokeAction`,
+`RedirectsToClients`, `BuildsClientsScreenContext` (the shared render-context builder the GET
+action and the two secret-bearing POST actions all use). `src/Modules/Admin/Views/
+clients.html.twig`, `src/Public/clients.js`. Tests: `ClientsScreenHandlerTest` (8 tests).
+
+**Files modified**: `src/Config/routes.php` (5 new routes). `src/Modules/Clients/Application/
+ClientSnapshot.php` / `src/Modules/Clients/Infrastructure/PdoClientDirectory.php` — the additive
+`createdAt` field described above.
+
+**Validation.** Live against the standalone MySQL instance: created two clients (one live, one
+test environment) and verified their rows and first API keys in `clients`/`client_api_keys`
+directly; edited a client's name/currency/country/timezone and verified the update; disabled then
+re-enabled a client, confirming `IssueApiKeyHandler`'s real `client.disabled` rejection fires
+while disabled and clears once re-enabled; issued a second key and revoked it, verifying
+`revoked_by` was correctly attributed to the acting admin. All three modals (create, edit, issue
+key) confirmed to actually open with correctly prefilled data via Playwright before
+screenshotting. RBAC verified with a temporary `support_agent`: all 5 write endpoints 403, the
+read view 200, every write trigger absent from the rendered HTML (`link-btn` count 0 for
+support_agent), and the API-keys section still fully visible — masked tokens included — since
+`client_api_keys.view` is a `.view` permission the role holds. 7 screenshots under
+`tools/screenshots/out/phase27-clients/`, including the one-time-token success banner and the
+Disabled stat-tab filter in action.
+
+**Known limitations (disclosed in the UI).** The design reference's "New client" modal copy
+claims a default pricing group is created automatically — no such capability exists
+(`CreateClientHandler` creates no `PricingGroup`), so that claim was omitted from this screen's
+modal text rather than implemented or left as a false promise; the modal instead says pricing
+groups are set up after the client exists, which is true. No client deletion (disable-only,
+matching every other screen). No callback-endpoint (webhook URL) management UI —
+`SetClientEndpointHandler`/`RemoveClientEndpointHandler` exist but managing per-purpose callback
+URLs is a distinct concern from the "stat tabs + New client modal" scope and was left out rather
+than silently bundled in.
+
+**Migration notes.** No database schema changes — `clients.created_at` already existed; only the
+`ClientDirectory` read projection was extended to select it. **Breaking changes.** None — the
+`ClientSnapshot` constructor change is purely additive.
+
+## 2026-09-15 — Phase 27 (in progress): Admin panel — Vouchers screen
+
+**Summary.** Built the Vouchers screen full read+write in one pass. A single master-detail over
+the active client's vouchers; the detail carries the discount configuration (default + the
+per-currency override table), eligibility rules folded by dimension, the three usage caps, and
+the redemption history CLAUDE.md's admin-panel requirements call for ("Viewing voucher usage and
+redemption history"). Every Application handler already existed from Phases 16–17, so this is
+thin HTTP/Twig wiring plus one orchestrator, in the same shape as the Packaging and Providers
+screens.
+
+**Write actions (8 endpoints)**: create voucher, edit voucher (composed with the status toggle via
+a new `UpdateVoucherForAdminHandler`), enable/disable, set eligibility (full replace across all
+seven dimensions), set usage limits, upsert a per-currency override, remove an override. Each is
+gated on the backend by `AdminPermissionGuard`. `vouchers.disable` is honoured as its own
+permission key distinct from `vouchers.update`, so the status endpoint requires the one matching
+the direction being applied rather than lumping both under update.
+
+**Business rules respected rather than re-derived** (`.claude/Voucher.md` §4/§5/§6, the source of
+truth): `fixed` is deliberately not offered as a *default* discount type in the create/edit
+modals — it is inherently currency-bound and only ever exists as an override row, and the domain
+rejects it on the voucher row. The cap field only appears for a percentage override. A `none`
+default with no override rows is surfaced as "No discount configured" rather than as a silent
+no-op, and as "Per-currency only" once an override exists. Redemption rows show the **applied**
+discount with a "capped from …" annotation whenever it differs from the nominal figure, since
+Voucher.md deliberately preserves both so clamping stays visible.
+
+**Files created**: `src/Modules/Admin/Application/Vouchers/` — `VoucherListItem`, `VoucherDetail`,
+`CurrencyDiscountRow`, `EligibilityRuleGroup`, `RedemptionRow`, `VouchersScreenResult`,
+`VouchersScreenHandler`, plus `UpdateVoucherForAdmin/{Command,Handler}`. `src/Http/Admin/` —
+`AdminVouchersAction`, `AdminVouchersCreateAction`, `AdminVouchersUpdateAction`,
+`AdminVoucherStatusAction`, `AdminVoucherEligibilityAction`, `AdminVoucherUsageLimitsAction`,
+`AdminVoucherCurrencyDiscountAction`, `AdminVoucherCurrencyDiscountRemoveAction`,
+`RedirectsToVouchers`, and `AdminMoneyInput` (a shared decimal-amount / percentage-to-basis-points
+parser). `src/Modules/Admin/Views/vouchers.html.twig`, `src/Public/vouchers.js`. Tests:
+`VouchersScreenHandlerTest` (8), `UpdateVoucherForAdminHandlerTest` (5) — 13 new tests; new test
+doubles `tests/Support/{StubVoucherDirectory,StubVoucherRedemptionDirectory}.php`.
+
+**Files modified**: `src/Config/routes.php` (8 new routes). `src/Public/admin.css` — see below.
+
+**Real gap found and fixed — unstyled status pills.** `admin.css` mapped `.status-pill` colours
+for `paid`/`active`/`failed`/`cancelled`/`pending`/`trialing`/`requires_action`/`refunded`/
+`customer` only, and the base `.status-pill` rule set no background of its own. Any other status
+therefore rendered as bare text with padding but no pill — which hit **four** values this screen
+uses (`confirmed`, `reserved`, `released` on redemptions, and `disabled` on a voucher), and would
+silently hit any future unmapped status on any screen. Earlier screens had papered over the same
+hole by hand-mapping their status to a styled class (the Providers screen renders a disabled
+group as `status-cancelled`, i.e. red, for an inert state). Fixed at the root: the base
+`.status-pill` now carries the muted background itself, so it doubles as the fallback for any
+unmapped value; `confirmed` joins the green group and `reserved` the amber one. `disabled` and
+`released` deliberately keep the muted base — they are inert, not failed, so they should not read
+red.
+
+**Validation.** Live against the standalone MySQL instance: created a voucher, set usage limits,
+set eligibility across three dimensions, added a fixed EUR override and a capped-percentage USD
+override, edited the voucher, toggled status both ways, and removed an override — verifying each
+against real table rows (`vouchers`, `voucher_currency_discounts`, `voucher_eligibility_rules`),
+not just the HTTP redirect. Both validation-error paths were exercised and surfaced real domain
+messages (`fixed` rejected as a default discount type; an unconfigured country rejected) — and
+the failed eligibility attempt left the four existing rules intact, confirming the handler
+validates before it replaces. RBAC verified with a temporary `support_agent`: all 8 write
+endpoints return 403 while the read view returns 200, every write trigger is absent from the
+rendered HTML (`link-btn` count 8 for admin vs 0 for support_agent), and the redemption-history
+section still renders since `voucher_redemptions.view` is a `.view` permission the role holds.
+All five modals were confirmed to actually open with correctly prefilled real data via Playwright
+before screenshotting. 9 screenshots under `tools/screenshots/out/phase27-vouchers/`.
+
+**Test data note.** The three redemption rows seeded to exercise the history table were fabricated
+financial-shaped records and were deleted after the screenshots were captured; the `CURLTEST20`
+voucher itself was left in the local dev database alongside the equivalent test rows the
+Packaging and Providers screens left behind.
+
+**Known limitations (disclosed in the UI).** No voucher deletion — disable-only, matching every
+other screen and the absence of any delete handler. The voucher `code` is immutable after
+creation (no handler changes it; the edit modal omits the field rather than pretending). No admin
+action to confirm or release a redemption from this screen — `ConfirmVoucherRedemptionHandler` /
+`ReleaseVoucherRedemptionHandler` exist but belong to the checkout lifecycle, and exposing them
+as manual admin buttons would let an admin desynchronise a redemption from its payment; the
+history is therefore read-only.
+
+**Migration notes.** No database changes — every table already existed from Phases 16–17.
+**Breaking changes.** None.
+
+## 2026-09-15 — Phase 27 (in progress): Admin panel — Providers screen (Accounts + By-groups)
+
+**Summary.** Built the Providers screen in one pass (both read and write — Q1), since every
+needed Application-layer handler already existed from Phases 8–10 and no new business logic
+needed inventing, unlike Packaging. Two tabs: **Accounts** (master-detail on `ProviderAccount`,
+with connect/edit/disable/rotate-secret and a Reveal/Hide toggle that only ever shows the last 4
+digits of the secret — Q2, CLAUDE.md forbids full plaintext) and **By-groups** (master-detail on
+`ProviderGroup`, with create/edit/disable and drag-to-reorder + add/remove/enable-disable on the
+account priority chain, plus a "resolved-provider readout" applying the two context-free checks
+the real router runs — link enabled, account active — before anything request-specific).
+
+**Decisions** (`PhaseResults/PhaseDecisions.md`, "Providers screen" Q1/Q2): full read+write in one
+pass; secret reveal shows only the last 4 digits, never the full decrypted value (an
+`ProviderAccountCredentials::secretFor()` decrypt path exists for provider adapters but is never
+wired into the admin UI).
+
+**Files created**: `src/Modules/Admin/Application/Providers/` — `AccountListItem`,
+`AccountDetail`, `AccountGroupMembership`, `AccountsTabResult`, `AccountsTabHandler`,
+`GroupListItem`, `GroupAccountRow`, `GroupDetail`, `GroupsTabResult`, `GroupsTabHandler`, plus
+three write orchestrators: `UpdateProviderAccountForAdmin/` (composes
+`SetProviderAccountMarketsHandler` + `ChangeProviderAccountStatusHandler`),
+`UpdateProviderGroupForAdmin/` (composes `ConfigureProviderGroupHandler` +
+`ChangeProviderGroupStatusHandler`), `ManageProviderGroupAccountsForAdmin/` (add/remove/toggle/
+reorder over `SetProviderGroupAccountsHandler`'s full-replace contract, mirroring
+`ReorderPricingGroupPackagesHandler`'s read-before-write shape). `src/Http/Admin/` — 9 actions
+(`AdminProvidersAction`, `AdminProviderAccountsCreateAction`, `AdminProviderAccountsUpdateAction`,
+`AdminProviderAccountRotateSecretAction`, `AdminProviderGroupsCreateAction`,
+`AdminProviderGroupsUpdateAction`, `AdminProviderGroupAccountAddAction`,
+`AdminProviderGroupAccountRemoveAction`, `AdminProviderGroupAccountToggleAction`,
+`AdminProviderGroupReorderAction`) plus `RedirectsToProviders`. `src/Modules/Admin/Views/
+providers.html.twig`, `src/Public/providers.js`. Tests: `AccountsTabHandlerTest`,
+`GroupsTabHandlerTest`, `UpdateProviderAccountForAdminHandlerTest`,
+`UpdateProviderGroupForAdminHandlerTest`, `ManageProviderGroupAccountsForAdminHandlerTest` (16
+new tests).
+
+**Files modified**: `src/Config/routes.php` (10 new routes); `src/Http/Admin/AdminForm.php` (added
+`strArray()` for checkbox-group form fields); `src/Modules/Admin/Views/layouts/shell.html.twig`
+nav link already pointed here from Phase 27's start, unchanged.
+
+**Real production bug found and fixed — drag-to-reorder was silently unpersisted in BOTH
+Packaging and Providers.** `packaging.js`/`providers.js`'s `submitOrder()` does
+`container.querySelector('form[data-reorder-form]')`, scoped to the `[data-reorder-list]`
+container — but in both `packaging.html.twig` and `providers.html.twig` the hidden reorder
+`<form>` was placed as a **sibling** immediately after the container's closing tag, not a
+descendant. `querySelector` only searches descendants, so the lookup always returned `null` and
+the submit silently no-opped: dragging visually reordered the rows in the browser (the DOM nodes
+really did move), but the browser never navigated and nothing was ever written to the database.
+This was not caught earlier because: (1) the reorder *endpoint* was separately verified correct
+via direct `curl` calls, which bypass the browser entirely; (2) the first drag-and-drop screenshot
+test used `page.waitForLoadState('networkidle')`, which resolves immediately when no navigation
+was ever triggered — so the "before/after" screenshots looked like a real, working reorder even
+though nothing persisted. Caught this session only because a *second* drag test on the Providers
+screen produced database state inconsistent with the intended order, prompting a direct DB check
+that exposed the mismatch. Fixed by moving both screens' hidden reorder `<form>` to be a
+descendant of `[data-reorder-list]` (last child, `display:none`) instead of a trailing sibling.
+Also hardened `tools/screenshots/screenshot-drag.js` to `Promise.all([page.waitForNavigation(...),
+page.mouse.up()])` instead of a post-hoc `waitForLoadState`, so a future regression of this exact
+kind would time out loudly instead of silently passing. Re-verified both screens' drag-reorder
+against real database state (not just screenshots) after the fix — both now genuinely persist.
+
+**Known limitations (disclosed in the UI).** No endpoint (webhook URL) management UI — only the
+`activeEndpointCount` is shown; managing `provider_account_endpoints` rows is Phase 25's concern,
+not this screen's. No delete for accounts or groups (disable-only, same pattern as Packaging). No
+rename-group-slug or default-group-reassignment after creation (no handler exists for either).
+`CreateProviderAccountHandler` always audits as `forSystem` (its command has no `actorId`
+parameter) — admin-created accounts can't be attributed to the specific admin in the audit log; a
+pre-existing gap in the Providers module, not something this screen's HTTP layer can fix without
+changing that handler's signature.
+
+**Migration notes.** No database changes — every table this screen uses already existed from
+Phases 8–10. **Breaking changes.** None.
+
+## 2026-09-15 — Phase 27 (in progress): Admin panel — auth/RBAC, Home, Sales, Customers, Packaging & Pricing (Increments A+B)
+
+**Summary.** Built the admin panel shell and five of its screens. Role/permission model is
+code-defined (`AdminRole` + `AdminPermissions::for()`), not DB tables. Session auth is a
+DB-backed hashed token in an `HttpOnly` cookie, mirroring `ClientApiKey`'s hash-and-compare
+pattern. Views are server-rendered Twig + hand-written CSS matching the design's oklch tokens +
+Alpine.js for interactivity. Every screen was validated against a live MySQL-backed instance with
+real screenshots (Playwright), not just code review.
+
+**Decisions** (`PhaseResults/PhaseDecisions.md` Phase 27 Q1–Q5, plus the Packaging & Pricing
+scope split): incremental screen-by-screen delivery; Playwright screenshot tooling; DB-backed
+hashed session tokens; Twig templating (the user's explicit non-default choice); a UI-scoped
+client switcher backed by a plain cookie, never a permission boundary. The Packaging & Pricing
+screen was explicitly split into **Increment A** (read-only master-detail, confirmed and
+screenshotted before any write code was touched) and **Increment B** (full create/edit/reorder),
+per the user's explicit instruction not to defer Increment B to a later phase.
+
+**Auth/RBAC/shell**: `admin_users`, `admin_sessions`, `admin_login_attempts` tables;
+`AdminRole`/`AdminPermission`/`AdminPermissions` (42 permission keys from CLAUDE.md);
+`SessionAdminAuthenticator`, `AuthenticateAdminHandler` (5 failed attempts / 15 min lockout),
+`LogoutAdminHandler`; `AdminAuthenticationMiddleware`/`AdminContext`/`AuthenticatedAdmin`;
+Twig `ViewRenderer` + base/shell layout; login, Home, Sales, Customers, Packaging views.
+
+**Home / Sales / Customers**: `HomeDashboardHandler` (KPIs, sparkline, period tabs, recent
+payments), `SalesListHandler` (status tabs, expandable event timelines), `CustomersListHandler`
+(aggregated on `client_user_ref` — Gomrok has no first-class Customer entity, disclosed in the
+UI copy rather than silently modeled around).
+
+**Packaging & Pricing — Increment A** (read-only): `PackagesTabHandler` / `GroupsTabHandler`
+reuse the real `PriceResolver`/`PriceListResolver` services so admin-displayed prices always
+match what a customer would actually be charged.
+
+**Packaging & Pricing — Increment B** (full read+write, this session's main addition):
+create/edit package modal (`CreatePackageForAdminHandler`, `UpdatePackageForAdminHandler`
+composing the existing `CreatePackageHandler`/`UpdatePackageHandler`/
+`SetPackagePurchaseCapabilitiesHandler`/`SetDefaultPackagePriceHandler`/`ChangePackageStatusHandler`);
+manual provider registration (`LinkPackageProviderHandler` — "create via API" is explicitly out of
+scope and disclosed in the UI, since no provider-adapter product-creation capability exists yet);
+create/edit pricing group (`CreatePricingGroupHandler` + `SetPricingGroupCountriesHandler` +
+`ChangePricingGroupStatusHandler`); create A/B price lists + enable/disable
+(`CreatePriceListHandler` + `ChangePriceListStatusHandler`); group-level price override
+(`SetGroupPackagePriceForAdminHandler`, new — preserves an existing row's display order and
+cosmetic overrides when only status/amount change) and list-level exact price
+(`SetPriceListPackagePriceHandler`); drag-to-reorder package priority
+(`ReorderPricingGroupPackagesHandler`, new — reads each package's existing pricing-group-package
+row before resubmitting, since `SetPricingGroupPackageHandler` always upserts a *full* row with no
+partial-update mode, so a naive reorder-only call would silently wipe out existing price
+overrides). All ten new write endpoints enforce `AdminPermission` on the backend
+(`AdminPermissionGuard`) in addition to hiding the corresponding button in the UI, per CLAUDE.md's
+"hiding a button is not enough" rule — verified against a real `support_agent` account (403 on
+every write, buttons absent from the rendered HTML).
+
+**Files created** (selected; full list is large — see `src/Modules/Admin/`, `src/Http/Admin/`):
+- Migrations: `20260914150001_create_admin_users_table.php`,
+  `20260914150002_create_admin_sessions_table.php`,
+  `20260914150003_create_admin_login_attempts_table.php`.
+- `src/Modules/Admin/{Domain,Application,Infrastructure,Views}/` — auth/RBAC, `Dashboard/`,
+  `Sales/`, `Customers/`, `Packaging/` (including the three new Increment B orchestrator handlers:
+  `CreatePackageForAdmin/`, `UpdatePackageForAdmin/`, `SetGroupPackagePriceForAdmin/`,
+  `ReorderPricingGroupPackages/`).
+- `src/Http/Admin/` — `AdminLoginShowAction`, `AdminLoginSubmitAction`, `AdminLogoutAction`,
+  `AdminHomeAction`, `AdminSalesAction`, `AdminCustomersAction`, `AdminPackagingAction`,
+  `AdminActiveClientAction`/`AdminActiveClientCookie`, `AdminForm`, `RedirectsToPackaging`, and
+  the ten Increment B write actions (`AdminPackagesCreateAction`, `AdminPackagesUpdateAction`,
+  `AdminPackageProviderLinkAction`, `AdminGroupsCreateAction`, `AdminGroupsUpdateAction`,
+  `AdminGroupPackagePriceAction`, `AdminGroupReorderAction`, `AdminPriceListsCreateAction`,
+  `AdminPriceListsStatusAction`, `AdminPriceListPackagePriceAction`).
+- `src/Shared/Http/{AuthenticatedAdmin,AdminAuthResult,AdminAuthenticator,AdminContext,
+  AdminAuthenticationMiddleware,ViewRenderer,AdminPermissionGuard}.php`.
+- `src/Public/admin.css`, `src/Public/packaging.js`.
+- `tools/screenshots/` — `screenshot.js`, `screenshot-click.js`, `screenshot-drag.js`,
+  `seed-demo-data.php`, `seed-provider-customers.php`.
+- Tests: auth/RBAC handler tests; `HomeDashboardHandlerTest`, `SalesListHandlerTest`,
+  `CustomersListHandlerTest`; `PackagesTabHandlerTest`, `GroupsTabHandlerTest`;
+  `CreatePackageForAdminHandlerTest`, `UpdatePackageForAdminHandlerTest`,
+  `SetGroupPackagePriceForAdminHandlerTest`, `ReorderPricingGroupPackagesHandlerTest`; new test
+  doubles `tests/Support/{InMemoryAdminUserRepository,InMemoryAdminSessionRepository,
+  InMemoryAdminLoginAttemptRepository,StubAdminAuthenticator,InMemoryPriceListDirectory,
+  InMemoryPackageProviderDefinitionDirectory,InMemoryPackageDirectory}.php`.
+
+**Files modified**
+- `src/Config/routes.php`, `src/Config/container.php` (Twig factory), `src/Bootstrap/ContainerFactory.php`.
+- `src/Modules/Clients/Application/ClientDirectory.php` / `PdoClientDirectory.php` — added `all()`.
+- `src/Modules/Subscriptions/Application/SubscriptionDirectory.php` / `PdoSubscriptionDirectory.php`
+  — added `forClient()`.
+- `src/Modules/Payments/Domain/ProviderCustomerRepository.php` / `PdoProviderCustomerRepository.php`
+  — added `forClientUser()`.
+- `src/Modules/Clients/Domain/ApiKeyPrefix.php` / `Application/Authenticate/ApiKeyAuthenticator.php`
+  — real production bug fix (see below).
+- `src/Modules/Admin/Application/Packaging/{PackageDetail,PackagesTabHandler,GroupDetail,
+  GroupPackageRow,GroupsTabHandler}.php` — extended with structured (non-display-label) fields so
+  the Increment B edit modals can be correctly prefilled, and `GroupsTabHandler` now actually
+  sorts package rows by `pricing_group_packages.display_order` (previously it always iterated
+  `PackageDirectory::forClient()`'s natural order, so reordering had no visible effect — a real
+  bug, fixed).
+- `src/Modules/Pricing/Infrastructure/PdoPricingGroupPackageRepository.php`,
+  `src/Modules/Vouchers/Infrastructure/PdoVoucherRepository.php` — real production bug fix (see
+  below).
+- `src/Modules/Admin/Views/layouts/base.html.twig` — added an `alpine_components` block (before
+  the Alpine CDN `<script>`) and a `scripts` block; `login.html.twig` — `.btn-primary` renamed to
+  `.login-submit` (class collision, see below).
+- Six `PdoIdempotencyStore`/`PdoProviderAccountRepository`/`PdoPackageRepository`/
+  `PdoVoucherCurrencyDiscountRepository`/`PdoPriceListPackageRepository`/
+  `PdoDefaultPackagePriceRepository` files — real production bug fix (see below), plus
+  `src/Database/Seeds/{PricingSeeder.php,data/countries.json}`.
+
+**Real production bugs found and fixed this session** (all via genuinely exercising the running
+app for the first time, never caught by unit tests — the Visual and Output Verification Rule
+earning its keep):
+1. `CountriesSeeder` missing Switzerland despite `PricingSeeder`'s `dach` group referencing it;
+   `PricingSeeder` missing a `CountriesSeeder` dependency declaration.
+2. `PdoIdempotencyStore` and five other runtime repositories bound the same named SQL parameter
+   twice in one statement — breaks under MySQL's native (non-emulated) prepared statements
+   (`PDO::ATTR_EMULATE_PREPARES => false`) with "Invalid parameter number."
+3. `ApiKeyAuthenticator` passed the raw `ApiKeyPrefix` value (`gk_test`/`gk_live`) as
+   `AuthenticatedClient::$keyMode` instead of the normalized `test`/`live` string
+   `SelectCheckoutProviderHandler` actually compares against — silently broke **every**
+   `POST /api/v1/payments` and `/subscriptions` call with `checkout_attempt.unknown_mode`, never
+   caught because every existing test constructs commands with a literal `'test'` string,
+   bypassing real auth. Fixed via `ApiKeyPrefix::mode()`.
+4. `GroupsTabHandler`'s disabled-price-list fallback mislabeled the resolved list in its own
+   header (Increment A).
+5. `PdoPricingGroupPackageRepository::save()`'s UPDATE branch and `PdoVoucherRepository::save()`'s
+   UPDATE branch both reused a shared `params()` helper built for INSERT, binding `group_id`/
+   `package_id` (respectively `client_id`/`code`) — columns that don't appear in the UPDATE SQL at
+   all. Under native prepares this throws "Invalid parameter number" on every *update* of an
+   existing `pricing_group_packages` row or an existing voucher — i.e. every reorder or repeat
+   price-override call, and every voucher edit, was broken. Found via a real drag-reorder request
+   against the live app; a repo-wide scan (comparing each shared params-helper's keys against its
+   UPDATE statement's placeholders) confirmed these were the only two files with this pattern.
+6. `GroupsTabHandler` built its package rows from `PackageDirectory::forClient()`'s natural order
+   and never actually sorted by `pricing_group_packages.display_order` — the drag-reorder write
+   path worked, but reordering had no visible effect on the screen. Found the same way: performing
+   a real drag against the live app and checking the row order didn't change.
+7. A CSS class collision — the login page's full-width submit button and the new Increment B
+   `.btn-primary` button-system class shared the same name, so every new pill-sized button
+   (`+ New package`, etc.) rendered as a full-width bar. Fixed by renaming the login-specific class
+   to `.login-submit`.
+8. Alpine.js's CDN script (loaded first, `defer`) auto-initializes as soon as the script executes
+   if `document.readyState` is already `interactive` — which happens for `defer` scripts — so a
+   *second* deferred script defining `packagingModals()` never ran in time, and every modal was
+   dead (`packagingModals is not defined`). Fixed by loading `packaging.js` non-deferred, before
+   the Alpine `<script>` tag, via a new `alpine_components` block.
+
+**Local dev environment note.** A system MariaDB occupies host port 3306, so docker-compose's own
+`mysql` service can't bind it; validation instead used a standalone
+`docker run -p 3307:3306 mysql:8.4` container with `.env`'s `DB_PORT=3307`.
+
+**Known limitations (disclosed in the UI, not silently worked around).** No provider-adapter
+"create product via API" capability exists anywhere in the codebase — Increment B's provider
+section only offers manual registration (enter a remote id yourself). No "delete price list"
+handler/business-rule is designed — Increment B offers create + enable/disable only, no delete.
+The list-price edit modal doesn't prefill the current exact amount (no query for it was built);
+this is a minor UX gap, not a correctness issue.
+
+**Migration notes.** Three additive tables (`admin_users`, `admin_sessions`,
+`admin_login_attempts`); no existing table altered. **Breaking changes.** None for the client API;
+`ApiKeyPrefix::mode()` is additive. The `ApiKeyAuthenticator` fix changes `AuthenticatedClient::$keyMode`'s
+actual runtime value from the (buggy) `gk_test`/`gk_live` to the (correct, always-intended)
+`test`/`live` — any code that had accidentally started depending on the buggy value would break,
+but none is known to.
+
 ## 2026-09-14 — Phase 26 complete: Subscriptions module
 
 **Summary.** Built the whole Subscriptions module by reusing the Checkout pipeline (Q1): a

@@ -60,7 +60,7 @@ final class ApiKeyAuthenticatorTest extends TestCase
         $client = $result->client();
         self::assertSame(7, $client->id);
         self::assertSame('televika', $client->slug);
-        self::assertSame('gk_live', $client->keyMode);
+        self::assertSame('live', $client->keyMode);
 
         self::assertSame(AuthAttempt::OUTCOME_SUCCESS, $this->attempts->lastOutcome());
         self::assertSame(AuthFailureReason::Ok, $this->attempts->lastReason());

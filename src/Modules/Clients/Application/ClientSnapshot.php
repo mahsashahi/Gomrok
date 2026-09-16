@@ -22,6 +22,8 @@ final readonly class ClientSnapshot
         public string $defaultCurrency,
         public ?string $defaultCountry,
         public string $timezone,
+        /** `Y-m-d H:i:s`, or `null` for a caller that doesn't need it (Phase 27's Clients screen does). */
+        public ?string $createdAt = null,
     ) {
     }
 
@@ -40,6 +42,7 @@ final readonly class ClientSnapshot
             $client->defaultCurrency()->code(),
             $client->defaultCountry()?->value,
             $client->timezone(),
+            $client->createdAt()->format('Y-m-d H:i:s'),
         );
     }
 

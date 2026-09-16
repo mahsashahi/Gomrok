@@ -1,0 +1,88 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Home — Gomrok Admin{% endblock %}
+
+{% block content %}
+{% if dashboard is null %}
+  <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:14px">
+    <h1 class="page-title">Home</h1>
+  </div>
+  <p style="color:var(--text-muted);font-size:14px">
+    No clients exist yet — create one from the Clients screen to see the dashboard.
+  </p>
+{% else %}
+  <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:14px">
+    <h1 class="page-title">Home</h1>
+    <span class="page-subtitle">{{ active_client.name }} &middot; {{ active_client.status.value }}</span>
+  </div>
+
+  <div style="font-size:20px;font-weight:700;margin:0 0 8px">Today</div>
+  <div style="display:grid;grid-template-columns:1fr 300px;gap:18px;margin-bottom:22px">
+    <div>
+      <div style="display:flex;gap:22px;margin-bottom:10px">
+        <div>
+          <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px">Successful payments</div>
+          <div style="font-size:26px;font-weight:700">{{ dashboard.successfulPaymentsToday }}</div>
+        </div>
+        <div>
+          <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px">Failed payments</div>
+          <div style="font-size:26px;font-weight:700">{{ dashboard.failedPaymentsToday }}</div>
+        </div>
+        <div>
+          <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px">Active subscriptions</div>
+          <div style="font-size:26px;font-weight:700">{{ dashboard.activeSubscriptions }}</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:5px;height:70px;border-top:1px solid var(--border);padding-top:12px">
+        {% for h in dashboard.sparkline %}
+        <div style="width:100%;background:oklch(90% 0.03 264);border-radius:2px;height:{{ h }}px"></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div style="border:1px solid var(--border);border-radius:12px;padding:13px;background:#fff">
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px">This screen doesn't yet track provider balances or payouts</div>
+      <div style="font-size:12px;color:var(--text-faint)">No `balance`/`payout` data model exists in Gomrok yet — this card is reserved for when one is built.</div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <div style="font-size:20px;font-weight:700">Your overview</div>
+    <div style="display:flex;gap:8px">
+      {% for key, label in {'today': 'Today', '7d': '7 days', '30d': '30 days'} %}
+      <a href="/admin?period={{ key }}" style="padding:6px 12px;border-radius:7px;font-size:12.5px;font-weight:600;text-decoration:none;{{ key == dashboard.period ? 'background:var(--accent-soft);color:var(--accent-soft-text)' : 'background:transparent;color:var(--text-muted)' }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px">
+    {% for stat in dashboard.overviewStats %}
+    <div style="border:1px solid var(--border);border-radius:12px;padding:11px;background:#fff">
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">{{ stat.label }}</div>
+      <div style="font-size:22px;font-weight:700;margin-bottom:6px">{{ stat.value }}</div>
+      {% if stat.deltaLabel %}
+      <div style="font-size:12px;font-weight:600;color:{{ stat.deltaIsPositive ? 'oklch(50% 0.13 150)' : 'var(--danger)' }}">{{ stat.deltaLabel }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <div style="font-size:20px;font-weight:700">Recent payments</div>
+  </div>
+  <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff">
+    <div style="display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr 1fr;padding:11px 20px;font-size:12.5px;font-weight:700;border-bottom:1px solid var(--border)">
+      <div>Amount</div><div>Customer</div><div>Provider</div><div>Status</div><div>Created</div>
+    </div>
+    {% for row in dashboard.recentPayments %}
+    <div style="display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr 1fr;padding:13px 20px;font-size:14px;border-bottom:1px solid var(--surface-alt);align-items:center">
+      <div style="font-weight:600">{{ row.amount }}</div>
+      <div style="color:oklch(35% 0.01 264)">{{ row.customer }}</div>
+      <div style="color:oklch(35% 0.01 264)">{{ row.provider }}</div>
+      <div>{{ row.status }}</div>
+      <div style="color:var(--text-muted)">{{ row.createdAt }}</div>
+    </div>
+    {% else %}
+    <div style="padding:24px 20px;font-size:13px;color:var(--text-muted)">No payments yet for this client.</div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}

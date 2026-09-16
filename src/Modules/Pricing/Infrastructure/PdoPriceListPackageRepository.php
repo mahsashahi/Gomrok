@@ -22,7 +22,7 @@ final readonly class PdoPriceListPackageRepository implements PriceListPackageRe
         $now = gmdate(self::DT);
         $statement = $this->pdo->prepare(
             'INSERT INTO price_list_packages (price_list_id, package_id, amount_minor, currency_code, created_at, updated_at)
-             VALUES (:l, :p, :a, :c, :now, :now)
+             VALUES (:l, :p, :a, :c, :created_at, :updated_at)
              ON DUPLICATE KEY UPDATE amount_minor = VALUES(amount_minor), currency_code = VALUES(currency_code), updated_at = VALUES(updated_at)',
         );
         $statement->execute([
@@ -30,7 +30,8 @@ final readonly class PdoPriceListPackageRepository implements PriceListPackageRe
             'p' => $row->packageId,
             'a' => $row->amountMinor,
             'c' => $row->currencyCode,
-            'now' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
         ]);
     }
 

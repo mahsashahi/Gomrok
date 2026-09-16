@@ -1,0 +1,395 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Providers — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div x-data="providersModals()">
+{% if error %}<div class="form-error">{{ error }}</div>{% endif %}
+{% if success %}<div class="form-success">{{ success }}</div>{% endif %}
+
+{% if accounts_tab is null and groups_tab is null %}
+  <h1 class="page-title" style="font-size:22px">Providers</h1>
+  <p style="color:var(--text-muted);font-size:14px">No clients exist yet — create one from the Clients screen.</p>
+{% else %}
+  <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+    <h1 class="page-title" style="font-size:22px">Providers</h1>
+    <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-muted);background:var(--surface-alt);border:1px solid var(--border);border-radius:5px;padding:3px 7px">client {{ active_client.id }}</span>
+    <span style="flex:1"></span>
+    {% if active_tab == 'accounts' and 'provider_configs.create' in permissions %}
+    <button type="button" class="btn btn-primary btn-sm" @click="open('create-account', {provider_type_code:'',mode:'test',name:'',secret_key:'',public_key:'',slug:'',countries:'',methods:[]})">+ Connect account</button>
+    {% endif %}
+    {% if active_tab == 'groups' and 'provider_configs.create' in permissions %}
+    <button type="button" class="btn btn-primary btn-sm" @click="open('create-group', {name:'',slug:'',is_default:false,device_type:'',currency_code:''})">+ New routing group</button>
+    {% endif %}
+  </div>
+
+  <div class="tab-bar">
+    <a href="/admin/providers?tab=accounts" class="tab-link{{ active_tab == 'accounts' ? ' active' : '' }}">Accounts</a>
+    <a href="/admin/providers?tab=groups" class="tab-link{{ active_tab == 'groups' ? ' active' : '' }}">By-groups</a>
+  </div>
+
+  {% if active_tab == 'accounts' %}
+    {% if accounts_tab.accounts is empty %}
+    <div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:4px">No provider accounts yet</div>
+      <div style="font-size:11.5px;color:var(--text-muted)">This client has no connected payment providers.</div>
+    </div>
+    {% else %}
+    <div class="master-detail">
+      <div class="master-panel">
+        <div class="master-panel-header"><div class="master-eyebrow">Accounts ({{ accounts_tab.accounts|length }})</div></div>
+        {% for a in accounts_tab.accounts %}
+        <a href="/admin/providers?tab=accounts&account={{ a.slug }}" class="master-row{{ a.selected ? ' active' : '' }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+            <span class="master-row-title">{{ a.name }}</span>
+            <span class="status-pill status-{{ a.status|lower }}">{{ a.status }}</span>
+          </div>
+          <div class="master-row-sub">{{ a.providerTypeCode }} &middot; {{ a.mode }}</div>
+        </a>
+        {% endfor %}
+      </div>
+
+      <div class="detail-panel" x-data="{ secretRevealed: false }">
+        {% set d = accounts_tab.selected %}
+        {% if d %}
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none"></span>
+          <div style="font-size:16px;font-weight:700">{{ d.name }}</div>
+          <span class="status-pill status-{{ d.status|lower }}">{{ d.status }}</span>
+          <span class="status-pill status-{{ d.mode == 'live' ? 'active' : 'pending' }}">{{ d.mode }}</span>
+          {% if 'provider_configs.update' in permissions %}
+          <span style="margin-left:auto;display:flex;gap:10px">
+            <button type="button" class="link-btn" @click="open('edit-account', {id:{{ d.id }},slug:'{{ d.slug }}',name:'{{ d.name|e('js') }}',countries:'{{ d.countriesRaw|join(', ') }}',methods:{{ d.methodsRaw|json_encode }},active:{{ d.isActive ? 'true' : 'false' }}})">Edit account</button>
+            <button type="button" class="link-btn" @click="open('rotate-secret', {id:{{ d.id }},slug:'{{ d.slug }}',new_secret_key:'',new_public_key:'',replace_public_key:false})">Rotate secret</button>
+          </span>
+          {% endif %}
+        </div>
+
+        <div class="info-card-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+          <div><div class="info-card-label">Provider type</div><div class="info-card-value">{{ d.providerTypeName }}</div></div>
+          <div><div class="info-card-label">Slug</div><div class="info-card-value">{{ d.slug }}</div></div>
+          <div><div class="info-card-label">Public key</div><div class="info-card-value" style="word-break:break-all">{{ d.publicKey ?? '—' }}</div></div>
+          <div>
+            <div class="info-card-label">Secret</div>
+            <div class="info-card-value" style="display:flex;align-items:center;gap:8px">
+              <span x-text="secretRevealed ? '••••{{ d.secretLastFour }}' : '••••••••'"></span>
+              <button type="button" class="link-btn" @click="secretRevealed = !secretRevealed" x-text="secretRevealed ? 'Hide' : 'Reveal'" style="font-size:10px"></button>
+            </div>
+          </div>
+          <div><div class="info-card-label">Countries</div><div class="info-card-value">{{ d.countriesDisplay }}</div></div>
+          <div><div class="info-card-label">Methods</div><div class="info-card-value">{{ d.methodsDisplay }}</div></div>
+          <div><div class="info-card-label">Active endpoints</div><div class="info-card-value">{{ d.activeEndpointCount }}</div></div>
+        </div>
+        <div style="font-size:10.5px;color:var(--text-faint);margin:6px 0 16px">Only the last 4 digits of the secret are ever available to the admin panel — CLAUDE.md forbids displaying full secrets in plain text.</div>
+
+        <div class="section-eyebrow">Capabilities</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+          {% for c in d.capabilitiesDisplay %}<span style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:var(--surface-alt);color:oklch(35% 0.01 264)">{{ c }}</span>{% else %}<span style="font-size:12px;color:var(--text-faint)">Unknown provider type.</span>{% endfor %}
+        </div>
+
+        <div class="section-eyebrow">Purchase types</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+          {% for pt in d.purchaseTypesDisplay %}<span style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:var(--accent-soft);color:var(--accent-soft-text)">{{ pt }}</span>{% else %}<span style="font-size:12px;color:var(--text-faint)">None.</span>{% endfor %}
+        </div>
+
+        <div class="section-eyebrow">Used in routing groups</div>
+        <div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff">
+          {% for m in d.groupMemberships %}
+          <div class="detail-row"><span class="detail-label">{{ m.groupName }}</span><span style="font-size:11px;color:var(--text-faint)">priority {{ m.priority }} &middot; {{ m.isEnabled ? 'enabled' : 'disabled' }}</span></div>
+          {% else %}
+          <div style="padding:14px;font-size:12px;color:var(--text-faint)">Not linked into any routing group yet.</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  {% else %}
+    {% if groups_tab.groups is empty %}
+    <div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:4px">No routing groups yet</div>
+    </div>
+    {% else %}
+    <div class="master-detail">
+      <div class="master-panel">
+        <div class="master-panel-header"><div class="master-eyebrow">Routing groups</div></div>
+        {% for g in groups_tab.groups %}
+        <a href="/admin/providers?tab=groups&group={{ g.slug }}" class="master-row{{ g.selected ? ' active' : '' }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+            <span class="master-row-title">{{ g.name }}</span>
+            {% if g.isDefault %}<span style="font-size:11px;color:var(--text-faint)">*</span>{% endif %}
+          </div>
+          <div class="master-row-sub">{{ g.countryLabel }}</div>
+        </a>
+        {% endfor %}
+      </div>
+
+      <div class="detail-panel">
+        {% set d = groups_tab.selected %}
+        {% if d %}
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none"></span>
+          <div style="font-size:15px;font-weight:700">{{ d.name }} — provider routing</div>
+          <span class="status-pill status-{{ d.isActive ? 'active' : 'cancelled' }}">{{ d.isActive ? 'Active' : 'Disabled' }}</span>
+          {% if 'provider_configs.update' in permissions %}
+          <button type="button" class="link-btn" style="margin-left:auto" @click="open('edit-group', {id:{{ d.id }},slug:'{{ d.slug }}',name:'{{ d.name|e('js') }}',countries:'{{ d.countriesRaw|join(', ') }}',purchase_types:{{ d.purchaseTypesRaw|json_encode }},methods:{{ d.methodsRaw|json_encode }},currency_code:'{{ d.currency ?? '' }}',active:{{ d.isActive ? 'true' : 'false' }}})">Edit group</button>
+          {% endif %}
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;max-width:640px">The router tries this group's accounts in priority order for each matching purchase, skipping any whose link is disabled or whose account is disabled.</div>
+
+        <div class="info-card-grid">
+          <div class="info-card"><div class="info-card-label">Countries</div><div class="info-card-value">{{ d.countriesDisplay }}</div></div>
+          <div class="info-card"><div class="info-card-label">Currency</div><div class="info-card-value">{{ d.currency ?? 'Any' }}</div></div>
+          <div class="info-card"><div class="info-card-label">Device</div><div class="info-card-value">{{ d.deviceType ?? 'Any' }}</div></div>
+        </div>
+
+        <div class="section-eyebrow">Purchase types sold here</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          {% for pt in d.purchaseTypesDisplay %}<span style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:var(--accent-soft);color:var(--accent-soft-text)">{{ pt }}</span>{% else %}<span style="font-size:12px;color:var(--text-faint)">None configured.</span>{% endfor %}
+        </div>
+
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <div class="section-eyebrow" style="margin-bottom:0">Provider chain — resolved readout</div>
+          {% if 'provider_configs.update' in permissions %}
+          <span style="font-size:10px;color:var(--text-faint)">drag <span class="drag-handle">⠿</span> to reorder priority</span>
+          {% endif %}
+        </div>
+        <div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff;margin-top:8px;margin-bottom:6px" {% if 'provider_configs.update' in permissions %}data-reorder-list{% endif %}>
+          {% for row in d.accountRows %}
+          <div class="{{ 'provider_configs.update' in permissions ? 'account-row-drag' : '' }}" {% if 'provider_configs.update' in permissions %}draggable="true" data-account-id="{{ row.providerAccountId }}"{% endif %} style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--surface-alt)">
+            <div class="drag-handle">{% if 'provider_configs.update' in permissions %}⠿{% endif %}</div>
+            <div style="min-width:0;flex:1">
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                <span style="font-weight:700;font-size:12.5px">{{ row.name }}</span>
+                <span style="font-size:9.5px;font-weight:700;color:var(--text-faint);text-transform:uppercase">{{ row.providerTypeCode }} &middot; {{ row.mode }}</span>
+                <span class="status-pill status-{{ row.resolutionStatus == 'chosen' ? 'active' : (row.resolutionStatus == 'fallback' ? 'pending' : 'cancelled') }}">{{ row.resolutionLabel }}</span>
+              </div>
+              <div style="font-size:10.5px;color:var(--text-faint)">priority {{ row.priority }} &middot; link {{ row.isEnabledLink ? 'enabled' : 'disabled' }}</div>
+            </div>
+            {% if 'provider_configs.update' in permissions %}
+            <div style="display:flex;gap:8px;flex:none">
+              <form method="post" action="/admin/providers/groups/{{ d.id }}/accounts/{{ row.providerAccountId }}/toggle">
+                <input type="hidden" name="group" value="{{ d.slug }}">
+                <button type="submit" class="btn btn-secondary btn-sm">{{ row.isEnabledLink ? 'Disable' : 'Enable' }}</button>
+              </form>
+              <form method="post" action="/admin/providers/groups/{{ d.id }}/accounts/{{ row.providerAccountId }}/remove" onsubmit="return confirm('Remove this account from the group?')">
+                <input type="hidden" name="group" value="{{ d.slug }}">
+                <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+              </form>
+            </div>
+            {% endif %}
+          </div>
+          {% else %}
+          <div style="padding:16px 14px;font-size:12px;color:var(--text-faint)">No provider accounts linked to this group yet.</div>
+          {% endfor %}
+          {% if 'provider_configs.update' in permissions %}
+          <form data-reorder-form method="post" action="/admin/providers/groups/{{ d.id }}/reorder" style="display:none">
+            <input type="hidden" name="group" value="{{ d.slug }}">
+            <input type="hidden" name="order" value="">
+          </form>
+          {% endif %}
+        </div>
+        {% if 'provider_configs.update' in permissions %}
+        <form method="post" action="/admin/providers/groups/{{ d.id }}/accounts" style="display:flex;gap:8px;align-items:flex-end;margin-bottom:16px">
+          <input type="hidden" name="group" value="{{ d.slug }}">
+          <div class="form-field" style="min-width:220px">
+            <label>Add account to this group</label>
+            <select name="provider_account_id" required>
+              <option value="">Choose…</option>
+              {% for acc in available_accounts %}
+              <option value="{{ acc.id }}">{{ acc.name }} ({{ acc.providerTypeCode }} &middot; {{ acc.mode }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm">Add</button>
+        </form>
+        {% endif %}
+
+        <div class="section-eyebrow">Resolution preview</div>
+        <div style="border:1px solid var(--border);border-radius:9px;background:var(--surface-alt);padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.9;color:oklch(38% 0.01 264)">
+          <div>country in this group's list &rarr; this group; otherwise &rarr; the client's default group</div>
+          <div>chain walked in priority order &rarr; first account with link enabled &amp; account active wins</div>
+          <div>a live request also filters by mode, currency, purchase type and payment method</div>
+          <div>no eligible account &rarr; the payment/subscription request is rejected, never silently downgraded</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  {% endif %}
+{% endif %}
+
+{# ---------- modals (shared, state-driven via Alpine) ---------- #}
+<div x-show="modal !== null" x-cloak class="modal-backdrop" @click.self="close()" @keydown.escape.window="close()">
+
+  <template x-if="modal === 'create-account'">
+    <div class="modal-card">
+      <div class="modal-title">Connect provider account</div>
+      <div class="modal-subtitle">The secret key is encrypted at rest and never shown again in full.</div>
+      <form method="post" action="/admin/providers/accounts">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Provider type</label>
+            <select name="provider_type_code" x-model="form.provider_type_code" required>
+              <option value="">Choose…</option>
+              {% for pt in provider_types %}
+              <option value="{{ pt.code }}">{{ pt.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Mode</label>
+            <select name="mode" x-model="form.mode">
+              <option value="test">Test</option>
+              <option value="live">Live</option>
+            </select>
+          </div>
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label>Slug (optional)</label><input type="text" name="slug" x-model="form.slug" placeholder="auto from type + mode"></div>
+          <div class="form-field span-2"><label>Secret key</label><input type="text" name="secret_key" x-model="form.secret_key" required autocomplete="off"></div>
+          <div class="form-field span-2"><label>Public key (optional)</label><input type="text" name="public_key" x-model="form.public_key" autocomplete="off"></div>
+          <div class="form-field span-2"><label>Countries (ISO codes, comma or space separated — blank = everywhere)</label><textarea name="countries" x-model="form.countries" rows="2" placeholder="DE, AT, CH"></textarea></div>
+          <div class="form-field span-2">
+            <label>Payment methods (blank = any)</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="card" x-model="form.methods"> Card</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="paypal" x-model="form.methods"> PayPal</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="ideal" x-model="form.methods"> iDEAL</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="bancontact" x-model="form.methods"> Bancontact</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="sepa_direct_debit" x-model="form.methods"> SEPA</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="bank_hosted_card" x-model="form.methods"> Bank-hosted card</label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Connect account</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'edit-account'">
+    <div class="modal-card">
+      <div class="modal-title">Edit account</div>
+      <div class="modal-subtitle" x-text="form.slug"></div>
+      <form method="post" :action="'/admin/providers/accounts/' + form.id">
+        <input type="hidden" name="slug" :value="form.slug">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
+          <div class="form-field span-2"><label>Countries (blank = everywhere)</label><textarea name="countries" x-model="form.countries" rows="2"></textarea></div>
+          <div class="form-field span-2">
+            <label>Payment methods (blank = any)</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="card" x-model="form.methods"> Card</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="paypal" x-model="form.methods"> PayPal</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="ideal" x-model="form.methods"> iDEAL</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="bancontact" x-model="form.methods"> Bancontact</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="sepa_direct_debit" x-model="form.methods"> SEPA</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="bank_hosted_card" x-model="form.methods"> Bank-hosted card</label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'rotate-secret'">
+    <div class="modal-card">
+      <div class="modal-title">Rotate secret</div>
+      <div class="modal-subtitle" x-text="form.slug"></div>
+      <form method="post" :action="'/admin/providers/accounts/' + form.id + '/rotate-secret'">
+        <input type="hidden" name="slug" :value="form.slug">
+        <div class="form-grid">
+          <div class="form-field span-2"><label>New secret key</label><input type="text" name="new_secret_key" x-model="form.new_secret_key" required autocomplete="off"></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="replace_public_key" x-model="form.replace_public_key"> Also replace the public key</label></div>
+          <div class="form-field" x-show="form.replace_public_key"><label>New public key</label><input type="text" name="new_public_key" x-model="form.new_public_key" autocomplete="off"></div>
+        </div>
+        <div class="form-field-hint">A sensitive, audited action — recorded in the audit log with the acting admin's id.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Rotate secret</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'create-group'">
+    <div class="modal-card">
+      <div class="modal-title">Create routing group</div>
+      <div class="modal-subtitle">Countries, purchase types and methods are configured after creation.</div>
+      <form method="post" action="/admin/providers/groups">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label>Slug (optional)</label><input type="text" name="slug" x-model="form.slug" placeholder="auto from name"></div>
+          <div class="form-field">
+            <label>Device type (optional)</label>
+            <select name="device_type" x-model="form.device_type">
+              <option value="">Any</option>
+              <option value="web">Web</option>
+              <option value="ios">iOS</option>
+              <option value="android">Android</option>
+            </select>
+          </div>
+          <div class="form-field"><label>Currency (optional)</label><input type="text" name="currency_code" x-model="form.currency_code" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field span-2"><label class="checkbox-row"><input type="checkbox" name="is_default" x-model="form.is_default"> This is the default (fallback) group</label></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create group</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'edit-group'">
+    <div class="modal-card">
+      <div class="modal-title">Edit routing group</div>
+      <div class="modal-subtitle" x-text="form.slug"></div>
+      <form method="post" :action="'/admin/providers/groups/' + form.id">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label>Currency (blank = any)</label><input type="text" name="currency_code" x-model="form.currency_code" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field span-2"><label>Countries (blank = default group's fallback scope)</label><textarea name="countries" x-model="form.countries" rows="2"></textarea></div>
+          <div class="form-field span-2">
+            <label>Purchase types sold here</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <label class="checkbox-row"><input type="checkbox" name="purchase_types[]" value="one_time_payment" x-model="form.purchase_types"> One-time</label>
+              <label class="checkbox-row"><input type="checkbox" name="purchase_types[]" value="recurring_payment" x-model="form.purchase_types"> Recurring</label>
+              <label class="checkbox-row"><input type="checkbox" name="purchase_types[]" value="auto_charge" x-model="form.purchase_types"> Auto-charge</label>
+              <label class="checkbox-row"><input type="checkbox" name="purchase_types[]" value="subscription" x-model="form.purchase_types"> Subscription</label>
+            </div>
+          </div>
+          <div class="form-field span-2">
+            <label>Payment methods (blank = any)</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="card" x-model="form.methods"> Card</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="paypal" x-model="form.methods"> PayPal</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="ideal" x-model="form.methods"> iDEAL</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="bancontact" x-model="form.methods"> Bancontact</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="sepa_direct_debit" x-model="form.methods"> SEPA</label>
+              <label class="checkbox-row"><input type="checkbox" name="methods[]" value="bank_hosted_card" x-model="form.methods"> Bank-hosted card</label>
+            </div>
+          </div>
+          <div class="form-field span-2"><label class="checkbox-row"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+</div>
+</div>
+{% endblock %}
+
+{% block alpine_components %}
+<script src="/providers.js"></script>
+{% endblock %}

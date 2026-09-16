@@ -46,7 +46,9 @@ final readonly class PdoPricingGroupPackageRepository implements PricingGroupPac
                 highlighted_override = :highlighted_override, display_order = :display_order, updated_at = :updated_at
              WHERE id = :id',
         );
-        $statement->execute($this->params($row) + [
+        $params = $this->params($row);
+        unset($params['group_id'], $params['package_id']);
+        $statement->execute($params + [
             'id' => $row->id(),
             'updated_at' => gmdate(self::DT),
         ]);

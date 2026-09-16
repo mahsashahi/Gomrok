@@ -50,6 +50,21 @@ final readonly class PdoSubscriptionDirectory implements SubscriptionDirectory
         return $out;
     }
 
+    public function forClient(int $clientId): array
+    {
+        $statement = $this->pdo->prepare('SELECT * FROM subscriptions WHERE client_id = :c ORDER BY created_at DESC');
+        $statement->execute(['c' => $clientId]);
+
+        $out = [];
+        while (($row = $statement->fetch()) !== false) {
+            if (\is_array($row)) {
+                $out[] = $this->toSummary($row);
+            }
+        }
+
+        return $out;
+    }
+
     /**
      * @param array<array-key, mixed> $row
      */

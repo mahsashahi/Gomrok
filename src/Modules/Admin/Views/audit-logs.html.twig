@@ -1,0 +1,100 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Audit Logs — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+  <h1 class="page-title" style="font-size:22px">Audit logs</h1>
+</div>
+<p style="font-size:12px;color:var(--text-muted);margin:0 0 16px;max-width:680px">
+  A read-only, append-only trail of sensitive admin and system actions. Nothing here can be
+  edited or deleted from this screen — an audit trail that could be altered through the panel it
+  audits would defeat its own purpose.
+</p>
+
+<form method="get" action="/admin/audit-logs" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+  <div class="form-field" style="min-width:160px">
+    <label>Actor type</label>
+    <select name="actor_type">
+      <option value="">Any</option>
+      <option value="admin_user" {{ screen.filters.actorType == 'admin_user' ? 'selected' : '' }}>Admin user</option>
+      <option value="client" {{ screen.filters.actorType == 'client' ? 'selected' : '' }}>Client</option>
+      <option value="system" {{ screen.filters.actorType == 'system' ? 'selected' : '' }}>System</option>
+    </select>
+  </div>
+  <div class="form-field" style="min-width:200px">
+    <label>Action</label>
+    <select name="action">
+      <option value="">Any</option>
+      {% for a in screen.availableActions %}
+      <option value="{{ a }}" {{ screen.filters.action == a ? 'selected' : '' }}>{{ a }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="form-field" style="width:120px">
+    <label>Client ID</label>
+    <input type="text" name="client_id" value="{{ screen.filters.clientId }}" placeholder="any">
+  </div>
+  <div class="form-field" style="min-width:140px">
+    <label>Target type</label>
+    <input type="text" name="target_type" value="{{ screen.filters.targetType }}" placeholder="e.g. voucher">
+  </div>
+  <div class="form-field" style="width:120px">
+    <label>Target ID</label>
+    <input type="text" name="target_id" value="{{ screen.filters.targetId }}" placeholder="any">
+  </div>
+  <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+  {% if screen.filters.actorType or screen.filters.action or screen.filters.clientId or screen.filters.targetType or screen.filters.targetId %}
+  <a href="/admin/audit-logs" class="link-btn">Clear</a>
+  {% endif %}
+</form>
+
+{% if screen.rows is empty %}
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+  <div style="font-size:12.5px;font-weight:700">No matching audit entries</div>
+</div>
+{% else %}
+<div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff">
+  {% for row in screen.rows %}
+  <div x-data="{ open: false }">
+    <div class="{{ row.hasDetail ? 'timeline-toggle' : '' }}" {% if row.hasDetail %}@click="open = !open"{% endif %} style="display:grid;grid-template-columns:1.1fr 1.3fr 1fr 1fr 1fr 0.2fr;column-gap:12px;padding:11px 16px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+      <div style="color:var(--text-muted)">{{ row.createdLabel }}</div>
+      <div style="font-family:ui-monospace,Menlo,monospace;font-weight:700">{{ row.action }}</div>
+      <div>{{ row.actorLabel }}</div>
+      <div>{{ row.targetLabel ?? '—' }}</div>
+      <div style="color:var(--text-muted)">{{ row.clientLabel ?? 'system-wide' }}</div>
+      <div style="text-align:right;color:var(--text-faint)">{% if row.hasDetail %}▾{% endif %}</div>
+    </div>
+    {% if row.hasDetail %}
+    <div x-show="open" x-cloak class="timeline-row" style="display:flex;flex-direction:column;gap:10px">
+      {% if row.beforeJson %}
+      <div><div style="font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;margin-bottom:3px">Before</div><pre style="margin:0;font-size:11px;background:var(--surface-alt);border-radius:6px;padding:8px 10px;overflow-x:auto">{{ row.beforeJson }}</pre></div>
+      {% endif %}
+      {% if row.afterJson %}
+      <div><div style="font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;margin-bottom:3px">After</div><pre style="margin:0;font-size:11px;background:var(--surface-alt);border-radius:6px;padding:8px 10px;overflow-x:auto">{{ row.afterJson }}</pre></div>
+      {% endif %}
+      {% if row.contextJson %}
+      <div><div style="font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;margin-bottom:3px">Context</div><pre style="margin:0;font-size:11px;background:var(--surface-alt);border-radius:6px;padding:8px 10px;overflow-x:auto">{{ row.contextJson }}</pre></div>
+      {% endif %}
+      <div style="font-size:10.5px;color:var(--text-faint)">
+        {% if row.ip %}IP {{ row.ip }}{% endif %}{% if row.correlationId %} &middot; correlation {{ row.correlationId }}{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:11.5px;color:var(--text-faint)">
+  <div>{{ screen.totalCount }} result{{ screen.totalCount == 1 ? '' : 's' }} &middot; page {{ screen.page }} of {{ screen.totalPages }}</div>
+  <div style="display:flex;gap:10px">
+    {% if screen.page > 1 %}
+    <a href="/admin/audit-logs?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page - 1 }}">&larr; Newer</a>
+    {% endif %}
+    {% if screen.page < screen.totalPages %}
+    <a href="/admin/audit-logs?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page + 1 }}">Older &rarr;</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

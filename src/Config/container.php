@@ -8,7 +8,10 @@ use function DI\get;
 
 use Gomrok\Config\DatabaseSettings;
 use Gomrok\Config\Settings;
+use Gomrok\Shared\Application\Audit\AuditLogDirectory;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
+use Gomrok\Shared\Application\ErrorLog\ErrorLogDirectory;
+use Gomrok\Shared\Application\ErrorLog\ErrorLogResolver;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogWriter;
 use Gomrok\Shared\Application\Idempotency\IdempotencyStore;
 use Gomrok\Shared\Application\ReferenceCatalog;
@@ -18,7 +21,10 @@ use Gomrok\Shared\Application\Transactions;
 use Gomrok\Shared\Http\IdempotencyMiddleware;
 use Gomrok\Shared\Infrastructure\Crypto\SodiumSecretCipher;
 use Gomrok\Shared\Infrastructure\Logging\LoggerFactory;
+use Gomrok\Shared\Infrastructure\Persistence\PdoAuditLogDirectory;
 use Gomrok\Shared\Infrastructure\Persistence\PdoAuditLogWriter;
+use Gomrok\Shared\Infrastructure\Persistence\PdoErrorLogDirectory;
+use Gomrok\Shared\Infrastructure\Persistence\PdoErrorLogResolver;
 use Gomrok\Shared\Infrastructure\Persistence\PdoErrorLogWriter;
 use Gomrok\Shared\Infrastructure\Persistence\PdoIdempotencyStore;
 use Gomrok\Shared\Infrastructure\Persistence\PdoReferenceCatalog;
@@ -29,6 +35,8 @@ use Psr\Clock\ClockInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Log\LoggerInterface;
 use Slim\Psr7\Factory\ResponseFactory;
+use Twig\Environment as TwigEnvironment;
+use Twig\Loader\FilesystemLoader;
 
 /**
  * PHP-DI definitions. Kept small on purpose — modules register their own
@@ -65,7 +73,10 @@ return [
     // Cross-cutting persistence ports (Phase 5).
     IdempotencyStore::class => get(PdoIdempotencyStore::class),
     AuditLogWriter::class => get(PdoAuditLogWriter::class),
+    AuditLogDirectory::class => get(PdoAuditLogDirectory::class),
     ErrorLogWriter::class => get(PdoErrorLogWriter::class),
+    ErrorLogDirectory::class => get(PdoErrorLogDirectory::class),
+    ErrorLogResolver::class => get(PdoErrorLogResolver::class),
 
     // Shared application ports (Phase 6).
     TokenGenerator::class => get(RandomTokenGenerator::class),
@@ -82,6 +93,17 @@ return [
     ),
 
     ResponseFactoryInterface::class => get(ResponseFactory::class),
+
+    // The admin panel's server-rendered views (Phase 27 Q4 — Twig).
+    TwigEnvironment::class => factory(static function (Settings $settings): TwigEnvironment {
+        $loader = new FilesystemLoader(dirname(__DIR__) . '/Modules/Admin/Views');
+
+        return new TwigEnvironment($loader, [
+            'cache' => false,
+            'debug' => $settings->appDebug,
+            'auto_reload' => true,
+        ]);
+    }),
 
     // The /api/v1 group is the only user of this middleware — configure it to
     // require an Idempotency-Key on writes (Phase 7 Q5) and to have no replay

@@ -17,7 +17,7 @@ use PDO;
  */
 final readonly class PdoClientDirectory implements ClientDirectory
 {
-    private const COLUMNS = 'id, slug, name, status, default_currency, default_country, timezone';
+    private const COLUMNS = 'id, slug, name, status, default_currency, default_country, timezone, created_at';
 
     public function __construct(private PDO $pdo)
     {
@@ -47,6 +47,22 @@ final readonly class PdoClientDirectory implements ClientDirectory
         return $statement->fetchColumn() !== false;
     }
 
+    public function all(): array
+    {
+        $statement = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM clients ORDER BY name');
+        $statement->execute();
+
+        $out = [];
+        while (($row = $statement->fetch()) !== false) {
+            $client = $this->hydrate($row);
+            if ($client !== null) {
+                $out[] = $client;
+            }
+        }
+
+        return $out;
+    }
+
     public function findActiveEndpointUrl(int $clientId, EndpointPurpose $purpose): ?string
     {
         $statement = $this->pdo->prepare(
@@ -72,6 +88,7 @@ final readonly class PdoClientDirectory implements ClientDirectory
             Row::str($row['default_currency'] ?? ''),
             Row::nullableStr($row['default_country'] ?? null),
             Row::str($row['timezone'] ?? 'UTC'),
+            Row::nullableStr($row['created_at'] ?? null),
         );
     }
 }

@@ -1,0 +1,123 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Admin Users — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div x-data="adminUsersModals()">
+{% if error %}<div class="form-error">{{ error }}</div>{% endif %}
+{% if success %}<div class="form-success">{{ success }}</div>{% endif %}
+
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+  <h1 class="page-title" style="font-size:22px">Admin users</h1>
+  <span style="flex:1"></span>
+  {% if 'admin_users.create' in permissions %}
+  <button type="button" class="btn btn-primary btn-sm" @click="open('create-user', {name:'',email:'',password:'',role:'support_agent'})">+ New admin user</button>
+  {% endif %}
+</div>
+
+{% if screen.rows is empty %}
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+  <div style="font-size:12.5px;font-weight:700">No admin users</div>
+</div>
+{% else %}
+<div style="border:1px solid var(--border-light);border-radius:9px;overflow-x:auto;background:#fff">
+  <div style="min-width:680px">
+    <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,0.7fr) minmax(0,0.7fr) minmax(0,0.7fr) minmax(0,1.2fr);column-gap:12px;padding:8px 14px;font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;border-bottom:1px solid var(--surface-alt);background:var(--bg)">
+      <div>Admin user</div><div>Role</div><div>Status</div><div>Created</div><div></div>
+    </div>
+    {% for row in screen.rows %}
+    <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,0.7fr) minmax(0,0.7fr) minmax(0,0.7fr) minmax(0,1.2fr);column-gap:12px;padding:11px 14px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+      <div style="display:flex;align-items:center;gap:9px;min-width:0">
+        <div class="client-avatar" style="width:26px;height:26px;font-size:12px;flex:none">{{ row.name|slice(0,1)|upper }}</div>
+        <div style="min-width:0">
+          <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.name }}{% if row.isSelf %} <span style="font-weight:600;color:var(--text-faint);font-size:10.5px">(you)</span>{% endif %}</div>
+          <div style="font-size:10.5px;color:var(--text-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.email }}</div>
+        </div>
+      </div>
+      <div style="text-transform:capitalize">{{ row.role|replace({'_': ' '}) }}</div>
+      <div><span class="status-pill status-{{ row.status }}">{{ row.status }}</span></div>
+      <div style="color:var(--text-muted)">{{ row.createdLabel }}</div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+        {% if 'admin_users.update' in permissions %}
+        <button type="button" class="link-btn" @click="open('reset-password', {id:{{ row.id }},name:'{{ row.name|e('js') }}',new_password:''})">Reset password</button>
+        {% endif %}
+        {% if not row.isSelf %}
+          {% if row.status == 'active' and 'admin_users.disable' in permissions %}
+          <form method="post" action="/admin/admin-users/{{ row.id }}/status">
+            <input type="hidden" name="status" value="disabled">
+            <button type="submit" class="link-btn" style="color:var(--danger)">Disable</button>
+          </form>
+          {% elseif row.status != 'active' and 'admin_users.update' in permissions %}
+          <form method="post" action="/admin/admin-users/{{ row.id }}/status">
+            <input type="hidden" name="status" value="active">
+            <button type="submit" class="link-btn">{{ row.status == 'locked' ? 'Unlock' : 'Activate' }}</button>
+          </form>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div style="padding:8px 14px;font-size:11px;color:var(--text-faint);border-top:1px solid var(--surface-alt)">{{ screen.rows|length }} result{{ screen.rows|length == 1 ? '' : 's' }}</div>
+</div>
+{% endif %}
+
+<div style="margin-top:16px;font-size:11px;color:var(--text-faint);max-width:640px">
+  Name, email and role are fixed once an admin user is created — only its password and account
+  status can be changed afterward. To correct a name, email or role, disable the account and
+  create a new one.
+</div>
+
+{# ---------- modals ---------- #}
+<div x-show="modal !== null" x-cloak class="modal-backdrop" @click.self="close()" @keydown.escape.window="close()">
+
+  <template x-if="modal === 'create-user'">
+    <div class="modal-card">
+      <div class="modal-title">New admin user</div>
+      <div class="modal-subtitle">Name, email and role cannot be changed after creation.</div>
+      <form method="post" action="/admin/admin-users">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label>Email</label><input type="email" name="email" x-model="form.email" required></div>
+          <div class="form-field">
+            <label>Role</label>
+            <select name="role" x-model="form.role">
+              <option value="support_agent">Support agent</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div class="form-field"><label>Initial password</label><input type="password" name="password" x-model="form.password" required minlength="10" autocomplete="new-password"></div>
+        </div>
+        <div class="form-field-hint">At least 10 characters. Share it with the new admin through a separate, secure channel — it is never shown again here.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create admin user</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'reset-password'">
+    <div class="modal-card">
+      <div class="modal-title">Reset password</div>
+      <div class="modal-subtitle" x-text="form.name"></div>
+      <form method="post" :action="'/admin/admin-users/' + form.id + '/reset-password'">
+        <div class="form-grid">
+          <div class="form-field span-2"><label>New password</label><input type="password" name="new_password" x-model="form.new_password" required minlength="10" autocomplete="new-password"></div>
+        </div>
+        <div class="form-field-hint">At least 10 characters.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Reset password</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+</div>
+</div>
+{% endblock %}
+
+{% block alpine_components %}
+<script src="/admin-users.js"></script>
+{% endblock %}

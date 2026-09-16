@@ -16,6 +16,341 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 27 — Admin Module Views and Panels
+
+### Audit Logs screen — read-only by design, not asked
+
+**Note.** Same standing instruction as every screen since Vouchers. One judgment call is recorded
+rather than asked, following directly from CLAUDE.md's own wording rather than being a
+preference: the Audit Logs screen has **no write actions**. CLAUDE.md's admin panel
+responsibilities list says "Viewing audit logs" — never "managing" or "editing" them — and an
+audit trail that could be altered through the very panel it audits would defeat its purpose as a
+tamper-evident record. "Full functionality, not read-only" is honoured as real filtering
+(actor type, action, client, target type, target id), pagination, and expandable before/after/
+context detail over the genuine `audit_logs` table — not a fabricated write action invented only
+to satisfy the letter of the instruction. This is the second screen this session to make this
+exact call, for the identical reason: the Vouchers screen's redemption-history section was made
+read-only for the same reason (confirm/release belong to the checkout lifecycle, not admin
+override).
+
+Because there is no write surface, RBAC validation for this screen necessarily differs in shape
+from every other screen's: there is no 403 case to prove. Validation instead confirmed both
+`admin` and `support_agent` can view the screen, since `audit_logs.view` is a `.view`-suffixed
+permission every role holds under `AdminPermissions::for()` — the correct and only gate this
+screen has.
+
+**Status:** No questions required.
+
+---
+
+### Admin Users screen — ordering call and no new decision questions
+
+**Note.** Same standing instruction as Vouchers/Clients: full read+write, real DB validation,
+RBAC validation, end-to-end tests, Playwright screenshots. One ordering judgment call is recorded
+here since it changed which screen came next, not because it needed the user's input — it follows
+directly from objective codebase facts, not a preference:
+
+**The literal next sidebar item (Notifications) has no backing module.** `src/Modules/Notifications/`
+does not exist; the entire client-callback delivery system is `.claude/docs/Phases.md`'s **Phase
+28** ("Client callbacks / outbound notifications"), still ☐ not started. Every screen built so far
+in Phase 27 wired existing Application-layer handlers — none invented a new business domain at
+the admin layer. Building a Notifications screen now would require inventing that domain (delivery
+records, retry policy, signing) out of phase order, which no other Phase 27 screen has done.
+**Admin Users** was built instead: it already has a complete Domain aggregate (`AdminUser` +
+`AdminUserRepository`, built during this phase's own auth/RBAC increment) with no Application-layer
+CRUD wired to it yet — a legitimate "add orchestration over an existing domain" task, the same
+shape as every other screen, just with the CRUD handlers still to write. Audit logs and Error logs
+were passed over for the same reason in reverse: their tables and write-only ports exist, but
+building an admin view for them needs a **new read query**, not just new orchestration — still
+buildable, but a bigger lift than Admin Users, so it comes later. Settings has no backing domain
+of any kind, not even in the design mockup's own copy, and CLAUDE.md never defines an
+admin-editable settings concept — likely out of scope entirely, to be confirmed when reached.
+
+Within the Admin Users screen itself, one implementation judgment call follows directly from a
+real domain constraint rather than being a preference: `AdminUser`'s `name`, `email`, and `role`
+are `readonly` — nothing in the codebase can change them after creation. The screen does not add
+mutators to make them editable (that would be inventing new RBAC-aggregate behavior); it disables
+the account and directs the admin to create a replacement instead, and says so in the UI.
+
+**Status:** No questions required.
+
+---
+
+### Clients screen — no new decision questions
+
+**Note.** Same standing instruction as the Vouchers screen: full read+write, real DB validation,
+RBAC validation, end-to-end tests, Playwright screenshots, no read-only increment. No new
+decision-dependent question arose. Two judgment calls were made and are recorded here rather than
+asked, since each follows directly from an existing constraint rather than being a genuine
+either/or:
+
+1. **"Environment" is derived, not a real field.** The design reference's mock data has a
+   per-client `mode`; the actual domain has no client-level mode, only a `ApiKeyPrefix` on each
+   individual API key. Resolution: a client with any active live key reads "Live"; with only
+   active test keys, "Test"; with none, "No active keys".
+2. **A one-time plaintext API key is rendered directly (200), never via a redirect.** Every other
+   write action on every Phase 27 screen redirects with a `?success=`/`?error=` flash message —
+   but a client's or key's plaintext secret can never appear in a URL (browser history, access
+   logs, `Referer` headers). `AdminClientsCreateAction` and `AdminClientApiKeyIssueAction` render
+   the screen's full context directly in the response body instead.
+
+**Status:** No questions required.
+
+---
+
+### Vouchers screen — no new decision questions
+
+**Note.** The user's instruction when starting this screen fixed the approach for every remaining
+Phase 27 screen up front: *"complete functionality, not read-only; real DB validation; RBAC
+validation; end-to-end tests; Playwright screenshots; do not move on until the screen is fully
+validated."* That settles what would otherwise have been this screen's Q1 (build scope), and no
+other decision-dependent choice arose: every voucher behaviour question the screen could have
+raised is already answered by `.claude/Voucher.md` (the project's source of truth for voucher
+rules) and was followed rather than re-decided — notably that `fixed` is not a legal *default*
+discount type, that a cap applies only to a percentage override, and that a `none` default with
+no override rows discounts nothing anywhere.
+
+One scope judgement was made and is recorded here rather than asked, since it follows directly
+from an existing rule rather than being a genuine either/or: the redemption history is
+**read-only**. `ConfirmVoucherRedemptionHandler` / `ReleaseVoucherRedemptionHandler` exist, but
+they belong to the checkout lifecycle (`.claude/Voucher.md` §7) — exposing them as manual admin
+buttons would let an admin desynchronise a redemption from the payment that owns it.
+
+**Status:** No questions required.
+
+---
+
+### Providers screen — Q2: secret-reveal scope
+
+**Question:** CLAUDE.md is explicit: "No sensitive provider credentials or API secrets should be
+displayed in plain text." Phases.md's scope line for this screen still says "Reveal/Hide
+secrets." Proposed resolution: "Reveal" only toggles between full masking (••••) and showing the
+last 4 digits (already exposed via `ProviderAccountSummary.secretLastFour`) — never the full
+decrypted secret, even though a decrypt path (`ProviderAccountCredentials::secretFor()`) exists
+internally for provider adapters to call the real provider APIs.
+
+**Options:**
+
+1. **Last 4 digits only, never full plaintext** — matches CLAUDE.md's explicit rule; the admin UI
+   never touches the full secret.
+2. Something else (e.g. a break-glass full reveal with extra confirmation/audit logging).
+
+**Recommended:** Option 1 — CLAUDE.md's rule is unambiguous and this is the only interpretation of
+"Reveal/Hide" that doesn't contradict it.
+
+**Selected:** Option 1 — last 4 digits only, never full plaintext.
+
+**Status:** Decided
+
+---
+
+### Providers screen — Q1: build-scope approach
+
+**Question:** The Providers screen needs two tabs (Accounts, By-groups) and — per Phases.md — a
+create/edit/reveal-secret write layer. Research confirmed every needed Application handler
+already exists (create/edit account, rotate secret, configure group, set group priority) —
+nothing new to design, unlike Packaging where new orchestrator handlers had to be built. How
+should this screen's build be scoped?
+
+**Options:**
+
+1. **Full read+write in one pass** — build both tabs read-only AND all write actions (create/edit
+   account, rotate secret, create/configure group, reorder priority) together, then validate
+   end-to-end with screenshots before calling it done. Reasonable here since — unlike Packaging —
+   no new orchestration logic needs inventing; it's all thin wiring over existing handlers.
+2. Read-only first, then write (same split as Packaging) — safer pacing but adds a checkpoint
+   this screen may not need, given nothing new needs designing.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — full read+write in one pass.
+
+**Status:** Decided
+
+---
+
+### Packaging & Pricing screen — scope split into Increment A / Increment B (user-specified)
+
+**Note:** recorded here retroactively — this decision was made during the Packaging & Pricing
+screen's build (between the Customers screen and the Providers screen) but was not logged to this
+file at the time; backfilled now for completeness.
+
+**Question (asked via the read-only-vs-full-write scope question when starting Packaging &
+Pricing):** Packaging & Pricing is far more complex than the prior screens (two master-detail
+tabs, drag-reorder, A/B price-list toggles, provider provisioning, several create/edit modals).
+Should it be built read-only first, or read+write immediately?
+
+**User's verbatim instruction:** "Choose Option 1 for this increment, but this is only the first
+half of the Packaging & Pricing screen. Important: Do not defer the write/edit functionality to a
+future phase. After the read-only version of both tabs is implemented and validated, continue
+immediately in the next increment of Phase 27 and complete the full Packaging & Pricing screen.
+Phase 27 must include both: Increment A — Read-only foundation (Packages master-detail, Pricing
+Groups master-detail, real live-queried data, resolved pricing visibility, A/B price-list
+visibility, provider setup/status visibility, screenshots and validation); Increment B — Full
+management functionality (create package, edit package, create/edit pricing groups, create/edit
+price lists, package price management, drag-to-reorder package priority where designed, A/B
+price-list enable/disable controls, provider provisioning actions where designed, all required
+create/edit modals, validation and permission checks, tests, screenshots of the completed
+interactive states). Do not mark the Packaging & Pricing screen complete after the read-only
+increment. The read-only increment is only to validate the structure and UX before adding
+mutations. Once Increment A is validated, proceed directly to Increment B within Phase 27."
+
+**Selected:** Increment A (read-only, both tabs) built and validated first; Increment B (full
+create/edit/reorder/enable-disable, manual provider linking) built immediately after in the same
+phase, per the instruction above. Both increments are complete.
+
+**Status:** Decided and fully implemented.
+
+---
+
+### Database design confirmation — admin auth + RBAC slice
+
+**Proposed:** `admin_users` (id, name, email UNIQUE, `password_hash` via PHP `password_hash()`,
+`role` ENUM('admin','support_agent'), `status` ENUM('active','disabled','locked'), timestamps);
+`admin_sessions` (id, admin_user_id FK, `token_hash` CHAR(64) UNIQUE — sha256 of the cookie
+token, matching `ClientApiKey`'s existing hash-and-compare pattern, per Q3's DB-backed hashed
+token decision — ip, user_agent, expires_at, revoked_at, timestamps); `admin_login_attempts` (id,
+email, admin_user_id nullable FK, ip, succeeded, created_at, indexed on `(email, created_at)` for
+lockout checks).
+
+**Open question:** whether roles/permissions are DB-backed tables (`admin_roles`,
+`admin_permissions`, `admin_role_permissions`) or code-defined (`admin_users.role` as the only
+role storage; the full permission-key-to-role matrix lives in one PHP class, checked at both UI
+and backend layers).
+
+**Recommended:** code-defined — CLAUDE.md requires only two fixed roles and no admin-editable
+permission UI is in scope; a DB-backed permission system would be speculative flexibility nobody
+asked for.
+
+**Selected:** Code-defined (Option 1) — confirmed as proposed, no `admin_roles`/`admin_permissions`
+tables; `admin_users.role` is the only role storage, permissions live in a PHP class.
+
+**Status:** Confirmed — migrations to be created for this slice only (incremental schema
+strategy, Q1).
+
+---
+
+### Q5 — What the active-client switcher and Test-mode toggle actually scope
+
+**Question:** The design's top bar has an active-client switcher and a Test-mode toggle. What
+should these actually control?
+
+**Options:**
+
+1. **Global roles, UI-scoped switcher** — `admin`/`support_agent` are global roles spanning all
+   clients (per CLAUDE.md's "client scope if applicable" permission dimension — scoping is
+   per-action, not per-session). The client switcher just sets a convenience filter for what the
+   current screens display; the Test-mode toggle filters data to test vs. live key-mode,
+   mirroring the client API's existing test/live `key_mode`. Permission checks stay independent
+   of whichever client is "active" in the UI.
+2. Session-scoped to one client — an admin session is locked to exactly one active client at a
+   time (chosen at login or via the switcher), and every query/permission check is implicitly
+   scoped to it, closer to how the client-facing API's `ClientContext` works today.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — global roles with a UI-scoped switcher; permission checks stay
+independent of the active-client display filter.
+
+**Status:** Decided
+
+---
+
+### Q4 — View templating approach
+
+**Question:** CLAUDE.md calls for "server-rendered PHP views if needed" for the admin panel but
+doesn't mandate a template engine. How should views be rendered?
+
+**Options presented:**
+
+1. Plain PHP templates — views are plain `.php` files using native PHP for output, no new
+   Composer dependency.
+2. A lightweight template engine (`league/plates` was offered as the example) — cleaner
+   separation of logic and markup, layout inheritance, automatic escaping by default.
+
+**Recommended:** Option 1 (plain PHP templates)
+
+**Selected:** **Twig** (`twig/twig`) — a user-specified choice outside the two offered options.
+Symfony's own template engine: layout inheritance, automatic output escaping by default, a large
+and well-documented ecosystem. Adds one new Composer dependency.
+
+**Status:** Decided
+
+---
+
+### Q3 — Admin session mechanism
+
+**Question:** CLAUDE.md requires "store session tokens hashed if stored in database" and lists
+`admin_sessions` among the required tables. How should admin login sessions actually be
+implemented?
+
+**Options:**
+
+1. **DB-backed hashed token** — login issues a random token sent to the browser as an HTTP-only
+   cookie; only its hash is stored in `admin_sessions`. Every request looks up the session by
+   hash. Gives explicit logout, session listing/revocation, and expiry — matches CLAUDE.md's
+   explicit wording and the required `admin_sessions` table directly.
+2. Native PHP sessions — PHP's built-in `$_SESSION` (file-based by default), with
+   `admin_sessions` used only for audit/logging rather than as the actual auth mechanism. Simpler
+   to wire up, but native sessions aren't naturally hashed/DB-backed the way CLAUDE.md describes,
+   and revoking a specific session from the admin UI is harder.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — DB-backed hashed token.
+
+**Status:** Decided
+
+---
+
+### Q2 — Headless-browser screenshot tooling
+
+**Question:** This phase introduces the Visual and Output Verification Rule's required
+headless-browser screenshot capability — needed for every future phase's visual evidence too, not
+just this one. Which tool should be installed?
+
+**Options:**
+
+1. **Playwright via Node** — industry-standard headless browser automation, actively maintained,
+   handles modern JS/Alpine.js rendering reliably. Requires Node.js + npm as a dev dependency
+   alongside the PHP stack, used only for screenshots/smoke tests, not part of the runtime app.
+2. Puppeteer via Node — similar to Playwright but Chrome-only and somewhat less actively
+   developed. Also requires Node.js.
+3. chrome-php (pure PHP) — drives headless Chrome via the DevTools protocol, no Node.js
+   dependency, stays entirely inside the existing PHP toolchain, but is a smaller, less
+   battle-tested project than Playwright/Puppeteer.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — Playwright via Node.
+
+**Status:** Decided
+
+---
+
+### Q1 — How to sequence this phase's implementation
+
+**Question:** Phase 27 is the largest phase on the roadmap (12–20h estimated) — admin auth, an
+RBAC engine, and roughly ten server-rendered screens, plus new headless-browser screenshot
+tooling this phase introduces. How should the work be sequenced?
+
+**Options:**
+
+1. **Incremental, screen by screen** — build admin auth + RBAC + the shell first, validate the
+   screenshot tooling on one trivial screen, then build and screenshot each remaining screen one
+   at a time, reporting progress as I go. Keeps each diff reviewable and surfaces problems (a
+   broken shell layout, a screenshot-tooling issue) early rather than after everything is built.
+2. Single pass, screenshot at the end — build everything (auth, RBAC, every screen) in one
+   continuous pass, then run the screenshot tool once at the end over every screen.
+
+**Recommended:** Option 1
+
+**Selected:** Option 1 — incremental, screen by screen.
+
+**Status:** Decided
+
+---
+
 ## Phase 26 — Subscriptions module
 
 ### Q4 — Is `subscriptions.client_user_ref` mandatory?

@@ -1,0 +1,220 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Clients — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div x-data="clientsModals()">
+{% if error %}<div class="form-error">{{ error }}</div>{% endif %}
+{% if success and not new_api_key %}<div class="form-success">{{ success }}</div>{% endif %}
+
+{% if new_api_key %}
+<div class="form-success" style="display:flex;flex-direction:column;gap:8px">
+  <div><strong>{{ success }}</strong> — copy this API key now. For your security, it will never be shown again.</div>
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <code id="new-api-key-value" style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:6px 10px;word-break:break-all">{{ new_api_key.plaintext_token }}</code>
+    <button type="button" class="btn btn-secondary btn-sm" onclick="copyToClipboard(document.getElementById('new-api-key-value').textContent, this)">Copy</button>
+  </div>
+</div>
+{% endif %}
+
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+  <h1 class="page-title" style="font-size:22px">Clients</h1>
+  <span style="flex:1"></span>
+  {% if 'clients.create' in permissions %}
+  <button type="button" class="btn btn-primary btn-sm" @click="open('create-client', {slug:'',name:'',default_currency:'USD',default_country:'',timezone:'UTC',environment:'test'})">+ New client</button>
+  {% endif %}
+</div>
+
+<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+  <a href="/admin/clients?filter=all" class="stat-tab{{ screen.activeFilter == 'all' ? ' active' : '' }}" style="text-decoration:none">
+    <div class="stat-tab-label">All</div>
+    <div class="stat-tab-value">{{ screen.stats.all }}</div>
+  </a>
+  <a href="/admin/clients?filter=live" class="stat-tab{{ screen.activeFilter == 'live' ? ' active' : '' }}" style="text-decoration:none">
+    <div class="stat-tab-label">Live</div>
+    <div class="stat-tab-value">{{ screen.stats.live }}</div>
+  </a>
+  <a href="/admin/clients?filter=disabled" class="stat-tab{{ screen.activeFilter == 'disabled' ? ' active' : '' }}" style="text-decoration:none">
+    <div class="stat-tab-label">Disabled</div>
+    <div class="stat-tab-value">{{ screen.stats.disabled }}</div>
+  </a>
+</div>
+
+{% if screen.rows is empty %}
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+  <div style="font-size:12.5px;font-weight:700;margin-bottom:4px">No clients{{ screen.activeFilter != 'all' ? ' in this view' : '' }}</div>
+</div>
+{% else %}
+<div style="border:1px solid var(--border-light);border-radius:9px;overflow-x:auto;background:#fff;margin-bottom:20px">
+  <div style="min-width:720px">
+    <div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,0.8fr) minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.8fr);column-gap:12px;padding:8px 14px;font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;border-bottom:1px solid var(--surface-alt);background:var(--bg)">
+      <div>Client</div><div>Environment</div><div>Enabled providers</div><div>Status</div><div>Created</div>
+    </div>
+    {% for row in screen.rows %}
+    <a href="/admin/clients?filter={{ screen.activeFilter }}&client={{ row.id }}" style="text-decoration:none;color:inherit;display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,0.8fr) minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.8fr);column-gap:12px;padding:11px 14px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center{{ row.selected ? ';background:var(--accent-soft)' : '' }}">
+      <div style="display:flex;align-items:center;gap:9px;min-width:0">
+        <div class="client-avatar" style="width:26px;height:26px;font-size:12px;flex:none">{{ row.name|slice(0,1)|upper }}</div>
+        <div style="min-width:0">
+          <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.name }}</div>
+          <div style="font-size:10.5px;color:var(--text-faint);font-family:ui-monospace,Menlo,monospace">{{ row.slug }}</div>
+        </div>
+      </div>
+      <div><span class="status-pill status-{{ row.environment == 'Live' ? 'active' : (row.environment == 'Test' ? 'pending' : 'disabled') }}">{{ row.environment }}</span></div>
+      <div style="color:oklch(40% 0.01 264);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.enabledProvidersLabel }}</div>
+      <div><span class="status-pill status-{{ row.status }}">{{ row.status }}</span></div>
+      <div style="color:var(--text-muted)">{{ row.createdLabel }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  <div style="padding:8px 14px;font-size:11px;color:var(--text-faint);border-top:1px solid var(--surface-alt)">{{ screen.rows|length }} result{{ screen.rows|length == 1 ? '' : 's' }}</div>
+</div>
+
+{% set d = screen.selected %}
+{% if d %}
+<div style="border:1px solid var(--border-light);border-radius:9px;background:oklch(95% 0.04 264 / 0.35);padding:16px 18px">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap">
+    <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none"></span>
+    <div style="font-size:16px;font-weight:700">{{ d.name }}</div>
+    <span style="font-size:11px;color:var(--text-faint);font-family:ui-monospace,Menlo,monospace">{{ d.slug }}</span>
+    <span class="status-pill status-{{ d.status }}">{{ d.status }}</span>
+    <span class="status-pill status-{{ d.environment == 'Live' ? 'active' : (d.environment == 'Test' ? 'pending' : 'disabled') }}">{{ d.environment }}</span>
+    <span style="flex:1"></span>
+    {% if 'clients.update' in permissions %}
+    <button type="button" class="link-btn" @click="open('edit-client', {id:{{ d.id }},name:'{{ d.name|e('js') }}',default_currency:'{{ d.defaultCurrency }}',default_country:'{{ d.defaultCountry ?? '' }}',timezone:'{{ d.timezone|e('js') }}'})">Edit client</button>
+    <form method="post" action="/admin/clients/{{ d.id }}/status" style="display:inline">
+      <input type="hidden" name="action" value="{{ d.isActive ? 'disable' : 'enable' }}">
+      <button type="submit" class="btn btn-secondary btn-sm">{{ d.isActive ? 'Disable' : 'Enable' }}</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="info-card-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px;margin-bottom:16px">
+    <div><div class="info-card-label">Default currency</div><div class="info-card-value">{{ d.defaultCurrency }}</div></div>
+    <div><div class="info-card-label">Default country</div><div class="info-card-value">{{ d.defaultCountry ?? 'None' }}</div></div>
+    <div><div class="info-card-label">Timezone</div><div class="info-card-value">{{ d.timezone }}</div></div>
+    <div><div class="info-card-label">Created</div><div class="info-card-value">{{ d.createdLabel }}</div></div>
+    <div><div class="info-card-label">Client ID</div><div class="info-card-value">{{ d.id }}</div></div>
+  </div>
+
+  <div style="display:flex;align-items:baseline;gap:8px">
+    <div class="section-eyebrow" style="margin-bottom:0">API keys</div>
+    {% if 'client_api_keys.create' in permissions %}
+    <button type="button" class="link-btn" @click="open('issue-key', {client_id:{{ d.id }},environment:'test',label:''})">+ Issue key</button>
+    {% endif %}
+  </div>
+  <div style="border:1px solid var(--border-light);border-radius:9px;overflow-x:auto;background:#fff;margin-top:8px;margin-bottom:16px">
+    <div style="min-width:600px">
+      {% if 'client_api_keys.view' in permissions %}
+      {% for key in d.apiKeys %}
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--surface-alt)">
+        <div style="min-width:0;flex:1">
+          <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+            <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px">{{ key.displayToken }}</span>
+            <span style="font-size:9.5px;font-weight:700;color:var(--text-faint);text-transform:uppercase">{{ key.mode }}</span>
+            <span class="status-pill status-{{ key.status }}">{{ key.status }}</span>
+            {% if key.label %}<span style="font-size:10.5px;color:var(--text-faint)">{{ key.label }}</span>{% endif %}
+          </div>
+          <div style="font-size:10.5px;color:var(--text-faint)">created {{ key.createdLabel }}{% if key.lastUsedLabel %} &middot; last used {{ key.lastUsedLabel }}{% endif %}{% if key.expiresLabel %} &middot; expires {{ key.expiresLabel }}{% endif %}</div>
+        </div>
+        {% if key.isActive and 'client_api_keys.revoke' in permissions %}
+        <form method="post" action="/admin/clients/{{ d.id }}/api-keys/{{ key.keyId }}/revoke" onsubmit="return confirm('Revoke this API key? This cannot be undone.')">
+          <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
+        </form>
+        {% endif %}
+      </div>
+      {% else %}
+      <div style="padding:14px;font-size:12px;color:var(--text-faint)">No API keys.</div>
+      {% endfor %}
+      {% else %}
+      <div style="padding:14px;font-size:12px;color:var(--text-faint)">You do not have permission to view API keys.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">Enabled providers</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    {% for name in d.enabledProviders %}<span style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:var(--surface-alt);color:oklch(35% 0.01 264)">{{ name }}</span>{% else %}<span style="font-size:12px;color:var(--text-faint)">No active provider accounts. Connect one from the Providers screen.</span>{% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+{# ---------- modals ---------- #}
+<div x-show="modal !== null" x-cloak class="modal-backdrop" @click.self="close()" @keydown.escape.window="close()">
+
+  <template x-if="modal === 'create-client'">
+    <div class="modal-card">
+      <div class="modal-title">New client</div>
+      <div class="modal-subtitle">A client is an application connecting to Gomrok. It gets its own providers, packages and pricing groups — set those up after the client exists.</div>
+      <form method="post" action="/admin/clients">
+        <div class="form-grid">
+          <div class="form-field"><label>Client name</label><input type="text" name="name" x-model="form.name" required placeholder="Acme Inc"></div>
+          <div class="form-field"><label>Client ID (slug)</label><input type="text" name="slug" x-model="form.slug" required placeholder="acme-inc"></div>
+          <div class="form-field"><label>Default currency</label><input type="text" name="default_currency" x-model="form.default_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field">
+            <label>Environment</label>
+            <select name="environment" x-model="form.environment">
+              <option value="test">Test</option>
+              <option value="live">Live</option>
+            </select>
+          </div>
+          <div class="form-field"><label>Default country (optional)</label><input type="text" name="default_country" x-model="form.default_country" maxlength="2" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Timezone</label><input type="text" name="timezone" x-model="form.timezone"></div>
+        </div>
+        <div class="form-field-hint">The first API key is issued automatically in this environment — you'll get one chance to copy it.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create client</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'edit-client'">
+    <div class="modal-card">
+      <div class="modal-title">Edit client</div>
+      <form method="post" :action="'/admin/clients/' + form.id">
+        <div class="form-grid">
+          <div class="form-field span-2"><label>Client name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label>Default currency</label><input type="text" name="default_currency" x-model="form.default_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Default country (blank = none)</label><input type="text" name="default_country" x-model="form.default_country" maxlength="2" style="text-transform:uppercase"></div>
+          <div class="form-field span-2"><label>Timezone</label><input type="text" name="timezone" x-model="form.timezone"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'issue-key'">
+    <div class="modal-card">
+      <div class="modal-title">Issue API key</div>
+      <div class="modal-subtitle">You'll get one chance to copy the new key after this.</div>
+      <form method="post" :action="'/admin/clients/' + form.client_id + '/api-keys'">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Environment</label>
+            <select name="environment" x-model="form.environment">
+              <option value="test">Test</option>
+              <option value="live">Live</option>
+            </select>
+          </div>
+          <div class="form-field"><label>Label (optional)</label><input type="text" name="label" x-model="form.label" placeholder="mobile app"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Issue key</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+</div>
+</div>
+{% endblock %}
+
+{% block alpine_components %}
+<script src="/clients.js"></script>
+{% endblock %}

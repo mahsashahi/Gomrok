@@ -37,6 +37,11 @@ final readonly class InMemorySubscriptionDirectory implements SubscriptionDirect
         return array_map($this->toSummary(...), $this->subscriptions->forClientUser($clientId, $clientUserRef));
     }
 
+    public function forClient(int $clientId): array
+    {
+        return array_map($this->toSummary(...), $this->subscriptions->forClient($clientId));
+    }
+
     private function toSummary(Subscription $subscription): SubscriptionSummary
     {
         return new SubscriptionSummary(

@@ -21,7 +21,7 @@ final readonly class PdoVoucherCurrencyDiscountRepository implements VoucherCurr
         $now = gmdate('Y-m-d H:i:s');
         $statement = $this->pdo->prepare(
             'INSERT INTO voucher_currency_discounts (voucher_id, currency_code, discount_type, percent_bp, amount_minor, max_discount_minor, created_at, updated_at)
-             VALUES (:voucher_id, :currency_code, :discount_type, :percent_bp, :amount_minor, :max_discount_minor, :now, :now)
+             VALUES (:voucher_id, :currency_code, :discount_type, :percent_bp, :amount_minor, :max_discount_minor, :created_at, :updated_at)
              ON DUPLICATE KEY UPDATE discount_type = VALUES(discount_type), percent_bp = VALUES(percent_bp),
                 amount_minor = VALUES(amount_minor), max_discount_minor = VALUES(max_discount_minor), updated_at = VALUES(updated_at)',
         );
@@ -32,7 +32,8 @@ final readonly class PdoVoucherCurrencyDiscountRepository implements VoucherCurr
             'percent_bp' => $discount->percentBp,
             'amount_minor' => $discount->amountMinor,
             'max_discount_minor' => $discount->maxDiscountMinor,
-            'now' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
         ]);
     }
 

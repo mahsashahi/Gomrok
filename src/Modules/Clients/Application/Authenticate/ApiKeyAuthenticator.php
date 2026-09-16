@@ -92,7 +92,7 @@ final readonly class ApiKeyAuthenticator implements ClientAuthenticator
             $client->defaultCurrency,
             $client->defaultCountry,
             $client->timezone,
-            $key->prefix()->value,
+            $key->prefix()->mode(),
         ));
     }
 

@@ -1,0 +1,319 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Vouchers — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div x-data="vouchersModals()">
+{% if error %}<div class="form-error">{{ error }}</div>{% endif %}
+{% if success %}<div class="form-success">{{ success }}</div>{% endif %}
+
+{% if screen is null %}
+  <h1 class="page-title" style="font-size:22px">Vouchers</h1>
+  <p style="color:var(--text-muted);font-size:14px">No clients exist yet — create one from the Clients screen.</p>
+{% else %}
+  <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+    <h1 class="page-title" style="font-size:22px">Vouchers</h1>
+    <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-muted);background:var(--surface-alt);border:1px solid var(--border);border-radius:5px;padding:3px 7px">client {{ active_client.id }}</span>
+    <span style="flex:1"></span>
+    {% if 'vouchers.create' in permissions %}
+    <button type="button" class="btn btn-primary btn-sm" @click="open('create-voucher', {code:'',name:'',description:'',valid_from:'',valid_until:'',first_purchase_only:false,min_purchase_amount:'',min_purchase_currency:'{{ active_client.defaultCurrency }}',default_discount_type:'none',default_percent:''})">+ New voucher</button>
+    {% endif %}
+  </div>
+
+  {% if screen.vouchers is empty %}
+  <div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+    <div style="font-size:12.5px;font-weight:700;margin-bottom:4px">No vouchers yet</div>
+    <div style="font-size:11.5px;color:var(--text-muted)">This client has no vouchers configured.</div>
+  </div>
+  {% else %}
+  <div class="master-detail">
+    <div class="master-panel">
+      <div class="master-panel-header"><div class="master-eyebrow">Vouchers ({{ screen.vouchers|length }})</div></div>
+      {% for v in screen.vouchers %}
+      <a href="/admin/vouchers?voucher={{ v.code }}" class="master-row{{ v.selected ? ' active' : '' }}">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+          <span class="master-row-title" style="font-family:ui-monospace,Menlo,monospace">{{ v.code }}</span>
+          <span class="status-pill status-{{ v.status|lower }}">{{ v.status }}</span>
+        </div>
+        <div class="master-row-sub">{{ v.discountLabel }} &middot; {{ v.usageLabel }}</div>
+      </a>
+      {% endfor %}
+    </div>
+
+    <div class="detail-panel">
+      {% set d = screen.selected %}
+      {% if d %}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap">
+        <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none"></span>
+        <div style="font-size:16px;font-weight:700;font-family:ui-monospace,Menlo,monospace">{{ d.code }}</div>
+        <span style="font-size:13px;color:var(--text-muted)">{{ d.name }}</span>
+        <span class="status-pill status-{{ d.status|lower }}">{{ d.status }}</span>
+        <span style="flex:1"></span>
+        {% if 'vouchers.update' in permissions %}
+        <button type="button" class="link-btn" @click="open('edit-voucher', {id:{{ d.id }},code:'{{ d.code }}',name:'{{ d.name|e('js') }}',description:{{ d.description ? ('\'' ~ d.description|e('js') ~ '\'') : "''" }},valid_from:'{{ d.validFrom ? d.validFrom|slice(0,10) : '' }}',valid_until:'{{ d.validUntil ? d.validUntil|slice(0,10) : '' }}',first_purchase_only:{{ d.firstPurchaseOnly ? 'true' : 'false' }},min_purchase_amount:{{ d.minPurchaseMinor is not null ? ("'" ~ (d.minPurchaseMinor / 100)|number_format(2, '.', '') ~ "'") : "''" }},min_purchase_currency:'{{ d.minPurchaseCurrency ?? active_client.defaultCurrency }}',default_discount_type:'{{ d.defaultDiscountType }}',default_percent:{{ d.defaultPercentBp is not null ? ("'" ~ (d.defaultPercentBp / 100) ~ "'") : "''" }},active:{{ d.isActive ? 'true' : 'false' }}})">Edit voucher</button>
+        {% endif %}
+        {% if (d.isActive and 'vouchers.disable' in permissions) or (not d.isActive and 'vouchers.update' in permissions) %}
+        <form method="post" action="/admin/vouchers/{{ d.id }}/status" style="display:inline">
+          <input type="hidden" name="code" value="{{ d.code }}">
+          <input type="hidden" name="action" value="{{ d.isActive ? 'disable' : 'enable' }}">
+          <button type="submit" class="btn btn-secondary btn-sm">{{ d.isActive ? 'Disable' : 'Enable' }}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% if d.description %}<div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;max-width:640px;padding-left:14px">{{ d.description }}</div>{% endif %}
+
+      <div class="info-card-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+        <div><div class="info-card-label">Default discount</div><div class="info-card-value">{{ d.defaultDiscountLabel }}</div></div>
+        <div><div class="info-card-label">Validity</div><div class="info-card-value">{{ d.validityLabel }}</div></div>
+        <div><div class="info-card-label">Min purchase</div><div class="info-card-value">{{ d.minPurchaseLabel ?? 'None' }}</div></div>
+        <div><div class="info-card-label">First purchase only</div><div class="info-card-value">{{ d.firstPurchaseOnly ? 'Yes' : 'No' }}</div></div>
+        <div><div class="info-card-label">Redeemed</div><div class="info-card-value">{{ d.redeemedCount }}</div></div>
+        <div><div class="info-card-label">Voucher ID</div><div class="info-card-value">{{ d.id }}</div></div>
+      </div>
+
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <div class="section-eyebrow" style="margin-bottom:0">Per-currency overrides</div>
+        {% if 'vouchers.update' in permissions %}
+        <button type="button" class="link-btn" @click="open('currency-discount', {id:{{ d.id }},code:'{{ d.code }}',currency:'',discount_type:'fixed',amount:'',percent:'',max_discount:''})">+ Add override</button>
+        {% endif %}
+      </div>
+      <div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff;margin-top:8px;margin-bottom:16px">
+        {% for row in d.currencyDiscounts %}
+        <div class="detail-row">
+          <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="detail-label" style="font-family:ui-monospace,Menlo,monospace">{{ row.currency }}</span>
+            <span style="font-size:11px;color:var(--text-faint);text-transform:uppercase">{{ row.discountType }}</span>
+            <span style="font-weight:700">{{ row.discountLabel }}</span>
+            {% if row.capLabel %}<span style="font-size:10.5px;color:var(--text-faint)">{{ row.capLabel }}</span>{% endif %}
+          </span>
+          {% if 'vouchers.update' in permissions %}
+          <span style="display:flex;gap:8px">
+            <button type="button" class="link-btn" @click="open('currency-discount', {id:{{ d.id }},code:'{{ d.code }}',currency:'{{ row.currency }}',discount_type:'{{ row.discountType }}',amount:{{ row.amountMinor is not null ? ("'" ~ (row.amountMinor / 100)|number_format(2, '.', '') ~ "'") : "''" }},percent:{{ row.percentBp is not null ? ("'" ~ (row.percentBp / 100) ~ "'") : "''" }},max_discount:{{ row.maxDiscountMinor is not null ? ("'" ~ (row.maxDiscountMinor / 100)|number_format(2, '.', '') ~ "'") : "''" }}})">Edit</button>
+            <form method="post" action="/admin/vouchers/{{ d.id }}/currency-discounts/{{ row.currency }}/remove" style="display:inline" onsubmit="return confirm('Remove the {{ row.currency }} override?')">
+              <input type="hidden" name="code" value="{{ d.code }}">
+              <button type="submit" class="link-btn" style="color:var(--danger)">Remove</button>
+            </form>
+          </span>
+          {% endif %}
+        </div>
+        {% else %}
+        <div style="padding:14px;font-size:12px;color:var(--text-faint)">
+          No per-currency overrides — the default discount applies in every currency{% if d.defaultDiscountType == 'none' %}, and since the default is <strong>none</strong> this voucher currently discounts nothing anywhere{% endif %}.
+        </div>
+        {% endfor %}
+      </div>
+
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <div class="section-eyebrow" style="margin-bottom:0">Eligibility</div>
+        {% if 'vouchers.update' in permissions %}
+        <button type="button" class="link-btn" @click="open('eligibility', {id:{{ d.id }},code:'{{ d.code }}',country:'{{ d.eligibilityPrefill.country }}',currency:'{{ d.eligibilityPrefill.currency }}',package:'{{ d.eligibilityPrefill.package }}',provider_account:'{{ d.eligibilityPrefill.provider_account }}',payment_method:'{{ d.eligibilityPrefill.payment_method }}',purchase_type:'{{ d.eligibilityPrefill.purchase_type }}',subscription_interval:'{{ d.eligibilityPrefill.subscription_interval }}'})">Edit eligibility</button>
+        {% endif %}
+      </div>
+      <div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff;margin-top:8px;margin-bottom:16px">
+        {% for g in d.eligibilityGroups %}
+        <div class="detail-row">
+          <span class="detail-label">{{ g.dimensionLabel }}</span>
+          <span style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">
+            {% for v in g.values %}<span style="font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--accent-soft);color:var(--accent-soft-text)">{{ v }}</span>{% endfor %}
+          </span>
+        </div>
+        {% else %}
+        <div style="padding:14px;font-size:12px;color:var(--text-faint)">Unrestricted — valid in every country, currency, package, provider, method and purchase type.</div>
+        {% endfor %}
+      </div>
+
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <div class="section-eyebrow" style="margin-bottom:0">Usage limits</div>
+        {% if 'vouchers.update' in permissions %}
+        <button type="button" class="link-btn" @click="open('usage-limits', {id:{{ d.id }},code:'{{ d.code }}',max_total_redemptions:{{ d.maxTotalRedemptions ?? "''" }},max_per_user:{{ d.maxPerUser ?? "''" }},max_per_client:{{ d.maxPerClient ?? "''" }}})">Edit limits</button>
+        {% endif %}
+      </div>
+      <div class="info-card-grid" style="margin-top:8px;margin-bottom:16px">
+        <div class="info-card"><div class="info-card-label">Total redemptions</div><div class="info-card-value">{{ d.maxTotalRedemptions ?? 'Unlimited' }}</div></div>
+        <div class="info-card"><div class="info-card-label">Per user</div><div class="info-card-value">{{ d.maxPerUser ?? 'Unlimited' }}</div></div>
+        <div class="info-card"><div class="info-card-label">Per client</div><div class="info-card-value">{{ d.maxPerClient ?? 'Unlimited' }}</div></div>
+      </div>
+
+      {% if 'voucher_redemptions.view' in permissions %}
+      <div class="section-eyebrow">Redemption history</div>
+      <div style="border:1px solid var(--border-light);border-radius:9px;overflow-x:auto;background:#fff;margin-bottom:12px">
+        <div style="min-width:640px">
+          <div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr);column-gap:12px;padding:8px 14px;font-size:10px;font-weight:700;color:var(--text-faint);text-transform:uppercase;border-bottom:1px solid var(--surface-alt);background:var(--bg)">
+            <div>User / attempt</div><div>Status</div><div>Price</div><div>Discount</div><div>Payable</div><div>Reserved</div>
+          </div>
+          {% for r in d.redemptions %}
+          <div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr);column-gap:12px;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--surface-alt);align-items:center">
+            <div style="min-width:0">
+              <div style="font-weight:700">{{ r.clientUserRef ?? '—' }}</div>
+              <div style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--text-faint);word-break:break-all">{{ r.attemptReference }}</div>
+            </div>
+            <div><span class="status-pill status-{{ r.status|lower }}">{{ r.status }}</span></div>
+            <div>{{ r.priceLabel }}</div>
+            <div>
+              <span style="font-weight:700">{{ r.appliedDiscountLabel }}</span>
+              {% if r.wasClamped %}<div style="font-size:10px;color:var(--text-faint)">capped from {{ r.nominalDiscountLabel }}</div>{% endif %}
+            </div>
+            <div style="font-weight:700">{{ r.payableLabel }}</div>
+            <div style="font-size:11px;color:var(--text-muted)">{{ r.reservedAt|slice(0,16) }}</div>
+          </div>
+          {% else %}
+          <div style="padding:16px 14px;font-size:12px;color:var(--text-faint)">No redemptions yet.</div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+
+{# ---------- modals ---------- #}
+<div x-show="modal !== null" x-cloak class="modal-backdrop" @click.self="close()" @keydown.escape.window="close()">
+
+  <template x-if="modal === 'create-voucher'">
+    <div class="modal-card">
+      <div class="modal-title">Create voucher</div>
+      <div class="modal-subtitle">Eligibility rules, usage limits and per-currency overrides are set afterwards.</div>
+      <form method="post" action="/admin/vouchers">
+        <div class="form-grid">
+          <div class="form-field"><label>Code</label><input type="text" name="code" x-model="form.code" required placeholder="WELCOME10" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field span-2"><label>Description</label><textarea name="description" x-model="form.description" rows="2"></textarea></div>
+          <div class="form-field"><label>Valid from</label><input type="text" name="valid_from" x-model="form.valid_from" placeholder="2026-01-01"></div>
+          <div class="form-field"><label>Valid until</label><input type="text" name="valid_until" x-model="form.valid_until" placeholder="2026-12-31"></div>
+          <div class="form-field">
+            <label>Default discount</label>
+            <select name="default_discount_type" x-model="form.default_discount_type">
+              <option value="none">None — per-currency overrides only</option>
+              <option value="percentage">Percentage</option>
+              <option value="full">Full (100% off)</option>
+            </select>
+          </div>
+          <div class="form-field" x-show="form.default_discount_type === 'percentage'"><label>Percent</label><input type="text" name="default_percent" x-model="form.default_percent" placeholder="10"></div>
+          <div class="form-field"><label>Min purchase amount</label><input type="text" name="min_purchase_amount" x-model="form.min_purchase_amount" placeholder="20.00"></div>
+          <div class="form-field"><label>Min purchase currency</label><input type="text" name="min_purchase_currency" x-model="form.min_purchase_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field span-2"><label class="checkbox-row"><input type="checkbox" name="first_purchase_only" x-model="form.first_purchase_only"> First purchase only</label></div>
+        </div>
+        <div class="form-field-hint">A fixed-amount discount is inherently currency-bound — add it as a per-currency override after creating the voucher.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create voucher</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'edit-voucher'">
+    <div class="modal-card">
+      <div class="modal-title">Edit voucher</div>
+      <div class="modal-subtitle" x-text="form.code"></div>
+      <form method="post" :action="'/admin/vouchers/' + form.id">
+        <input type="hidden" name="code" :value="form.code">
+        <div class="form-grid">
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
+          <div class="form-field span-2"><label>Description</label><textarea name="description" x-model="form.description" rows="2"></textarea></div>
+          <div class="form-field"><label>Valid from</label><input type="text" name="valid_from" x-model="form.valid_from" placeholder="2026-01-01"></div>
+          <div class="form-field"><label>Valid until</label><input type="text" name="valid_until" x-model="form.valid_until" placeholder="2026-12-31"></div>
+          <div class="form-field">
+            <label>Default discount</label>
+            <select name="default_discount_type" x-model="form.default_discount_type">
+              <option value="none">None — per-currency overrides only</option>
+              <option value="percentage">Percentage</option>
+              <option value="full">Full (100% off)</option>
+            </select>
+          </div>
+          <div class="form-field" x-show="form.default_discount_type === 'percentage'"><label>Percent</label><input type="text" name="default_percent" x-model="form.default_percent"></div>
+          <div class="form-field"><label>Min purchase amount</label><input type="text" name="min_purchase_amount" x-model="form.min_purchase_amount"></div>
+          <div class="form-field"><label>Min purchase currency</label><input type="text" name="min_purchase_currency" x-model="form.min_purchase_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field span-2"><label class="checkbox-row"><input type="checkbox" name="first_purchase_only" x-model="form.first_purchase_only"> First purchase only</label></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'currency-discount'">
+    <div class="modal-card">
+      <div class="modal-title">Per-currency override</div>
+      <div class="modal-subtitle">Takes precedence over the default discount in this currency.</div>
+      <form method="post" :action="'/admin/vouchers/' + form.id + '/currency-discounts'">
+        <input type="hidden" name="code" :value="form.code">
+        <div class="form-grid">
+          <div class="form-field"><label>Currency</label><input type="text" name="currency" x-model="form.currency" maxlength="3" required style="text-transform:uppercase"></div>
+          <div class="form-field">
+            <label>Type</label>
+            <select name="discount_type" x-model="form.discount_type">
+              <option value="fixed">Fixed amount</option>
+              <option value="percentage">Percentage</option>
+              <option value="full">Full (100% off)</option>
+            </select>
+          </div>
+          <div class="form-field span-2" x-show="form.discount_type === 'fixed'"><label>Amount</label><input type="text" name="amount" x-model="form.amount" placeholder="5.00"></div>
+          <div class="form-field" x-show="form.discount_type === 'percentage'"><label>Percent</label><input type="text" name="percent" x-model="form.percent" placeholder="10"></div>
+          <div class="form-field" x-show="form.discount_type === 'percentage'"><label>Max discount (cap)</label><input type="text" name="max_discount" x-model="form.max_discount" placeholder="optional"></div>
+        </div>
+        <div class="form-field-hint">A cap is only meaningful for a percentage override; the default percentage discount has no cap.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save override</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'eligibility'">
+    <div class="modal-card">
+      <div class="modal-title">Edit eligibility</div>
+      <div class="modal-subtitle">Blank = unrestricted for that dimension. Values within a dimension are OR'd; dimensions are AND'd.</div>
+      <form method="post" :action="'/admin/vouchers/' + form.id + '/eligibility'">
+        <input type="hidden" name="code" :value="form.code">
+        <div class="form-grid">
+          <div class="form-field"><label>Countries</label><input type="text" name="country" x-model="form.country" placeholder="DE, NL"></div>
+          <div class="form-field"><label>Currencies</label><input type="text" name="currency" x-model="form.currency" placeholder="EUR"></div>
+          <div class="form-field"><label>Package IDs</label><input type="text" name="package" x-model="form.package" placeholder="1, 2"></div>
+          <div class="form-field"><label>Provider account IDs</label><input type="text" name="provider_account" x-model="form.provider_account" placeholder="1"></div>
+          <div class="form-field"><label>Payment methods</label><input type="text" name="payment_method" x-model="form.payment_method" placeholder="card, paypal"></div>
+          <div class="form-field"><label>Purchase types</label><input type="text" name="purchase_type" x-model="form.purchase_type" placeholder="one_time_payment"></div>
+          <div class="form-field span-2"><label>Subscription intervals</label><input type="text" name="subscription_interval" x-model="form.subscription_interval" placeholder="monthly"></div>
+        </div>
+        <div class="form-field-hint">This is a full replace — whatever is submitted becomes the complete rule set.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save eligibility</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="modal === 'usage-limits'">
+    <div class="modal-card">
+      <div class="modal-title">Edit usage limits</div>
+      <div class="modal-subtitle">Blank = unlimited for that dimension.</div>
+      <form method="post" :action="'/admin/vouchers/' + form.id + '/usage-limits'">
+        <input type="hidden" name="code" :value="form.code">
+        <div class="form-grid">
+          <div class="form-field"><label>Max total redemptions</label><input type="number" min="1" name="max_total_redemptions" x-model="form.max_total_redemptions"></div>
+          <div class="form-field"><label>Max per user</label><input type="number" min="1" name="max_per_user" x-model="form.max_per_user"></div>
+          <div class="form-field span-2"><label>Max per client</label><input type="number" min="1" name="max_per_client" x-model="form.max_per_client"></div>
+        </div>
+        <div class="form-field-hint">"Valid for everyone, once per user" = leave total and per-client blank, set per user to 1.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save limits</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+</div>
+</div>
+{% endblock %}
+
+{% block alpine_components %}
+<script src="/vouchers.js"></script>
+{% endblock %}

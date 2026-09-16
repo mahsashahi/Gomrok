@@ -20,6 +20,14 @@ interface ClientDirectory
     public function existsById(int $id): bool;
 
     /**
+     * Every client, for the admin panel's client switcher (Phase 27) — the
+     * only caller that needs the whole list rather than one resolved client.
+     *
+     * @return list<ClientSnapshot>
+     */
+    public function all(): array;
+
+    /**
      * The client's active callback URL for one purpose (Phase 24 Q3), or
      * `null` if none is configured — just the URL, not the full
      * `ClientEndpoint` aggregate member, since that's all a cross-module
