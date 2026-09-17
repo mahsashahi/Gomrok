@@ -147,8 +147,8 @@ final class ProviderGroupsPersistenceTest extends TestCase
         $this->pdo->prepare(
             "INSERT INTO provider_accounts
                 (client_id, provider_type_id, slug, name, mode, status, secret_ciphertext, secret_last_four, created_at)
-             VALUES (:c, :pt, :slug, :slug, 'test', 'active', 'x', '0000', :now)",
-        )->execute(['c' => $this->clientId, 'pt' => $ptId, 'slug' => $slug, 'now' => $now]);
+             VALUES (:c, :pt, :slug, :name, 'test', 'active', 'x', '0000', :now)",
+        )->execute(['c' => $this->clientId, 'pt' => $ptId, 'slug' => $slug, 'name' => $slug, 'now' => $now]);
         $id = (int) $this->pdo->lastInsertId();
 
         foreach ($countries as $country) {

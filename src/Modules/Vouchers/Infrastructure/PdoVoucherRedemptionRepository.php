@@ -41,6 +41,8 @@ final readonly class PdoVoucherRedemptionRepository implements VoucherRedemption
             );
             $statement->execute($this->params($redemption) + [
                 'reserved_at' => $redemption->reservedAt()->format(self::DT),
+                'confirmed_at' => $redemption->confirmedAt()?->format(self::DT),
+                'released_at' => $redemption->releasedAt()?->format(self::DT),
                 'created_at' => $redemption->createdAt()->format(self::DT),
                 'updated_at' => $redemption->updatedAt()?->format(self::DT),
             ]);

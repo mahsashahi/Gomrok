@@ -82,15 +82,25 @@ final class ProviderCapabilitiesPersistenceTest extends TestCase
     }
 
     #[Test]
-    public function ziraatAndMollieHaveNoDeclarationsYet(): void
+    public function ziraatAndMollieDeclarationsReadBack(): void
     {
         $reader = new PdoProviderTypeDeclarations($this->pdo);
 
-        // rows exist in provider_types (Phase 4) but no capability/purchase-type rows yet
+        // Ziraat: one_time_payment only — no subscription or auto-charge capability.
         $ziraat = $reader->findByCode('ziraat');
         self::assertNotNull($ziraat);
-        self::assertSame([], $ziraat->purchaseTypes());
-        self::assertTrue($ziraat->capabilities->isEmpty());
+        self::assertTrue($ziraat->supportsPurchaseType(PurchaseType::OneTimePayment));
+        self::assertFalse($ziraat->supportsPurchaseType(PurchaseType::Subscription));
+        self::assertFalse($ziraat->supportsPurchaseType(PurchaseType::AutoCharge));
+        self::assertTrue($ziraat->hasCapability(Capability::ManualStatusPolling));
+        self::assertFalse($ziraat->hasCapability(Capability::CustomerPortal));
+
+        // Mollie: supports subscription but not auto-charge.
+        $mollie = $reader->findByCode('mollie');
+        self::assertNotNull($mollie);
+        self::assertTrue($mollie->supportsPurchaseType(PurchaseType::Subscription));
+        self::assertFalse($mollie->supportsPurchaseType(PurchaseType::AutoCharge));
+        self::assertTrue($mollie->hasCapability(Capability::PartialRefund));
     }
 
     #[Test]

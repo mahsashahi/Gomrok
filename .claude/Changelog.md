@@ -7,6 +7,87 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-17 — Fixed the full integration-test suite (6 errors, 3 failures → 0)
+
+**Summary.** Before starting Phase 28, ran `composer test:all` and found the suite red: 6 errors,
+3 failures. Root-caused and fixed every one; suite is now 755 tests / 2899 assertions / 0
+errors / 0 failures / 3 skipped (the three live-provider tests that self-skip without real
+Stripe/Mollie/PayPal test credentials — expected).
+
+**Root causes, in order of how deep they went:**
+
+1. **Local environment collision, not a code bug.** A leftover SSH tunnel on this machine
+   (`ssh -L 3307:192.168.1.35:3306 ... saba@k2.saba-e.com`, unrelated to Gomrok) was also bound to
+   local port 3307, racing with Docker's `gomrok-mysql-standalone` container on the same port and
+   causing intermittent "access denied" / "SSL required" connection errors. Fixed by moving
+   Gomrok's local dev MySQL to port **3308**: recreated `gomrok-mysql-standalone` on `-p
+   3308:3306` reusing its existing named volume (no data loss), and updated `.env`'s `DB_PORT`
+   (gitignored, machine-local; not committed). The SSH tunnel itself was left untouched per the
+   user's instruction. `.env.example` (port 3306, matches `docker-compose.yml`) was not touched —
+   it was never wrong.
+2. **Stale demo data blocking a schema rollback.** `tools/screenshots/seed-demo-data.php`
+   (Phase 27 evidence tooling) had left 7 `payments` rows with `checkout_attempt_id = NULL` sitting
+   in the shared local dev DB outside any migration/test transaction. `MigrationRoundTripTest`
+   rolls every migration down to empty and back up; rolling back
+   `20260914120002_make_payments_checkout_attempt_id_nullable` re-adds `NOT NULL`, which MySQL
+   correctly refuses while NULL rows exist. Deleted those demo payments (and three other stray
+   manual-test clients: `curl-test-client`, `curl-test-client-2`, `playwright-test-client`) via
+   `docker exec ... mysql` — regenerable any time via the same seed script, not real data.
+3. **Real seeder-ordering bug, newly exposed once (1) and (2) stopped masking it.**
+   `PackagesSeeder` (inserts `package_countries` rows for `DE`) and `ProviderAccountsSeeder`
+   (inserts `provider_account_countries` rows for `DE`/`NL`) never declared `CountriesSeeder` as a
+   Phinx seed dependency. On a fully empty schema (exactly what `MigrationRoundTripTest`
+   exercises), Phinx's dependency-ordering algorithm ran both before `CountriesSeeder`, so the FK
+   to `countries` failed. Fixed by adding `CountriesSeeder::class` to both seeders'
+   `getDependencies()`.
+4. **Real production bug in `PdoVoucherRedemptionRepository::save()`.** The INSERT's parameter
+   array was missing `confirmed_at` / `released_at` keys (the SQL has 15 placeholders, only 13
+   were bound) — under the app's real `PDO::ATTR_EMULATE_PREPARES => false` connection (same as
+   `src/Config/container.php`), MySQL's native prepare rejects the mismatched parameter count with
+   `SQLSTATE[HY093]`. This would have thrown on every real voucher reservation attempt, not just
+   in tests. Fixed by binding both keys (`null` when unset, matching a fresh reservation).
+5. **Test-only bugs (no production impact), all under the same `EMULATE_PREPARES => false`
+   connection style:**
+   - `ProviderGroupsPersistenceTest::account()` reused the `:slug` named placeholder for two
+     different columns (`slug`, `name`) in one INSERT — same native-prepare rejection. Split into
+     `:slug` / `:name`.
+   - `CrossCuttingWritersTest` referenced client ids `9001`–`9004` that were never inserted into
+     `clients`, and a `client_id` FK on `idempotency_keys` / `audit_logs` (added later, in
+     `20260908150004_add_client_fks_to_cross_cutting_tables.php`) was never retrofitted into this
+     test. Now seeds those four client rows in `setUp()` inside the test's own rolled-back
+     transaction.
+   - `ReferenceTablesTest::countriesAreSeededAndFkToCurrencies` asserted a hardcoded count of 18
+     countries; `countries.json` legitimately gained Switzerland (`CH`) in the last commit. Updated
+     the expected count to 19.
+   - `ProviderCapabilitiesPersistenceTest::ziraatAndMollieHaveNoDeclarationsYet` asserted Ziraat/
+     Mollie had no seeded purchase-type/capability declarations — false since the very commit that
+     introduced both the test and `ProviderTypeDeclarations.json`'s real Ziraat/Mollie entries.
+     Replaced with `ziraatAndMollieDeclarationsReadBack`, asserting the actual current
+     declarations (Ziraat: `one_time_payment` only, no subscription/auto-charge, has
+     `manual_status_polling`; Mollie: supports `subscription`, not `auto_charge`).
+
+**Files changed:**
+- `.env` — `DB_PORT` 3307 → 3308 (gitignored; documented here since the reasoning matters).
+- `src/Database/Seeds/PackagesSeeder.php`, `src/Database/Seeds/ProviderAccountsSeeder.php` —
+  added `CountriesSeeder::class` to `getDependencies()`.
+- `src/Modules/Vouchers/Infrastructure/PdoVoucherRedemptionRepository.php` — `save()` now binds
+  `confirmed_at` and `released_at` on insert.
+- `tests/Integration/ProviderGroupsPersistenceTest.php` — de-duplicated the `:slug`/`:name`
+  placeholder in the test fixture's `account()` helper.
+- `tests/Integration/CrossCuttingWritersTest.php` — seeds four fixed test clients in `setUp()`.
+- `tests/Integration/ReferenceTablesTest.php` — expected country count 18 → 19.
+- `tests/Integration/ProviderCapabilitiesPersistenceTest.php` — rewrote the stale Ziraat/Mollie
+  test to assert current, correct declarations.
+
+**Database changes.** None (no migrations). Two rows were deleted from the shared local dev
+database (demo payments + three manual-test clients) — data cleanup, not schema.
+
+**Migration notes.** None. **Breaking changes.** None — the voucher-repository fix corrects a bug
+that would have thrown on first use; no callers relied on the broken behavior.
+
+**Verification, actually run:** `composer test:all` — 755 tests, 2899 assertions, 0 errors, 0
+failures, 3 skipped (live-provider tests, expected). `composer stan` — no errors.
+
 ## 2026-09-16 — Phase 27 complete: Admin Module Views and Panels
 
 **Summary.** Phase 27 is done. All eleven admin sidebar screens exist (Home, Sales, Customers,

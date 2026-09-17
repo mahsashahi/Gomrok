@@ -48,6 +48,18 @@ final class CrossCuttingWritersTest extends TestCase
 
         $this->clock = new FrozenClock('2026-09-08T12:00:00+00:00');
         $this->pdo->beginTransaction();
+
+        // client_id here is a real FK (Phase 5 follow-up) — seed the fixed test
+        // client ids these tests reference so the FK doesn't reject the insert.
+        $now = gmdate('Y-m-d H:i:s');
+        $statement = $this->pdo->prepare(
+            "INSERT INTO clients (id, slug, name, status, default_currency, timezone, notification_signing_secret, created_at)
+             VALUES (:id, :slug, :name, 'active', 'EUR', 'UTC', 'cross-cutting-writers-test-secret', :now)",
+        );
+        foreach ([9001, 9002, 9003, 9004] as $clientId) {
+            $slug = "cross-cutting-writers-test-{$clientId}";
+            $statement->execute(['id' => $clientId, 'slug' => $slug, 'name' => $slug, 'now' => $now]);
+        }
     }
 
     protected function tearDown(): void

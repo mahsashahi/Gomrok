@@ -50,7 +50,7 @@ final class ReferenceTablesTest extends TestCase
     #[Test]
     public function countriesAreSeededAndFkToCurrencies(): void
     {
-        self::assertSame(18, $this->scalar('SELECT COUNT(*) FROM countries'));
+        self::assertSame(19, $this->scalar('SELECT COUNT(*) FROM countries'));
 
         $row = $this->fetchAssoc("SELECT name, default_currency FROM countries WHERE code = 'TR'");
         self::assertSame('Türkiye', $row['name']);

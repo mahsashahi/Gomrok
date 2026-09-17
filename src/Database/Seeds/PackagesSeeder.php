@@ -25,7 +25,8 @@ final class PackagesSeeder extends AbstractSeed
      */
     public function getDependencies(): array
     {
-        return [ClientsSeeder::class];
+        // Countries too: package_countries FKs to countries (the 'pro' package restricts to DE).
+        return [ClientsSeeder::class, CountriesSeeder::class];
     }
 
     public function run(): void

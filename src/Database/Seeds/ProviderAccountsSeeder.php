@@ -31,7 +31,8 @@ final class ProviderAccountsSeeder extends AbstractSeed
      */
     public function getDependencies(): array
     {
-        return [ClientsSeeder::class, ProviderTypesSeeder::class];
+        // Countries too: provider_account_countries FKs to countries (DE/NL below).
+        return [ClientsSeeder::class, ProviderTypesSeeder::class, CountriesSeeder::class];
     }
 
     public function run(): void
