@@ -74,6 +74,8 @@ final class MigrationRoundTripTest extends TestCase
         'provider_transactions',
         'provider_customers',
         'gateway_references',
+        'provider_account_notification_overrides',
+        'client_notification_logs',
     ];
 
     private PDO $pdo;

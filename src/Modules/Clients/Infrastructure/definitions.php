@@ -7,12 +7,14 @@ use function DI\get;
 use Gomrok\Modules\Clients\Application\Authenticate\ApiKeyAuthenticator;
 use Gomrok\Modules\Clients\Application\Authenticate\AuthAttemptLog;
 use Gomrok\Modules\Clients\Application\ClientDirectory;
+use Gomrok\Modules\Clients\Application\ClientNotificationSecret;
 use Gomrok\Modules\Clients\Domain\ApiKeyGenerator;
 use Gomrok\Modules\Clients\Domain\ClientApiKeyRepository;
 use Gomrok\Modules\Clients\Domain\ClientRepository;
 use Gomrok\Modules\Clients\Infrastructure\PdoAuthAttemptLog;
 use Gomrok\Modules\Clients\Infrastructure\PdoClientApiKeyRepository;
 use Gomrok\Modules\Clients\Infrastructure\PdoClientDirectory;
+use Gomrok\Modules\Clients\Infrastructure\PdoClientNotificationSecret;
 use Gomrok\Modules\Clients\Infrastructure\PdoClientRepository;
 use Gomrok\Modules\Clients\Infrastructure\RandomApiKeyGenerator;
 use Gomrok\Shared\Http\ClientAuthenticator;
@@ -27,6 +29,7 @@ return [
     ClientRepository::class => get(PdoClientRepository::class),
     ClientApiKeyRepository::class => get(PdoClientApiKeyRepository::class),
     ClientDirectory::class => get(PdoClientDirectory::class),
+    ClientNotificationSecret::class => get(PdoClientNotificationSecret::class),
     ApiKeyGenerator::class => get(RandomApiKeyGenerator::class),
 
     // Phase 7 — API-key authentication.

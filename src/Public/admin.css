@@ -174,6 +174,11 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 .status-pill.status-critical, .status-pill.status-unresolved { background: oklch(95% 0.05 25); color: var(--danger); }
 .status-pill.status-error { background: oklch(95% 0.05 85); color: oklch(45% 0.1 85); }
 .status-pill.status-resolved { background: oklch(94% 0.06 150); color: oklch(38% 0.1 150); }
+/* Notifications (Phase 28): `sent` reuses the paid/green pair, `dead_lettered`
+   reuses the failed/red pair — `pending` already covers both "not attempted
+   yet" and "will retry" via the shared amber rule above. */
+.status-pill.status-sent { background: oklch(94% 0.06 150); color: oklch(38% 0.1 150); }
+.status-pill.status-dead_lettered { background: oklch(95% 0.05 25); color: var(--danger); }
 
 .timeline-toggle { cursor: pointer; user-select: none; }
 .timeline-row { background: var(--surface-alt); padding: 10px 20px 10px 44px; font-size: 13px; }

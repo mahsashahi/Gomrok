@@ -16,6 +16,7 @@ use Gomrok\Tests\Support\InMemoryPaymentAttemptRepository;
 use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\SynchronousTransactions;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -51,6 +52,7 @@ final class RecordProviderTransactionHandlerTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-11T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
     }
 

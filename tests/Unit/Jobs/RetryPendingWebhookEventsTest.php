@@ -26,6 +26,7 @@ use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
 use Gomrok\Tests\Support\InMemoryWebhookEventRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAdapterFactory;
 use Gomrok\Tests\Support\SynchronousTransactions;
 use PHPUnit\Framework\Attributes\Test;
@@ -73,6 +74,7 @@ final class RetryPendingWebhookEventsTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
         $processor = new ProcessWebhookEventHandler(
             $events,
@@ -127,6 +129,7 @@ final class RetryPendingWebhookEventsTest extends TestCase
                 new RecordingAuditLogWriter(),
                 new SynchronousTransactions(),
                 new FrozenClock('2026-09-14T12:00:00+00:00'),
+                new RecordingDomainEventDispatcher(),
             ),
             new NullErrorLogWriter(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),

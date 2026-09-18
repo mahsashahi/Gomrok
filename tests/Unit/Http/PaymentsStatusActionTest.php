@@ -36,6 +36,7 @@ use Gomrok\Tests\Support\InMemoryCheckoutAttemptDirectory;
 use Gomrok\Tests\Support\InMemoryCheckoutAttemptRepository;
 use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
 use Gomrok\Tests\Support\InMemoryPackageRepository;
+use Gomrok\Tests\Support\InMemoryPaymentAttemptRepository;
 use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryPricingDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
@@ -45,6 +46,7 @@ use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\InMemoryVoucherDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryVoucherRedemptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAdapterFactory;
 use Gomrok\Tests\Support\SynchronousTransactions;
 use PHPUnit\Framework\Attributes\Test;
@@ -85,7 +87,7 @@ final class PaymentsStatusActionTest extends TestCase
             $transactions,
             $clock,
         );
-        $changePaymentStatus = new ChangePaymentStatusHandler($payments, $audit, $transactions, $clock);
+        $changePaymentStatus = new ChangePaymentStatusHandler($payments, new InMemoryPaymentAttemptRepository(), $audit, $transactions, $clock, new RecordingDomainEventDispatcher());
         $createSubscription = self::makeCreateSubscriptionHandler($attempts, $routingSnapshots, $pricingSnapshots, $gatewayReferences, $audit, $transactions, $clock);
         $reconcile = new ReconcileCheckoutStatusHandler($attempts, $routingSnapshots, $gatewayReferences, $adapterFactory, $createPayment, $changePaymentStatus, $createSubscription, $audit, $transactions, $clock);
 
@@ -145,7 +147,7 @@ final class PaymentsStatusActionTest extends TestCase
             $gatewayReferences,
             new StubProviderAdapterFactory(),
             $createPayment,
-            new ChangePaymentStatusHandler($payments, $audit, $transactions, $clock),
+            new ChangePaymentStatusHandler($payments, new InMemoryPaymentAttemptRepository(), $audit, $transactions, $clock, new RecordingDomainEventDispatcher()),
             self::makeCreateSubscriptionHandler($attempts, $routingSnapshots, $pricingSnapshots, $gatewayReferences, $audit, $transactions, $clock),
             $audit,
             $transactions,

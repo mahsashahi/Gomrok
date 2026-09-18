@@ -24,6 +24,7 @@ use Gomrok\Tests\Support\InMemorySubscriptionEventRepository;
 use Gomrok\Tests\Support\InMemorySubscriptionPaymentLinkRepository;
 use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\SynchronousTransactions;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -59,6 +60,7 @@ final class RecordSubscriptionPaymentHandlerTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
 
         $this->handler = new RecordSubscriptionPaymentHandler(
@@ -72,6 +74,7 @@ final class RecordSubscriptionPaymentHandlerTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
 
         $attempt = CheckoutAttempt::start(self::CLIENT, 'user-1', 'order-1', self::PACKAGE, 'DE', 'EUR', PurchaseType::Subscription, null, SubscriptionInterval::Monthly, $this->now);

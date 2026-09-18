@@ -963,3 +963,82 @@ both fully built and tested as the reusable processing units a future trigger wi
 unchanged — consistent with Q3's explicit deferral of Mollie's renewal automation, the broader
 webhook-driven recurring-billing mechanism is deferred to Phase 29 alongside the real queue/worker
 system Phase 25 already flagged.
+
+---
+
+## Client notifications (Phase 28)
+
+Two tables: `provider_account_notification_overrides` and `client_notification_logs`.
+
+### `provider_account_notification_overrides`
+
+- **Why this exists at all** (Q1, user-specified hybrid): the roadmap text for this phase
+  described provider-account-scoped callback keys (`buy_address`, `cancel_address`, ...); the
+  actual codebase already had `client_endpoints` (Phase 6), a client-scoped default URL per
+  purpose. Neither alone matched what the user wanted — the client-scoped default stays the
+  common case (one integration point per purpose), but a specific provider account can still
+  register its own override for a purpose, used only for events that account itself produced.
+  This table is that override, and nothing else — it is not a general-purpose config table.
+- **Deliberately not a repurposed `provider_account_endpoints`** (Phase 9) — that table is
+  exclusively inbound (webhook/callback/return verification config, `kind` = `webhook` \|
+  `callback` \| `return`). Reusing it for an outbound override would conflate "how Gomrok verifies
+  what a provider sends it" with "where Gomrok sends a client a notification" — two different
+  directions, two different trust models, so a new small table was used instead.
+- **Resolution order**: when building a notification, look up an active row here for
+  `(provider_account_id, purpose)` first; if none, fall back to the client's `client_endpoints`
+  row for `(client_id, purpose)`; if neither exists, the notification is not enqueued (there is
+  nowhere to send it) — this is a deliberate skip, not an error, since an unconfigured endpoint is
+  a client-configuration gap, not a Gomrok failure.
+
+### `client_notification_logs`
+
+- **`payload` and `endpoint_url` are snapshots, not references** — the exact JSON body and the
+  resolved URL are captured once, at enqueue time, and reused unchanged on every retry attempt.
+  This matters for the same reason payment/voucher/pricing snapshots matter elsewhere in Gomrok:
+  a client rotating their registered URL mid-retry-sequence should never cause half of a
+  notification's attempts to go to the old URL and half to the new one, and a retry must be
+  provably "the same notification, later" rather than a freshly rebuilt one that could drift from
+  what was originally decided.
+- **`target_type`/`target_id` is deliberately unenforced (no real FK)** — same shape as
+  `audit_logs`/`error_logs`, because a single FK column can't target two different tables
+  (`payments` and `subscriptions`). The polymorphic pair is resolved in application code, not the
+  database.
+- **Only a curated subset of statuses is notify-worthy** (Q5, user-specified, overriding the
+  simpler "notify on everything" default that was recommended): payments notify on `paid`,
+  `failed`, `canceled`, `expired`, `refunded`, `partially_refunded`, `disputed`, `chargeback` —
+  not the mid-flow statuses `created`, `pending`, `requires_action`, `authorized`. Subscriptions
+  notify on `active`, `past_due`, `cancelled` — not `trialing`. This list lives as one explicit,
+  centralized constant (per the user's own instruction to keep it easy to change later), not
+  scattered inline checks across the four trigger call sites.
+- **Refunds notify through `payment_status`, not the older `refund_status` purpose.**
+  `EndpointPurpose::RefundStatus` has existed since Phase 6 but `refunded`/`partially_refunded`
+  are still `PaymentStatus` values, not a separate aggregate — routing them through
+  `payment_status` keeps one integration point for a client's whole payment lifecycle.
+  `refund_status` stays defined but unused until a standalone Refund concept exists.
+- **Why no DB-level dedup constraint** — the obvious guard, `UNIQUE (target_type, target_id,
+  status_value)`, was checked against `PaymentStatus::allowedNextStatuses()` and rejected: every
+  status is reachable at most once per payment *except* `Paid ↔ Disputed`, which can legitimately
+  cycle (a resolved dispute returns a payment to `paid`; a second, later chargeback re-enters
+  `disputed`). A hard constraint would silently drop that second, real notification. Idempotency
+  instead relies on two guards that already exist one layer up: `Payment::transitionTo()` never
+  fires a domain event for a same-status no-op transition, and Phase 25's webhook dedup
+  (`uniq_webhook_events_dedup`) already rejects a truly duplicate provider event before it can
+  reach a status-changing handler twice.
+- **Signing** (Q3, user-specified): `X-Gomrok-Signature: t=<unix_ts>,v1=<hex HMAC-SHA256 of
+  "{t}.{raw_json_body}">`, keyed by `clients.notification_signing_secret` (Phase 6, unused until
+  this phase) — a timestamped scheme so a client can reject both a bad signature and a replayed
+  old request, deliberately mirroring Stripe's well-known outbound-webhook scheme rather than
+  inventing an unfamiliar one.
+- **Retry/backoff** (Q4, user-specified): exponential — 1m, 5m, 30m, 2h, 6h, 12h, 24h, 24h across
+  8 attempts, `next_attempt_at` computed and stored per row, then `dead_lettered`. Deliberately
+  richer than the flatter webhook-retry precedent (`MAX_ATTEMPTS = 5`, no computed delay) because
+  a client's server can plausibly be down for many hours, unlike a transient processing hiccup.
+- **Job shape**: `src/Jobs/RetryPendingClientNotifications.php` (a plain invokable) +
+  `bin/RetryPendingClientNotifications.php` (cron entry point) — the exact same "cron now, real
+  queue/worker at Phase 29" shape `RetryPendingWebhookEvents` already established; only rows whose
+  `next_attempt_at` has passed are picked up.
+- **Set / advanced by** the `DomainEvent` dispatcher subscriber (enqueues on a notify-worthy
+  transition), the delivery use case (marks `sent`/bumps `attempt_count`/sets `next_attempt_at` on
+  failure), `RetryPendingClientNotifications` (cron-invoked retries), and the admin Notifications
+  screen's manual-retry action (resets a `dead_lettered` row back to `pending` with a fresh
+  `next_attempt_at`).

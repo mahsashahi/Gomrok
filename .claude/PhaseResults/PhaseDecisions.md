@@ -16,6 +16,164 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 28 — Client callbacks / outbound notifications
+
+### Q5 — Which status transitions are notify-worthy
+
+**Question:** `PaymentStatus` has 12 values (`created`, `pending`, `requires_action`,
+`authorized`, `paid`, `failed`, `canceled`, `expired`, `refunded`, `partially_refunded`,
+`disputed`, `chargeback`); `SubscriptionStatus` has 4 (`active`, `trialing`, `past_due`,
+`cancelled`). Which transitions should actually enqueue a client notification?
+
+**Options:**
+
+1. Every transition except the initial state — simplest, no curated list to maintain.
+2. **Curated externally-meaningful subset** — skip pure mid-flow/noise statuses.
+
+**Recommended:** Option 1.
+
+**Selected:** Option 2 — curated subset, with the exact lists specified by the user:
+
+- **Payment** — notify on: `paid`, `failed`, `canceled`, `expired`, `refunded`,
+  `partially_refunded`, `disputed`, `chargeback`. Do **not** notify on: `created`, `pending`,
+  `requires_action`, `authorized`.
+- **Subscription** — notify on: `active`, `past_due`, `cancelled`. Do **not** notify on:
+  `trialing`.
+
+User-specified constraints that apply to the whole phase, not just this question:
+
+- These are server-to-server callbacks from Gomrok to the client's configured notification
+  endpoint — **not** UI notification-bell messages. (Naming/framing note for implementation: keep
+  this distinction explicit in code/docs so `client_notification_logs` is never confused with an
+  in-app notification feature.)
+- A same-status idempotent no-op transition (per `Payment::transitionTo()`'s existing guard) must
+  **not** enqueue a duplicate notification.
+- Duplicate webhook delivery or reconciliation re-processing must **not** create duplicate client
+  notifications for the same logical status change (idempotency, mirroring the webhook module's
+  own duplicate-event handling).
+- The notify-worthy status lists must be **explicit and centralized** (one place in code) so they
+  are easy to change later — not scattered inline checks.
+
+**Status:** Decided
+
+---
+
+### Q4 — Retry/backoff policy and dead-letter threshold
+
+**Question:** CLAUDE.md asks for retry with exponential backoff and a dead-letter end state. The
+webhook precedent (Phase 25) uses a flatter model: `MAX_ATTEMPTS = 5`, retried whenever the cron
+next runs, no per-row computed delay. A client's server can be down far longer than a processing
+hiccup — what backoff/dead-letter policy should client notifications use?
+
+**Options:**
+
+1. **Exponential backoff, 8 attempts** — each failed delivery sets
+   `next_attempt_at = now + backoff(attempt)`: 1m, 5m, 30m, 2h, 6h, 12h, 24h, 24h. After 8 failed
+   attempts, status moves to `dead_lettered` (visible in admin Notifications, manually
+   retryable). The retry job only picks up rows whose `next_attempt_at` has passed.
+2. Flat retry, same as webhooks — `MAX_ATTEMPTS = 5`, no computed delay, retried on every cron
+   tick until success or exhaustion.
+3. Something else.
+
+**Recommended:** Option 1.
+
+**Selected:** Option 1 — exponential backoff (1m/5m/30m/2h/6h/12h/24h/24h), 8 attempts, then
+`dead_lettered`.
+
+**Status:** Decided
+
+---
+
+### Q3 — Outbound signing scheme
+
+**Question:** `clients.notification_signing_secret` exists (Phase 6) but nothing signs anything
+with it yet. Gomrok needs its own outbound signing scheme for `client_endpoints` callbacks (this
+is separate from verifying incoming provider webhooks, which each provider already does its own
+way). What scheme should Gomrok use to sign outbound client notifications?
+
+**Options:**
+
+1. **Timestamped HMAC** — header `X-Gomrok-Signature: t=<unix_ts>,v1=<hex HMAC-SHA256 of
+   "{t}.{raw_json_body}">` using `notification_signing_secret`. Client re-derives and rejects if
+   the signature doesn't match or `t` is too old — real replay protection, mirrors Stripe's
+   well-known scheme.
+2. Plain HMAC, no timestamp — `X-Gomrok-Signature: <hex HMAC-SHA256 of raw body>` only. Simpler,
+   but no replay protection.
+3. Something else.
+
+**Recommended:** Option 1.
+
+**Selected:** Option 1 — timestamped HMAC-SHA256, `X-Gomrok-Signature: t=<unix_ts>,v1=<hex hmac>`,
+signing `"{t}.{raw_json_body}"` with `notification_signing_secret`.
+
+**Status:** Decided
+
+---
+
+### Q2 — Notification trigger mechanism
+
+**Question:** Payment/subscription status changes happen at 4 separate call sites today
+(`RecordProviderTransactionHandler`, `ChangePaymentStatusHandler`, `CancelSubscriptionHandler`,
+`RecordSubscriptionPaymentHandler`), none connected to anything. A `DomainEvent` interface already
+exists (Clients module only) but is never dispatched. Given Q1's hybrid answer needs to know which
+provider account produced a change (for the override lookup), how should a status change trigger
+a queued notification?
+
+**Options:**
+
+1. **Wire the `DomainEvent` dispatcher** — finally add the synchronous in-process dispatcher the
+   interface was built for. Each of the 4 handlers raises a `PaymentStatusChanged`/
+   `SubscriptionStatusChanged` event (carrying `provider_account_id`); a Notifications-module
+   subscriber reacts by enqueuing a `client_notification_logs` row. One mechanism, reusable by
+   future subscribers (e.g. Phase 29 reconciliation).
+2. Explicit call in each handler — a new `EnqueueClientNotification` use case called directly from
+   all 4 sites. No event bus to build, but 4 places to keep correct as more are added.
+3. Periodic diff-scanner job — cron compares current vs. last-notified status. Fully decoupled,
+   but adds polling latency and doesn't match "notify on status change."
+
+**Recommended:** Option 1.
+
+**Selected:** Option 1 — wire the `DomainEvent` dispatcher; all 4 call sites raise events, a
+Notifications subscriber enqueues the notification.
+
+**Status:** Decided
+
+---
+
+### Q1 — Callback-URL model: client-scoped, provider-account-scoped, or hybrid
+
+**Question:** Phases.md's own scope text for this phase describes "per-provider-account callback
+keys" (`buy_address`, `buy_onetime_address`, `buy_address_subscribe`, `cancel_address`,
+`payment_failed`, `update_card`...). But Phase 6 already built `client_endpoints`: one URL per
+`(client_id, purpose)`, purposes `payment_status`/`subscription_status`/`refund_status`/
+`checkout_success`/`checkout_cancel` — client-scoped, not provider-account-scoped. Since Gomrok
+already normalizes every provider's status into one internal status before anything downstream
+sees it, a client's backend has no inherent reason to need a different callback URL per provider.
+Which model should this phase use?
+
+**Options:**
+
+1. **Extend `client_endpoints`** — reuse the existing client-scoped, purpose-based model, adding
+   any missing purposes rather than inventing a parallel provider-account-keyed system.
+2. Build the provider-account-scoped keys as Phases.md literally describes
+   (`buy_address`/`buy_onetime_address`/etc. per provider account) — matches the roadmap text, but
+   reintroduces provider-identity leakage into the client-facing contract and duplicates
+   `client_endpoints`' job.
+3. Something else / hybrid.
+
+**Recommended:** Option 1.
+
+**Selected:** Hybrid (option 3), clarified in a follow-up: **client-scoped default + optional
+per-provider-account override.** `client_endpoints` stays the default per-purpose URL a client
+registers once (`payment_status`, `subscription_status`, etc.). A provider account may
+additionally register its own override URL for a purpose; when a notification's triggering event
+came from that specific provider account, its override is used instead of the client's default
+for that purpose. No override present → falls back to the client-scoped default.
+
+**Status:** Decided
+
+---
+
 ## Phase 27 — Admin Module Views and Panels
 
 ### Audit Logs screen — read-only by design, not asked

@@ -29,6 +29,7 @@ use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
 use Gomrok\Tests\Support\InMemoryProviderTypeDeclarations;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAccountDirectory;
 use Gomrok\Tests\Support\StubProviderAdapterFactory;
 use Gomrok\Tests\Support\SynchronousTransactions;
@@ -146,6 +147,7 @@ final class CapturePaymentHandlerTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-13T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
 
         return new CapturePaymentHandler($this->payments, $context, $recordTransaction);

@@ -8,11 +8,14 @@ use function DI\get;
 
 use Gomrok\Config\DatabaseSettings;
 use Gomrok\Config\Settings;
+use Gomrok\Modules\Notifications\Application\Subscribers\EnqueueOnPaymentStatusChanged;
+use Gomrok\Modules\Notifications\Application\Subscribers\EnqueueOnSubscriptionStatusChanged;
 use Gomrok\Shared\Application\Audit\AuditLogDirectory;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogDirectory;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogResolver;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogWriter;
+use Gomrok\Shared\Application\Events\DomainEventDispatcher;
 use Gomrok\Shared\Application\Idempotency\IdempotencyStore;
 use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Application\SecretCipher;
@@ -20,6 +23,7 @@ use Gomrok\Shared\Application\TokenGenerator;
 use Gomrok\Shared\Application\Transactions;
 use Gomrok\Shared\Http\IdempotencyMiddleware;
 use Gomrok\Shared\Infrastructure\Crypto\SodiumSecretCipher;
+use Gomrok\Shared\Infrastructure\Events\SynchronousDomainEventDispatcher;
 use Gomrok\Shared\Infrastructure\Logging\LoggerFactory;
 use Gomrok\Shared\Infrastructure\Persistence\PdoAuditLogDirectory;
 use Gomrok\Shared\Infrastructure\Persistence\PdoAuditLogWriter;
@@ -82,6 +86,16 @@ return [
     TokenGenerator::class => get(RandomTokenGenerator::class),
     ReferenceCatalog::class => get(PdoReferenceCatalog::class),
     Transactions::class => get(TransactionRunner::class),
+
+    // The in-process domain-event dispatcher (Architecture.md §5) — lands
+    // with its first subscriber (Phase 28). Cross-module by nature, so its
+    // subscriber list is assembled here rather than in any one module's own
+    // definitions.php.
+    DomainEventDispatcher::class => autowire(SynchronousDomainEventDispatcher::class)
+        ->constructorParameter('subscribers', [
+            get(EnqueueOnPaymentStatusChanged::class),
+            get(EnqueueOnSubscriptionStatusChanged::class),
+        ]),
 
     // Secret encryption (Phase 9) — lazy: only fails if actually resolved with no key.
     SecretCipher::class => factory(

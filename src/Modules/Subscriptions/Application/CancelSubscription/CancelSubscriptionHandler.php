@@ -9,12 +9,14 @@ use Gomrok\Modules\Providers\Application\Adapter\SupportsSubscriptions;
 use Gomrok\Modules\Providers\Domain\Capability;
 use Gomrok\Modules\Subscriptions\Application\ResolveSubscriptionActionContext;
 use Gomrok\Modules\Subscriptions\Application\SubscriptionAuditSnapshot;
+use Gomrok\Modules\Subscriptions\Domain\Events\SubscriptionStatusChanged;
 use Gomrok\Modules\Subscriptions\Domain\SubscriptionEvent;
 use Gomrok\Modules\Subscriptions\Domain\SubscriptionEventRepository;
 use Gomrok\Modules\Subscriptions\Domain\SubscriptionRepository;
 use Gomrok\Modules\Subscriptions\Domain\SubscriptionStatus;
 use Gomrok\Shared\Application\Audit\AuditEntry;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
+use Gomrok\Shared\Application\Events\DomainEventDispatcher;
 use Gomrok\Shared\Application\Transactions;
 use Gomrok\Shared\Domain\DomainError;
 use Gomrok\Shared\Domain\Result;
@@ -36,6 +38,7 @@ final readonly class CancelSubscriptionHandler
         private AuditLogWriter $audit,
         private Transactions $transactions,
         private ClockInterface $clock,
+        private DomainEventDispatcher $events,
     ) {
     }
 
@@ -71,10 +74,12 @@ final readonly class CancelSubscriptionHandler
 
         $now = $this->clock->now();
         $before = SubscriptionAuditSnapshot::of($subscription);
+        $previousStatus = $subscription->status();
         $error = $subscription->transitionTo(SubscriptionStatus::Cancelled, $now);
         if ($error !== null) {
             return Result::err($error);
         }
+        $statusChanged = $subscription->status() !== $previousStatus;
 
         $subscriptionId = $subscription->id();
         \assert($subscriptionId !== null);
@@ -88,6 +93,17 @@ final readonly class CancelSubscriptionHandler
                 : AuditEntry::forSystem('subscription.cancelled', $command->clientId);
             $this->audit->record($entry->withTarget('subscription', $subscriptionId)->withChange($before, SubscriptionAuditSnapshot::of($subscription)));
         });
+
+        if ($statusChanged) {
+            $this->events->dispatch(new SubscriptionStatusChanged(
+                $subscriptionId,
+                $command->clientId,
+                $previousStatus->value,
+                $subscription->status()->value,
+                $context->providerAccountId,
+                $now,
+            ));
+        }
 
         return Result::ok(new CancelSubscriptionResult($subscriptionId, $subscription->status()->value));
     }

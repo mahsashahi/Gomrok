@@ -25,6 +25,8 @@ use Gomrok\Http\Admin\AdminHomeAction;
 use Gomrok\Http\Admin\AdminLoginShowAction;
 use Gomrok\Http\Admin\AdminLoginSubmitAction;
 use Gomrok\Http\Admin\AdminLogoutAction;
+use Gomrok\Http\Admin\AdminNotificationRetryAction;
+use Gomrok\Http\Admin\AdminNotificationsAction;
 use Gomrok\Http\Admin\AdminPackageProviderLinkAction;
 use Gomrok\Http\Admin\AdminPackagesCreateAction;
 use Gomrok\Http\Admin\AdminPackagesUpdateAction;
@@ -155,6 +157,10 @@ return static function (App $app): void {
         // Phase 27 — Error Logs screen (real "mark resolved"/"reopen" write action).
         $group->get('/error-logs', AdminErrorLogsAction::class);
         $group->post('/error-logs/{errorLogId}/resolution', AdminErrorLogResolutionAction::class);
+
+        // Phase 28 — Notifications screen (real "retry" write action on a dead-lettered row).
+        $group->get('/notifications', AdminNotificationsAction::class);
+        $group->post('/notifications/{notificationId}/retry', AdminNotificationRetryAction::class);
 
         // Phase 27 — Settings: no backing domain/schema exists (see AdminSettingsAction);
         // a neutral placeholder per Phases.md's "undesigned screens" rule.

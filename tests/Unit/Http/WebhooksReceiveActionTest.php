@@ -28,6 +28,7 @@ use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
 use Gomrok\Tests\Support\InMemoryWebhookEventRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAccountCredentials;
 use Gomrok\Tests\Support\StubProviderAccountDirectory;
 use Gomrok\Tests\Support\StubProviderAdapterFactory;
@@ -73,6 +74,7 @@ final class WebhooksReceiveActionTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
         $processor = new ProcessWebhookEventHandler(
             $events,

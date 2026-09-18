@@ -40,6 +40,8 @@ flowchart TD
     Payments["Payments&lt;br/&gt;payments + payment_attempts + provider_transactions (P20)&lt;br/&gt;provider_customers + gateway_references (P20)"]
     Webhooks["Webhooks&lt;br/&gt;webhook_events — store-first, dedup, retry (P25)"]
     Subscriptions["Subscriptions&lt;br/&gt;subscriptions + subscription_events + subscription_payment_links (P26)"]
+    Notifications["Notifications&lt;br/&gt;client_notification_logs + provider_account_notification_overrides (P28)"]
+    Admin["Admin&lt;br/&gt;admin_users + admin_sessions + admin_login_attempts (P27)"]
     Ref -.-&gt; Clients
     Ref -.-&gt; Providers
     Ref -.-&gt; Packages
@@ -74,8 +76,7 @@ flowchart TD
     Admin -.-&gt; Payments
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions done;
-    class Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions,Notifications,Admin done;
 </pre>
 
 <h2>Reference data (Phase 4)</h2>
@@ -860,6 +861,43 @@ erDiagram
     subscriptions ||--o{ subscription_events : "logs"
     subscriptions ||--o{ subscription_payment_links : "charges via"
     payments ||--o| subscription_payment_links : "linked by"
+</pre>
+
+<h2>Client notifications (Phase 28)</h2>
+<pre class="mermaid">
+erDiagram
+    provider_account_notification_overrides {
+        int id PK
+        int provider_account_id FK
+        varchar purpose
+        varchar url
+        boolean is_active
+        datetime created_at
+        datetime updated_at
+    }
+    client_notification_logs {
+        int id PK
+        int client_id FK
+        varchar target_type
+        int target_id
+        varchar purpose
+        varchar status_value
+        int provider_account_id FK
+        varchar endpoint_url
+        text payload
+        varchar status
+        smallint attempt_count
+        datetime next_attempt_at
+        datetime last_attempted_at
+        smallint last_response_status
+        text last_response_body
+        varchar last_error
+        datetime created_at
+        datetime updated_at
+    }
+    provider_accounts ||--o{ provider_account_notification_overrides : "overrides"
+    clients ||--o{ client_notification_logs : "owns"
+    provider_accounts ||--o{ client_notification_logs : "produced by"
 </pre>
 </div>
 

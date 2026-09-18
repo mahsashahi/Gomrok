@@ -30,6 +30,7 @@ use Gomrok\Tests\Support\InMemoryCheckoutAttemptRepository;
 use Gomrok\Tests\Support\InMemoryClientDirectory;
 use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
 use Gomrok\Tests\Support\InMemoryPackageRepository;
+use Gomrok\Tests\Support\InMemoryPaymentAttemptRepository;
 use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryPricingDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
@@ -39,6 +40,7 @@ use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\InMemoryVoucherDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryVoucherRedemptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAdapterFactory;
 use Gomrok\Tests\Support\SynchronousTransactions;
 use PHPUnit\Framework\Attributes\Test;
@@ -85,7 +87,7 @@ final class PaymentsReturnActionTest extends TestCase
             $transactions,
             $clock,
         );
-        $changePaymentStatus = new ChangePaymentStatusHandler($payments, $audit, $transactions, $clock);
+        $changePaymentStatus = new ChangePaymentStatusHandler($payments, new InMemoryPaymentAttemptRepository(), $audit, $transactions, $clock, new RecordingDomainEventDispatcher());
         $createSubscription = new CreateSubscriptionHandler(
             $this->attempts,
             $routingSnapshots,

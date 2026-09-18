@@ -7,6 +7,70 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-17 — Phase 28 complete: Client callbacks / outbound notifications
+
+**Summary.** Built the full outbound notification pipeline: a payment or subscription reaching a
+notify-worthy status now triggers a signed, retried, admin-visible callback to the client. This
+also finally wired the in-process `DomainEventDispatcher` that Architecture.md sketched at Phase 6
+and left unbuilt "until the first subscriber" — Notifications is that subscriber.
+
+**New tables:** `client_notification_logs` (the delivery record — target, purpose, status-value,
+resolved endpoint/payload snapshots, attempt/backoff state, last response) and
+`provider_account_notification_overrides` (Q1's per-account override URL). Full design in
+`.claude/docs/database-design.md` → "Client notifications (Phase 28)"; diagrams in
+`database-diagram.md`/`.html`; per-table rationale in `db_explain.md`.
+
+**New module:** `src/Modules/Notifications/` (Domain/Application/Infrastructure) — `ClientNotification`
+aggregate, `NotifyWorthyStatuses` (Q5's curated lists), `BackoffSchedule` (Q4's 1m/5m/30m/2h/6h/12h/24h/24h,
+8 attempts), `NotificationEndpointResolver` (Q1's hybrid resolution), `HmacNotificationSigner` (Q3's
+timestamped HMAC), `EnqueueClientNotificationHandler` + two `DomainEventSubscriber`s, `DeliverClientNotificationHandler`,
+`RetryClientNotificationHandler` (admin manual retry), PDO repositories/directory.
+
+**Event wiring:** new `PaymentStatusChanged` / `SubscriptionStatusChanged` domain events, raised
+(only on a genuine status change, never a same-status no-op) by the four handlers that transition
+status — `RecordProviderTransactionHandler`, `ChangePaymentStatusHandler`, `CancelSubscriptionHandler`,
+`RecordSubscriptionPaymentHandler` — and dispatched via the new `Shared\Application\Events\DomainEventDispatcher`
+/ `SynchronousDomainEventDispatcher`, wired in `src/Config/container.php`.
+
+**New job:** `src/Jobs/RetryPendingClientNotifications.php` + `bin/RetryPendingClientNotifications.php`
+(`composer notifications:retry-pending`) — same "cron now, real queue at Phase 29" shape as
+`RetryPendingWebhookEvents`. Enqueuing is DB-only (no network I/O in the request path); this job is
+the only thing that actually calls out to a client.
+
+**New admin screen:** `/admin/notifications` (list + filters) and `POST /admin/notifications/{id}/retry`
+(dead-lettered rows only, immediate synchronous delivery attempt) — the Phase 27 sidebar link and
+`notifications.view`/`notifications.retry` permissions existed already, unwired until now.
+
+**Five decisions, all user-specified** (full record in `.claude/PhaseResults/PhaseDecisions.md`):
+Q1 callback-URL model (client-scoped default + provider-account override, a hybrid the user chose
+over both offered options), Q2 trigger mechanism (finally wire the domain-event dispatcher), Q3
+signing scheme (timestamped HMAC, Stripe-style), Q4 backoff policy (exponential, 8 attempts), Q5
+notify-worthy statuses (curated lists, not "notify on everything").
+
+**Verified with real, captured evidence** (not just unit tests): a one-off script drove a real
+payment through the real container-wired `RecordProviderTransactionHandler` to `paid`, confirmed a
+`client_notification_logs` row was enqueued, ran the real `RetryPendingClientNotifications` job
+against a local HTTP receiver, and the receiver captured a correctly-signed request (HMAC
+recomputed and matched by hand). The admin screen was screenshotted showing a `sent` row, a
+`dead_lettered` row, and a `pending` row; a real `POST /admin/notifications/{id}/retry` against the
+dead-lettered row was executed and re-screenshotted showing it moved to `pending` with a fresh
+backoff. Full narrative in `.claude/PhaseResults/Phase28Result.md`.
+
+**Files changed:** see `.claude/PhaseResults/Phase28Result.md` for the complete list (32 new
+files, 19 modified). Notably: `ContainerFactory.php`, `container.php`, `routes.php`,
+`composer.json`, and every test file that directly constructs the four modified handlers.
+
+**Database changes.** Two new tables via `20260917150001_create_provider_account_notification_overrides_table.php`
+and `20260917150002_create_client_notification_logs_table.php`. Rollback verified clean.
+
+**Migration notes.** None beyond the two new tables. **Breaking changes.** None — the four modified
+handlers gained one trailing constructor parameter each (`ChangePaymentStatusHandler` also gained
+a `PaymentAttemptRepository` parameter); all call sites (production DI + every test) updated.
+
+**Known gap, not this phase's to fix:** Phase 27's `admin_users`/`admin_sessions`/`admin_login_attempts`
+tables were never documented in `database-design.md`/`database-diagram.md`/`db_explain.md` —
+discovered while updating those files for Phase 28, left as a flagged follow-up.
+
 ## 2026-09-17 — Fixed the full integration-test suite (6 errors, 3 failures → 0)
 
 **Summary.** Before starting Phase 28, ran `composer test:all` and found the suite red: 6 errors,

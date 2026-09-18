@@ -17,6 +17,7 @@ use Gomrok\Modules\Payments\Domain\PaymentRepository;
 use Gomrok\Modules\Payments\Domain\PaymentStatus;
 use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Modules\Subscriptions\Application\SubscriptionAuditSnapshot;
+use Gomrok\Modules\Subscriptions\Domain\Events\SubscriptionStatusChanged;
 use Gomrok\Modules\Subscriptions\Domain\Subscription;
 use Gomrok\Modules\Subscriptions\Domain\SubscriptionEvent;
 use Gomrok\Modules\Subscriptions\Domain\SubscriptionEventRepository;
@@ -26,6 +27,7 @@ use Gomrok\Modules\Subscriptions\Domain\SubscriptionRepository;
 use Gomrok\Modules\Subscriptions\Domain\SubscriptionStatus;
 use Gomrok\Shared\Application\Audit\AuditEntry;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
+use Gomrok\Shared\Application\Events\DomainEventDispatcher;
 use Gomrok\Shared\Application\Transactions;
 use Gomrok\Shared\Domain\DomainError;
 use Gomrok\Shared\Domain\Result;
@@ -68,6 +70,7 @@ final readonly class RecordSubscriptionPaymentHandler
         private AuditLogWriter $audit,
         private Transactions $transactions,
         private ClockInterface $clock,
+        private DomainEventDispatcher $events,
     ) {
     }
 
@@ -171,10 +174,12 @@ final readonly class RecordSubscriptionPaymentHandler
             }
         }
 
+        $previousSubscriptionStatus = $subscription->status();
         $transitionError = $this->applySubscriptionOutcome($subscription, $mappedStatus, $command, $now);
         if ($transitionError !== null) {
             return Result::err($transitionError);
         }
+        $subscriptionStatusChanged = $subscription->status() !== $previousSubscriptionStatus;
 
         $this->transactions->run(function () use ($subscription, $beforeSubscription, $command, $now, $mappedStatus, $paymentId): void {
             $this->subscriptions->save($subscription);
@@ -199,6 +204,19 @@ final readonly class RecordSubscriptionPaymentHandler
                     ->withContext(['payment_id' => $paymentId]),
             );
         });
+
+        if ($subscriptionStatusChanged) {
+            $subscriptionId = $subscription->id();
+            \assert($subscriptionId !== null);
+            $this->events->dispatch(new SubscriptionStatusChanged(
+                $subscriptionId,
+                $command->clientId,
+                $previousSubscriptionStatus->value,
+                $subscription->status()->value,
+                $subscription->providerAccountId(),
+                $now,
+            ));
+        }
 
         return Result::ok(new RecordSubscriptionPaymentResult($paymentId, $mappedStatus->value, $subscription->status()->value, false));
     }

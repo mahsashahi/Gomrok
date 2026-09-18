@@ -19,6 +19,8 @@ flowchart TD
     Payments["Payments<br/>payments + payment_attempts + provider_transactions (P20)<br/>provider_customers + gateway_references (P20)"]
     Webhooks["Webhooks<br/>webhook_events — store-first, dedup, retry (P25)"]
     Subscriptions["Subscriptions<br/>subscriptions + subscription_events + subscription_payment_links (P26)"]
+    Notifications["Notifications<br/>client_notification_logs + provider_account_notification_overrides (P28)"]
+    Admin["Admin<br/>admin_users + admin_sessions + admin_login_attempts (P27)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -54,8 +56,7 @@ flowchart TD
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions done;
-    class Notifications,Admin todo;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions,Notifications,Admin done;
 ```
 
 Green = tables exist. Grey = designed in that module's phase.
@@ -1048,3 +1049,62 @@ a `subscription_payment_links` row tying it to their subscription, a `subscripti
 (`kind = charge_failed`), and their subscription's own `status` moves to `past_due` — all without
 touching `checkout_attempts` at all, since no new checkout ever happened. Full detail:
 `.claude/docs/database-design.md` → "Subscriptions (Phase 26)".
+
+## Client notifications (Phase 28)
+
+```mermaid
+erDiagram
+    provider_account_notification_overrides {
+        int id PK
+        int provider_account_id FK "-> provider_accounts.id (CASCADE)"
+        varchar purpose "same vocabulary as client_endpoints.purpose"
+        varchar url
+        boolean is_active
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+    client_notification_logs {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        varchar target_type "payment | subscription"
+        int target_id "polymorphic, no FK"
+        varchar purpose "payment_status | subscription_status"
+        varchar status_value "curated notify-worthy status only"
+        int provider_account_id FK "-> provider_accounts.id (SET NULL); nullable"
+        varchar endpoint_url "snapshot at enqueue time"
+        text payload "JSON; snapshot, resent unchanged on retry"
+        varchar status "pending | sent | dead_lettered"
+        smallint attempt_count
+        datetime next_attempt_at "nullable; drives the retry job"
+        datetime last_attempted_at "nullable"
+        smallint last_response_status "nullable"
+        text last_response_body "nullable, truncated"
+        varchar last_error "nullable; network-level failure"
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+
+    provider_accounts ||--o{ provider_account_notification_overrides : "overrides"
+    clients ||--o{ client_notification_logs : "owns"
+    provider_accounts ||--o{ client_notification_logs : "produced by"
+```
+
+`client_endpoints` (Phase 6) stays the client-scoped default URL per purpose; a provider account
+may register its own `provider_account_notification_overrides` row for a purpose (Q1, user-
+specified hybrid), used only when that account produced the notifying event — the event's
+`provider_account_id` is carried onto `client_notification_logs` for exactly this lookup, and kept
+afterward as an audit trail even if the account is later removed (`SET NULL`). Only a curated
+subset of statuses is notify-worthy (Q5, user-specified): payments notify on `paid`/`failed`/
+`canceled`/`expired`/`refunded`/`partially_refunded`/`disputed`/`chargeback` (not `created`/
+`pending`/`requires_action`/`authorized`); subscriptions notify on `active`/`past_due`/`cancelled`
+(not `trialing`). Refund statuses route through the `payment_status` purpose, not the older
+`refund_status` purpose (still reserved, unused). Delivery is signed with a timestamped HMAC (Q3):
+`X-Gomrok-Signature: t=<unix_ts>,v1=<hex HMAC-SHA256 of "{t}.{raw_json_body}">` using
+`clients.notification_signing_secret` (Phase 6, unused until now). Retry uses exponential backoff
+(Q4, user-specified) — 1m/5m/30m/2h/6h/12h/24h/24h across 8 attempts, then `dead_lettered` — via
+the same "plain invokable + cron `bin/*.php` script" shape as `RetryPendingWebhookEvents` (Phase
+25), deferring a real queue/worker to Phase 29. No DB uniqueness constraint dedupes
+`(target_type, target_id, status_value)`: `Paid ↔ Disputed` can legitimately cycle, so a hard
+constraint would drop a real second notification; idempotency instead relies on
+`Payment::transitionTo()`'s same-status no-op guard and Phase 25's webhook-dedup upstream. Full
+detail: `.claude/docs/database-design.md` → "Client notifications (Phase 28)".

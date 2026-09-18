@@ -1,0 +1,111 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Notifications — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+  <h1 class="page-title" style="font-size:22px">Notifications</h1>
+  {% if screen.deadLetteredCount > 0 %}
+  <span class="status-pill status-dead_lettered">{{ screen.deadLetteredCount }} dead-lettered</span>
+  {% endif %}
+</div>
+<p style="font-size:12px;color:var(--text-muted);margin:0 0 16px;max-width:680px">
+  Outbound server-to-server callbacks Gomrok owes each client on payment/subscription status
+  changes — not in-app notifications. Delivery and retry run on a background schedule; a
+  dead-lettered row (retries exhausted) can be retried manually here.
+</p>
+
+{% if success %}
+<div style="background:oklch(94% 0.06 150);color:oklch(38% 0.1 150);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div style="background:oklch(95% 0.05 25);color:var(--danger);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ error }}</div>
+{% endif %}
+
+<form method="get" action="/admin/notifications" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+  <div class="form-field" style="min-width:140px">
+    <label>Status</label>
+    <select name="status">
+      <option value="all" {{ screen.filters.status == 'all' ? 'selected' : '' }}>All</option>
+      <option value="pending" {{ screen.filters.status == 'pending' ? 'selected' : '' }}>Pending</option>
+      <option value="sent" {{ screen.filters.status == 'sent' ? 'selected' : '' }}>Sent</option>
+      <option value="dead_lettered" {{ screen.filters.status == 'dead_lettered' ? 'selected' : '' }}>Dead-lettered</option>
+    </select>
+  </div>
+  <div class="form-field" style="min-width:160px">
+    <label>Purpose</label>
+    <select name="purpose">
+      <option value="">Any</option>
+      <option value="payment_status" {{ screen.filters.purpose == 'payment_status' ? 'selected' : '' }}>payment_status</option>
+      <option value="subscription_status" {{ screen.filters.purpose == 'subscription_status' ? 'selected' : '' }}>subscription_status</option>
+    </select>
+  </div>
+  <div class="form-field" style="width:120px">
+    <label>Client ID</label>
+    <input type="text" name="client_id" value="{{ screen.filters.clientId }}" placeholder="any">
+  </div>
+  <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+  {% if screen.filters.clientId or screen.filters.status != 'all' or screen.filters.purpose %}
+  <a href="/admin/notifications" class="link-btn">Clear</a>
+  {% endif %}
+</form>
+
+{% if screen.rows is empty %}
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+  <div style="font-size:12.5px;font-weight:700">No matching notifications</div>
+</div>
+{% else %}
+<div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff">
+  {% for row in screen.rows %}
+  <div x-data="{ open: false }">
+    <div class="timeline-toggle" @click="open = !open" style="display:grid;grid-template-columns:0.85fr 1fr 1fr 0.7fr 0.9fr 0.6fr 1fr 0.2fr;column-gap:12px;padding:11px 16px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+      <div style="color:var(--text-muted)">{{ row.createdLabel }}</div>
+      <div style="color:var(--text-muted)">{{ row.clientLabel }}</div>
+      <div>
+        <div style="font-weight:600">{{ row.purpose }}</div>
+        <div style="font-size:10.5px;color:var(--text-faint)">{{ row.targetType }} #{{ row.targetId }}</div>
+      </div>
+      <div><span class="status-pill status-{{ row.statusValue }}">{{ row.statusValue }}</span></div>
+      <div><span class="status-pill status-{{ row.status }}">{{ row.status }}</span></div>
+      <div style="color:var(--text-muted)">{{ row.attemptCount }}</div>
+      <div style="color:var(--text-muted)">
+        {% if row.status == 'pending' and row.nextAttemptLabel %}next {{ row.nextAttemptLabel }}
+        {% elseif row.lastAttemptedLabel %}last {{ row.lastAttemptedLabel }}
+        {% else %}—{% endif %}
+      </div>
+      <div style="text-align:right;color:var(--text-faint)">▾</div>
+    </div>
+    <div x-show="open" x-cloak class="timeline-row" style="display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:10.5px;color:var(--text-faint);font-family:ui-monospace,Menlo,monospace;word-break:break-all">{{ row.endpointUrl }}</div>
+      {% if row.lastResponseStatus %}
+      <div style="font-size:11px">Last response: <strong>HTTP {{ row.lastResponseStatus }}</strong></div>
+      {% endif %}
+      {% if row.lastError %}
+      <div style="font-size:11px;color:var(--danger)">{{ row.lastError }}</div>
+      {% endif %}
+    </div>
+    {% if row.isRetryable and 'notifications.retry' in permissions %}
+    <div style="padding:8px 16px;border-bottom:1px solid var(--surface-alt);text-align:right">
+      <form method="post" action="/admin/notifications/{{ row.id }}/retry" style="display:inline">
+        <input type="hidden" name="return_query" value="{{ filter_query }}{{ filter_query ? '&' : '' }}page={{ screen.page }}">
+        <button type="submit" class="btn btn-secondary btn-sm">Retry now</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:11.5px;color:var(--text-faint)">
+  <div>{{ screen.totalCount }} result{{ screen.totalCount == 1 ? '' : 's' }} &middot; page {{ screen.page }} of {{ screen.totalPages }}</div>
+  <div style="display:flex;gap:10px">
+    {% if screen.page > 1 %}
+    <a href="/admin/notifications?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page - 1 }}">&larr; Newer</a>
+    {% endif %}
+    {% if screen.page < screen.totalPages %}
+    <a href="/admin/notifications?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page + 1 }}">Older &rarr;</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

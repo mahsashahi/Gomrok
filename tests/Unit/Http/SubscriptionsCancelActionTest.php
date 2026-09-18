@@ -29,6 +29,7 @@ use Gomrok\Tests\Support\InMemorySubscriptionDirectory;
 use Gomrok\Tests\Support\InMemorySubscriptionEventRepository;
 use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
+use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAccountDirectory;
 use Gomrok\Tests\Support\StubProviderAdapterFactory;
 use Gomrok\Tests\Support\SynchronousTransactions;
@@ -79,6 +80,7 @@ final class SubscriptionsCancelActionTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
 
         $clientContext = new ClientContext();
@@ -127,6 +129,7 @@ final class SubscriptionsCancelActionTest extends TestCase
             new RecordingAuditLogWriter(),
             new SynchronousTransactions(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
         );
 
         $clientContext = new ClientContext();

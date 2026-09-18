@@ -50,9 +50,17 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Payment creation flow (Phase 24) | `price_list_assignments` — **1** (Q6/Q7); `gateway_references` gained a nullable `checkout_attempt_id` column (Q1) and `checkout_attempts` gained `hash_return_token` (Q4) |
 | Webhooks module (Phase 25) | `webhook_events` — **1** |
 | Subscriptions module (Phase 26) | `subscriptions`, `subscription_events`, `subscription_payment_links` — **3**; `payments.checkout_attempt_id` made nullable (Q2) and `gateway_references` gained a nullable `subscription_id` column |
+| Client callbacks / notifications (Phase 28) | `provider_account_notification_overrides`, `client_notification_logs` — **2** |
 
-**Total: 56 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 58 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
+
+**Known gap (not this phase's to fix, flagged for visibility):** Phase 27's `admin_users`,
+`admin_sessions`, `admin_login_attempts` tables were never added to this file, the diagram, or
+`db_explain.md` — a pre-existing violation of the Database Diagram Maintenance Rule from that
+phase, discovered while updating this file for Phase 28. Left as-is here rather than silently
+backfilled outside the phase that should own that write-up; call it out if you want it done as a
+follow-up.
 
 ---
 
@@ -1470,6 +1478,68 @@ provisional case, Q3).
 
 ---
 
+## Client notifications (Phase 28)
+
+Server-to-server callbacks from Gomrok to a client when a payment/subscription reaches a
+notify-worthy status (Q5) — never an in-app/UI notification. `client_endpoints` (Phase 6) stays
+the client-scoped default URL per purpose; a provider account may register its own override URL
+for a purpose (Q1, user-specified hybrid), used only when that account produced the event.
+
+### `provider_account_notification_overrides`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `provider_account_id` | INT UNSIGNED | no | FK → `provider_accounts(id)` CASCADE |
+| `purpose` | VARCHAR(40) | no | same vocabulary as `client_endpoints.purpose` |
+| `url` | VARCHAR(2048) | no | |
+| `is_active` | BOOLEAN | no | default `true` |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`UNIQUE (provider_account_id, purpose)` = `uniq_pano_account_purpose`. Deliberately separate from
+`provider_account_endpoints` (Phase 9), which is exclusively inbound (webhook/callback/return
+verification) — no shared rows or concerns.
+
+### `client_notification_logs`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `target_type` | VARCHAR(20) | no | `payment` \| `subscription` — polymorphic, same unenforced-FK shape as `audit_logs`/`error_logs` |
+| `target_id` | INT UNSIGNED | no | no FK (polymorphic) |
+| `purpose` | VARCHAR(40) | no | resolved `EndpointPurpose` — `payment_status` or `subscription_status` (refund statuses route through `payment_status`; `refund_status` stays reserved/unused, see Q-notes in Phase28Result.md) |
+| `status_value` | VARCHAR(30) | no | the specific normalized status that triggered this — from Q5's curated lists only |
+| `provider_account_id` | INT UNSIGNED | yes | FK → `provider_accounts(id)` SET NULL; the account that produced the event, used to resolve the Q1 override |
+| `endpoint_url` | VARCHAR(2048) | no | **snapshot** of the resolved URL at enqueue time |
+| `payload` | TEXT (JSON) | no | the exact body sent; stored once, resent unchanged on every retry |
+| `status` | VARCHAR(20) | no | `pending` → `sent` \| `dead_lettered` |
+| `attempt_count` | SMALLINT UNSIGNED | no | default `0` |
+| `next_attempt_at` | DATETIME | yes | null once `sent`/`dead_lettered`; drives the retry job |
+| `last_attempted_at` | DATETIME | yes | |
+| `last_response_status` | SMALLINT UNSIGNED | yes | HTTP status of the last attempt |
+| `last_response_body` | TEXT | yes | truncated at write time |
+| `last_error` | VARCHAR(255) | yes | network-level failure when there was no HTTP response |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`INDEX (client_id, status, next_attempt_at)` = `idx_cnl_retry_scan` (the retry job's scan);
+`INDEX (target_type, target_id)` = `idx_cnl_target`; `INDEX (client_id)` = `idx_cnl_client`.
+
+**Backoff schedule (Q4, user-specified):** 1m, 5m, 30m, 2h, 6h, 12h, 24h, 24h across 8 attempts,
+then `dead_lettered`. A code constant, not a column — mirrors `ProcessWebhookEventHandler::
+MAX_ATTEMPTS` not being a column either.
+
+**No DB-level uniqueness constraint on `(target_type, target_id, status_value)`.** Checked
+`PaymentStatus::allowedNextStatuses()`: almost every status is reachable at most once per payment
+— except `Paid ↔ Disputed`, which can legitimately cycle (a resolved dispute returns to `paid`; a
+second chargeback re-enters `disputed`). A hard unique constraint would silently swallow that
+second, real notification. Idempotency instead relies on two upstream guards that already exist:
+`Payment::transitionTo()`'s same-status no-op guard (no event fires for a no-op transition) and
+Phase 25's webhook-dedup (`uniq_webhook_events_dedup`) rejecting a true duplicate provider event
+before it ever reaches a handler twice.
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -1535,6 +1605,8 @@ provisional case, Q3).
 | `src/Database/Migrations/20260914120001_create_subscriptions_tables.php` | `Gomrok\Database\Migrations\CreateSubscriptionsTables` |
 | `src/Database/Migrations/20260914120002_make_payments_checkout_attempt_id_nullable.php` | `Gomrok\Database\Migrations\MakePaymentsCheckoutAttemptIdNullable` |
 | `src/Database/Migrations/20260914120003_add_subscription_id_to_gateway_references.php` | `Gomrok\Database\Migrations\AddSubscriptionIdToGatewayReferences` |
+| `src/Database/Migrations/20260917150001_create_provider_account_notification_overrides_table.php` | `Gomrok\Database\Migrations\CreateProviderAccountNotificationOverridesTable` |
+| `src/Database/Migrations/20260917150002_create_client_notification_logs_table.php` | `Gomrok\Database\Migrations\CreateClientNotificationLogsTable` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

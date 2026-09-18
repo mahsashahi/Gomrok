@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gomrok\Modules\Payments\Application\RecordProviderTransaction;
 
 use Gomrok\Modules\Payments\Application\PaymentAuditSnapshot;
+use Gomrok\Modules\Payments\Domain\Events\PaymentStatusChanged;
 use Gomrok\Modules\Payments\Domain\PaymentAttempt;
 use Gomrok\Modules\Payments\Domain\PaymentAttemptRepository;
 use Gomrok\Modules\Payments\Domain\PaymentAttemptStatus;
@@ -15,6 +16,7 @@ use Gomrok\Modules\Payments\Domain\ProviderTransactionRepository;
 use Gomrok\Modules\Providers\Domain\PaymentMethod;
 use Gomrok\Shared\Application\Audit\AuditEntry;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
+use Gomrok\Shared\Application\Events\DomainEventDispatcher;
 use Gomrok\Shared\Application\Transactions;
 use Gomrok\Shared\Domain\DomainError;
 use Gomrok\Shared\Domain\Result;
@@ -39,6 +41,7 @@ final readonly class RecordProviderTransactionHandler
         private AuditLogWriter $audit,
         private Transactions $transactions,
         private ClockInterface $clock,
+        private DomainEventDispatcher $events,
     ) {
     }
 
@@ -67,10 +70,12 @@ final readonly class RecordProviderTransactionHandler
         }
 
         $before = PaymentAuditSnapshot::payment($payment);
+        $previousStatus = $payment->status();
         $error = $payment->transitionTo($newStatus, $this->clock->now(), $command->errorCode, $command->errorMessage);
         if ($error !== null) {
             return Result::err($error);
         }
+        $statusChanged = $payment->status() !== $previousStatus;
 
         $result = $this->transactions->run(function () use ($payment, $before, $command, $method): RecordProviderTransactionResult {
             $now = $this->clock->now();
@@ -112,6 +117,17 @@ final readonly class RecordProviderTransactionHandler
 
             return new RecordProviderTransactionResult($attemptId, $transactionId, $payment->status()->value);
         });
+
+        if ($statusChanged) {
+            $this->events->dispatch(new PaymentStatusChanged(
+                $command->paymentId,
+                $command->clientId,
+                $previousStatus->value,
+                $payment->status()->value,
+                $command->providerAccountId,
+                $this->clock->now(),
+            ));
+        }
 
         return Result::ok($result);
     }
