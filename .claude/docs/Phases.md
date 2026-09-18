@@ -45,7 +45,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 25 | Webhooks module | ☑ | 2026-09-14 12:00 | 2026-09-14 19:31 | 5–8h | N/A | N/A |
 | 26 | Subscriptions module | ☑ | N/A | N/A | 6–9h | N/A | N/A |
 | 27 | **Admin Module Views and Panels** | ☑ | 2026-09-14 15:00 | 2026-09-16 00:40 | 12–20h | N/A (spans multiple sessions) | N/A |
-| 28 | Client callbacks / outbound notifications | ☑ | 2026-09-17 15:00 | 2026-09-17 23:35 | 4–6h | ~8h 35m | N/A |
+| 28 | Client callbacks / outbound notifications | ☑ | 2026-09-17 16:00 | 2026-09-17 17:01 | 4–6h | ~1h 01m | N/A |
 | 29 | Background jobs, reconciliation & observability | ☐ | — | — | 6–9h | — | — |
 | 30 | Hardening, docs & first-client go-live | ☐ | — | — | 6–10h | — | — |
 | | **Total** | | | | **~130–210h** | **—** | **—** |
