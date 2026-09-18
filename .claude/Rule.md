@@ -18,8 +18,10 @@ at the fuller text.
   `.claude/docs/last_ai_answer.md` with just that answer — single-slot buffer, use `Write`
   (never `Edit` / append), start with `# Q: <one-line topic>` then the response body. Skip it for
   short confirmations, tool-result echoes, one-line questions, and meta-talk about the rule
-  itself. Standing rule — do not ask permission each time. *(CLAUDE.md → last_ai_answer.md Response
-  Log Rule)*
+  itself. Standing rule — do not ask permission each time. **Non-negotiable, every single
+  qualifying turn, no exceptions** — the last step before a substantive turn ends, not an
+  afterthought; if a turn was missed, catch it up the moment it's noticed, unprompted.
+  *(CLAUDE.md → last_ai_answer.md Response Log Rule)*
 - **Explain the important decisions**; keep code and architecture simple and practical; avoid
   overengineering; prefer clear over clever. *(CLAUDE.md → Expected Claude Behavior)*
 - **Act on established facts** — don't re-ask a question the user has already answered, in this

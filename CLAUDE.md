@@ -1491,6 +1491,14 @@ What does NOT count (do not update `.claude/docs/last_ai_answer.md` for these):
 
 Do not ask permission each time. The rule is standing.
 
+**This is a non-negotiable, every-single-time rule — no exceptions, ever.** Before ending *any*
+turn that produced a substantive response (per the definition above), save it to
+`.claude/docs/last_ai_answer.md`. Treat it as the last step of the turn, not an afterthought:
+if the turn's final message qualifies as substantive, the file must be updated before the turn
+is considered done. Forgetting is not acceptable — if a previous turn was missed, catch it up
+immediately (overwrite with the most recent substantive answer, per the single-slot rule) the
+moment it's noticed, without waiting to be asked twice.
+
 ## Interactive Phase Rule
 
 Before starting each implementation phase, explain what will be done in that phase.
