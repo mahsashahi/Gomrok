@@ -19,4 +19,13 @@ interface PaymentRepository
      * @return list<Payment>
      */
     public function forClient(int $clientId): array;
+
+    /**
+     * Payments touched within a rolling window, excluding brand-new
+     * `created` rows with nothing yet to compare against a provider —
+     * Phase 29's payment reconciliation scan.
+     *
+     * @return list<Payment>
+     */
+    public function findRecentForReconciliation(\DateTimeImmutable $since, int $limit): array;
 }

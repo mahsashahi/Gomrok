@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gomrok\Tests\Support;
 
 use Gomrok\Modules\Payments\Domain\PaymentStatus;
+use Gomrok\Modules\Providers\Application\Adapter\ActivateSubscriptionCommand;
 use Gomrok\Modules\Providers\Application\Adapter\CreatePaymentCommand;
 use Gomrok\Modules\Providers\Application\Adapter\CreateSubscriptionCommand as ProviderCreateSubscriptionCommand;
 use Gomrok\Modules\Providers\Application\Adapter\ParsedWebhookEvent;
@@ -18,6 +19,7 @@ use Gomrok\Modules\Providers\Application\Adapter\ProviderSubscriptionStatus;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderWebhookVerificationFailed;
 use Gomrok\Modules\Providers\Application\Adapter\RawWebhook;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsAuthCapture;
+use Gomrok\Modules\Providers\Application\Adapter\SupportsDeferredSubscriptionActivation;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsRefunds;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsSubscriptions;
 use Gomrok\Modules\Providers\Domain\ProviderCapabilities;
@@ -27,12 +29,12 @@ use Gomrok\Modules\Providers\Domain\ProviderCapabilities;
  * that need a real port instance without a real SDK/HTTP call — records the
  * last {@see CreatePaymentCommand} it received so tests can assert on it.
  * Implements the optional {@see SupportsRefunds}/{@see SupportsAuthCapture}/
- * {@see SupportsSubscriptions} capability interfaces unconditionally
- * (Phase 24/26) — capability *gating* in these tests is exercised via
- * `InMemoryProviderTypeDeclarations`, not by this double declining the
- * interface.
+ * {@see SupportsSubscriptions}/{@see SupportsDeferredSubscriptionActivation}
+ * capability interfaces unconditionally (Phase 24/26/29) — capability
+ * *gating* in these tests is exercised via `InMemoryProviderTypeDeclarations`,
+ * not by this double declining the interface.
  */
-final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefunds, SupportsAuthCapture, SupportsSubscriptions
+final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefunds, SupportsAuthCapture, SupportsSubscriptions, SupportsDeferredSubscriptionActivation
 {
     public ?CreatePaymentCommand $lastCommand = null;
 
@@ -57,6 +59,14 @@ final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefu
     private ?ProviderAdapterException $throwOnCreateSubscription = null;
 
     private ?ProviderAdapterException $throwOnCancelSubscription = null;
+
+    private ?ProviderAdapterException $throwOnActivateSubscription = null;
+
+    public ?ActivateSubscriptionCommand $lastActivateSubscriptionCommand = null;
+
+    public ?string $lastActivateSubscriptionCustomerId = null;
+
+    private ProviderSubscriptionResult $activateSubscriptionResult;
 
     private ProviderSubscriptionResult $createSubscriptionResult;
 
@@ -84,6 +94,7 @@ final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefu
         $this->webhookParseResult = new ParsedWebhookEvent('evt_1', 'payment.updated', null, 'open', []);
         $this->createSubscriptionResult = new ProviderSubscriptionResult('sub_1', 'https://provider.example/checkout/sub_1', 'incomplete');
         $this->subscriptionStatusResult = new ProviderSubscriptionStatus('sub_1', 'active', 'active');
+        $this->activateSubscriptionResult = new ProviderSubscriptionResult('sub_activated_1', '', 'active');
     }
 
     public function throwOnCreatePayment(ProviderAdapterException $exception): void
@@ -119,6 +130,16 @@ final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefu
     public function subscriptionStatusResult(ProviderSubscriptionStatus $result): void
     {
         $this->subscriptionStatusResult = $result;
+    }
+
+    public function activateSubscriptionResult(ProviderSubscriptionResult $result): void
+    {
+        $this->activateSubscriptionResult = $result;
+    }
+
+    public function throwOnActivateSubscription(ProviderAdapterException $exception): void
+    {
+        $this->throwOnActivateSubscription = $exception;
     }
 
     public function webhookParseResult(ParsedWebhookEvent $result): void
@@ -267,6 +288,17 @@ final class FakePaymentProviderPort implements PaymentProviderPort, SupportsRefu
     public function mapProviderSubscriptionStatusToInternalStatus(string $providerStatus): string
     {
         return strtolower(trim($providerStatus));
+    }
+
+    public function activateSubscription(string $customerId, ActivateSubscriptionCommand $command): ProviderSubscriptionResult
+    {
+        $this->lastActivateSubscriptionCustomerId = $customerId;
+        $this->lastActivateSubscriptionCommand = $command;
+        if ($this->throwOnActivateSubscription !== null) {
+            throw $this->throwOnActivateSubscription;
+        }
+
+        return $this->activateSubscriptionResult;
     }
 
     private static function mapRawStatus(string $rawStatus): PaymentStatus

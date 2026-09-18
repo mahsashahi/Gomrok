@@ -95,6 +95,30 @@ final readonly class PdoCheckoutAttemptRepository implements CheckoutAttemptRepo
         return $attempts;
     }
 
+    public function findStaleNonTerminal(\DateTimeImmutable $before, int $limit): array
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT * FROM checkout_attempts
+              WHERE status NOT IN ('converted_to_payment', 'failed', 'canceled', 'expired', 'abandoned')
+                AND COALESCE(updated_at, created_at) < :before
+              ORDER BY COALESCE(updated_at, created_at) ASC
+              LIMIT :limit",
+        );
+        $statement->bindValue('before', $before->format(self::DT));
+        $statement->bindValue('limit', $limit, PDO::PARAM_INT);
+        $statement->execute();
+
+        $attempts = [];
+        while (($row = $statement->fetch()) !== false) {
+            $attempt = $this->hydrate($row);
+            if ($attempt !== null) {
+                $attempts[] = $attempt;
+            }
+        }
+
+        return $attempts;
+    }
+
     /**
      * @return array<string, scalar|null>
      */

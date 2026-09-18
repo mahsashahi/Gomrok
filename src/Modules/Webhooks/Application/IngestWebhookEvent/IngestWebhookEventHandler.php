@@ -105,6 +105,7 @@ final readonly class IngestWebhookEventHandler
                 $command->rawBody,
                 $headers,
                 $now,
+                $parsed->subscriptionReference,
             );
             $this->events->save($event);
         }

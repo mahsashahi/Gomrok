@@ -51,8 +51,9 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Webhooks module (Phase 25) | `webhook_events` — **1** |
 | Subscriptions module (Phase 26) | `subscriptions`, `subscription_events`, `subscription_payment_links` — **3**; `payments.checkout_attempt_id` made nullable (Q2) and `gateway_references` gained a nullable `subscription_id` column |
 | Client callbacks / notifications (Phase 28) | `provider_account_notification_overrides`, `client_notification_logs` — **2** |
+| Background jobs, reconciliation & observability (Phase 29) | `jobs`, `reconciliation_findings` — **2** |
 
-**Total: 58 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 60 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
 
 **Known gap (not this phase's to fix, flagged for visibility):** Phase 27's `admin_users`,
@@ -1299,6 +1300,7 @@ Every inbound provider webhook is stored before any processing is attempted (CLA
 | `event_type` | VARCHAR(100) | yes | null when signature verification failed |
 | `raw_status` | VARCHAR(100) | yes | the unmapped provider status string; null when signature verification failed |
 | `provider_reference` | VARCHAR(191) | yes | the resource id used for the `gateway_references` reverse lookup |
+| `subscription_reference` | VARCHAR(191) | yes | Phase 29 Q2, additive — the subscription a renewal-charge webhook's payment belongs to (Mollie's `subscriptionId` / a Stripe invoice's `subscription`); resolved against a `GatewayReferenceType::Subscription` row when `provider_reference` doesn't resolve on its own |
 | `raw_payload` | MEDIUMTEXT | no | the exact request body received, never re-encoded — replayable byte-for-byte |
 | `headers` | JSON | yes | raw request headers (uppercased keys), needed to rebuild a `RawWebhook` (PayPal's verification reads 5 named headers) |
 | `status` | VARCHAR(20) | no | `received` / `processing` / `processed` / `retry_pending` / `failed` (Q3) |
@@ -1540,6 +1542,79 @@ before it ever reaches a handler twice.
 
 ---
 
+## Background jobs, reconciliation & observability (Phase 29)
+
+### `jobs`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `type` | VARCHAR(60) | no | fixed, code-defined set — no lookup table |
+| `payload` | TEXT (JSON) | yes | parameters for a one-off job; every recurring scan type needs none |
+| `status` | VARCHAR(20) | no | `pending` → `processing` → `done` \| `failed` \| `dead_lettered` |
+| `attempts` | SMALLINT UNSIGNED | no | default `0`, incremented on every claim regardless of outcome |
+| `consecutive_failures` | SMALLINT UNSIGNED | no | default `0`; resets to `0` on success, drives the alert threshold (Q5 revised) |
+| `total_failures` | INT UNSIGNED | no | default `0`; lifetime count, never resets |
+| `last_failed_at` / `last_success_at` | DATETIME / DATETIME | yes / yes | most recent failure/success timestamps |
+| `alerted_at` | DATETIME | yes | set once when `consecutive_failures` first crosses `Job::ALERT_THRESHOLD` (3); stays set while still failing so a new alert isn't raised every run; cleared on the next success |
+| `alert_acknowledged_at` / `alert_acknowledged_by` | DATETIME / INT UNSIGNED | yes / yes | an admin silencing a still-failing job's alert without it re-firing before the next failure; no FK on `alert_acknowledged_by`, same unconstrained convention as `error_logs.resolved_by` / `reconciliation_findings.resolved_by` |
+| `run_at` | DATETIME | no | when the job becomes claimable |
+| `locked_at` / `locked_by` | DATETIME / VARCHAR(64) | yes / yes | claim markers, `SELECT ... FOR UPDATE SKIP LOCKED` |
+| `last_error` | TEXT | yes | |
+| `last_result` | TEXT (JSON) | yes | summary counts from the last run, shown on the admin Jobs screen |
+| `created_at` / `updated_at` | DATETIME | no / yes | |
+
+`INDEX (status, run_at)` = `idx_jobs_claim_scan` (the claim query); `INDEX (type)` =
+`idx_jobs_type`; `INDEX (alerted_at)` = `idx_jobs_alerted` (the admin screen's "currently
+alerting" query). No `client_id` — every job type this phase introduces is a global scan across
+clients, not a per-client entity.
+
+**Unified, self-rescheduling design (Q1, user-confirmed).** Every recurring background task —
+webhook retry and notification delivery/retry (migrated from their standalone Phase 25/28
+`bin/*.php` scanners), the voucher stale-reservation sweep, the checkout-attempt abandonment
+sweep, Mollie subscription renewal charging, and both reconciliation scans — is a job type here.
+No separate cron-schedule table: when a handler finishes, it enqueues its own next occurrence
+(`run_at = now + <fixed interval per type>`, a PHP constant, not a DB value).
+
+**Recurring jobs never dead-letter from repeated failure, and never get escalating backoff (Q5
+revised, user-specified).** A recurring job keeps rescheduling at its fixed interval forever, no
+matter how many consecutive failures — only a genuinely one-off job type (none exist yet) uses
+the classic single-attempt terminal `failed`/`dead_lettered` behavior. Instead, health is tracked
+and surfaced: `consecutive_failures` crossing `Job::ALERT_THRESHOLD` (3) raises a visible alert on
+the admin Jobs screen once per failure episode (not on every subsequent failure — `alerted_at`
+guards this), which an admin can acknowledge or which clears automatically on the job's next
+success. Per-occurrence failure detail for debugging is **not** duplicated in a new table — a job
+handler's returned `JobRunResult::failure()` (not just a thrown exception) is now also logged to
+the existing `error_logs` table (`source: 'job'`), so history lives in the Error Logs screen
+already built for exactly this purpose.
+
+### `reconciliation_findings`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | INT UNSIGNED AI | no | PK |
+| `client_id` | INT UNSIGNED | no | FK → `clients(id)` CASCADE |
+| `target_type` | VARCHAR(20) | no | `payment` \| `subscription` — polymorphic, same shape as `client_notification_logs.target_type` |
+| `target_id` | INT UNSIGNED | no | no FK (polymorphic) |
+| `local_status` | VARCHAR(30) | no | Gomrok's status at detection time |
+| `provider_status_raw` | VARCHAR(100) | no | the raw status the provider returned when polled |
+| `mapped_provider_status` | VARCHAR(30) | yes | raw status mapped through the adapter's `mapProviderStatusToInternalStatus()`; null if unmapped |
+| `detected_at` | DATETIME | no | |
+| `resolved_at` / `resolved_by` | DATETIME / INT UNSIGNED | yes / yes | an admin marking a finding reviewed — same convention as `error_logs` (Phase 27) |
+| `created_at` | DATETIME | no | |
+
+`INDEX (client_id, resolved_at)` = `idx_reconciliation_findings_client_resolved` (the admin
+report's "open findings" default view); `INDEX (target_type, target_id)` =
+`idx_reconciliation_findings_target`.
+
+**Detection only — never auto-corrects (deliberate, not a schema detail).** Reconciliation
+records drift between Gomrok's local status and what the provider reports; it never calls
+`transitionTo()` itself. Auto-correcting could apply a status Gomrok's own allowed-transitions
+guard would otherwise reject, or mask a real bug instead of surfacing it. Every real status
+change still comes from an actual webhook or an explicit admin action.
+
+---
+
 ## Migrations & seeders
 
 | File | Class |
@@ -1607,6 +1682,10 @@ before it ever reaches a handler twice.
 | `src/Database/Migrations/20260914120003_add_subscription_id_to_gateway_references.php` | `Gomrok\Database\Migrations\AddSubscriptionIdToGatewayReferences` |
 | `src/Database/Migrations/20260917150001_create_provider_account_notification_overrides_table.php` | `Gomrok\Database\Migrations\CreateProviderAccountNotificationOverridesTable` |
 | `src/Database/Migrations/20260917150002_create_client_notification_logs_table.php` | `Gomrok\Database\Migrations\CreateClientNotificationLogsTable` |
+| `src/Database/Migrations/20260917180001_create_jobs_table.php` | `Gomrok\Database\Migrations\CreateJobsTable` |
+| `src/Database/Migrations/20260917180002_create_reconciliation_findings_table.php` | `Gomrok\Database\Migrations\CreateReconciliationFindingsTable` |
+| `src/Database/Migrations/20260917180003_add_subscription_reference_to_webhook_events.php` | `Gomrok\Database\Migrations\AddSubscriptionReferenceToWebhookEvents` |
+| `src/Database/Migrations/20260917235500_add_health_tracking_to_jobs_table.php` | `Gomrok\Database\Migrations\AddHealthTrackingToJobsTable` |
 
 Seeders are idempotent (`INSERT … ON DUPLICATE KEY UPDATE`). Run:
 `composer db:setup` (= `migrate` + `seed`). `composer db:reset` rolls everything back and rebuilds;

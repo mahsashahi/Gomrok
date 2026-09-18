@@ -22,6 +22,9 @@ use Gomrok\Http\Admin\AdminGroupReorderAction;
 use Gomrok\Http\Admin\AdminGroupsCreateAction;
 use Gomrok\Http\Admin\AdminGroupsUpdateAction;
 use Gomrok\Http\Admin\AdminHomeAction;
+use Gomrok\Http\Admin\AdminJobAcknowledgeAlertAction;
+use Gomrok\Http\Admin\AdminJobRunNowAction;
+use Gomrok\Http\Admin\AdminJobsAction;
 use Gomrok\Http\Admin\AdminLoginShowAction;
 use Gomrok\Http\Admin\AdminLoginSubmitAction;
 use Gomrok\Http\Admin\AdminLogoutAction;
@@ -44,6 +47,8 @@ use Gomrok\Http\Admin\AdminProviderGroupReorderAction;
 use Gomrok\Http\Admin\AdminProviderGroupsCreateAction;
 use Gomrok\Http\Admin\AdminProviderGroupsUpdateAction;
 use Gomrok\Http\Admin\AdminProvidersAction;
+use Gomrok\Http\Admin\AdminReconciliationAction;
+use Gomrok\Http\Admin\AdminReconciliationResolveAction;
 use Gomrok\Http\Admin\AdminSalesAction;
 use Gomrok\Http\Admin\AdminSettingsAction;
 use Gomrok\Http\Admin\AdminVoucherCurrencyDiscountAction;
@@ -161,6 +166,15 @@ return static function (App $app): void {
         // Phase 28 — Notifications screen (real "retry" write action on a dead-lettered row).
         $group->get('/notifications', AdminNotificationsAction::class);
         $group->post('/notifications/{notificationId}/retry', AdminNotificationRetryAction::class);
+
+        // Phase 29 — Jobs screen (real "run now" write action on a pending row).
+        $group->get('/jobs', AdminJobsAction::class);
+        $group->post('/jobs/{jobId}/run-now', AdminJobRunNowAction::class);
+        $group->post('/jobs/{jobId}/acknowledge-alert', AdminJobAcknowledgeAlertAction::class);
+
+        // Phase 29 — Reconciliation report screen (real "mark resolved" write action).
+        $group->get('/reconciliation', AdminReconciliationAction::class);
+        $group->post('/reconciliation/{findingId}/resolve', AdminReconciliationResolveAction::class);
 
         // Phase 27 — Settings: no backing domain/schema exists (see AdminSettingsAction);
         // a neutral placeholder per Phases.md's "undesigned screens" rule.

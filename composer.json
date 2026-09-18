@@ -77,6 +77,7 @@
         "idempotency:purge": "php bin/PurgeIdempotencyKeys.php",
         "webhook:retry-pending": "php bin/RetryPendingWebhookEvents.php",
         "notifications:retry-pending": "php bin/RetryPendingClientNotifications.php",
+        "jobs:worker": "php bin/Worker.php",
         "client:create": "php bin/CreateClient.php",
         "client:issue-key": "php bin/IssueClientApiKey.php",
         "client:revoke-key": "php bin/RevokeClientApiKey.php",

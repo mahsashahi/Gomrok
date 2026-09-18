@@ -146,9 +146,26 @@ final readonly class CreateProviderSubscriptionHandler
             $now,
         );
 
-        $this->transactions->run(function () use ($attempt, $reference, $before, $command, $attemptId): void {
+        // Mollie only (Phase 29 Q2) — the provider's own customer id,
+        // recorded so the deferred-activation job can find it once the
+        // first-payment mandate is confirmed.
+        $customerReference = $providerResult->customerId !== null
+            ? GatewayReference::forCheckoutAttempt(
+                $command->clientId,
+                $routing->providerAccountId,
+                GatewayReferenceType::Customer,
+                $providerResult->customerId,
+                $attemptId,
+                $now,
+            )
+            : null;
+
+        $this->transactions->run(function () use ($attempt, $reference, $customerReference, $before, $command, $attemptId): void {
             $this->attempts->save($attempt);
             $this->gatewayReferences->save($reference);
+            if ($customerReference !== null) {
+                $this->gatewayReferences->save($customerReference);
+            }
 
             $entry = $command->actorId !== null
                 ? AuditEntry::forAdminUser($command->actorId, $command->clientId, 'checkout_attempt.provider_subscription_created')

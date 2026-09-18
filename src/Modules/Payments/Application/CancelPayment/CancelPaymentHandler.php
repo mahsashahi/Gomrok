@@ -8,6 +8,7 @@ use Gomrok\Modules\Payments\Application\RecordProviderTransaction\RecordProvider
 use Gomrok\Modules\Payments\Application\RecordProviderTransaction\RecordProviderTransactionHandler;
 use Gomrok\Modules\Payments\Application\RecordProviderTransaction\RecordProviderTransactionResult;
 use Gomrok\Modules\Payments\Application\ResolvePaymentActionContext;
+use Gomrok\Modules\Payments\Domain\Payment;
 use Gomrok\Modules\Payments\Domain\PaymentRepository;
 use Gomrok\Modules\Payments\Domain\PaymentStatus;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderAdapterException;
@@ -35,9 +36,9 @@ final readonly class CancelPaymentHandler
 
     public function handle(CancelPaymentCommand $command): Result
     {
-        $payment = $this->payments->findByCheckoutAttemptId($command->checkoutAttemptId);
-        if ($payment === null || $payment->clientId() !== $command->clientId) {
-            return Result::err(DomainError::notFound('payment.not_found', "No payment was found for checkout attempt {$command->checkoutAttemptId}."));
+        $payment = $this->resolvePayment($command->clientId, $command->checkoutAttemptId, $command->paymentId);
+        if ($payment === null) {
+            return Result::err(DomainError::notFound('payment.not_found', $this->notFoundMessage($command->checkoutAttemptId, $command->paymentId)));
         }
 
         $cancelableStatuses = [PaymentStatus::Created, PaymentStatus::Pending, PaymentStatus::RequiresAction, PaymentStatus::Authorized];
@@ -85,5 +86,21 @@ final readonly class CancelPaymentHandler
         \assert($value instanceof RecordProviderTransactionResult);
 
         return Result::ok(new CancelPaymentResult($paymentId, $value->paymentStatus));
+    }
+
+    private function resolvePayment(int $clientId, ?int $checkoutAttemptId, ?int $paymentId): ?Payment
+    {
+        $payment = $paymentId !== null
+            ? $this->payments->findById($paymentId)
+            : ($checkoutAttemptId !== null ? $this->payments->findByCheckoutAttemptId($checkoutAttemptId) : null);
+
+        return $payment !== null && $payment->clientId() === $clientId ? $payment : null;
+    }
+
+    private function notFoundMessage(?int $checkoutAttemptId, ?int $paymentId): string
+    {
+        return $paymentId !== null
+            ? "Payment {$paymentId} was not found."
+            : "No payment was found for checkout attempt {$checkoutAttemptId}.";
     }
 }

@@ -81,6 +81,17 @@ final class InMemoryVoucherRedemptionRepository implements VoucherRedemptionRepo
         return array_values(array_filter($this->byId, static fn (VoucherRedemption $r): bool => $r->voucherId() === $voucherId));
     }
 
+    public function findStaleReserved(\DateTimeImmutable $before, int $limit): array
+    {
+        $stale = array_values(array_filter(
+            $this->byId,
+            static fn (VoucherRedemption $r): bool => $r->status() === RedemptionStatus::Reserved && $r->reservedAt() < $before,
+        ));
+        usort($stale, static fn (VoucherRedemption $a, VoucherRedemption $b): int => $a->reservedAt() <=> $b->reservedAt());
+
+        return \array_slice($stale, 0, $limit);
+    }
+
     public function redemptionsByUser(int $voucherId, string $clientUserRef): int
     {
         return $this->countForVoucherAndUser($voucherId, $clientUserRef, self::ACTIVE_STATUSES);

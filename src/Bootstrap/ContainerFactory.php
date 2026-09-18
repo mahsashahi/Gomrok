@@ -30,6 +30,7 @@ final class ContainerFactory
         'src/Modules/Webhooks/Infrastructure/definitions.php',
         'src/Modules/Subscriptions/Infrastructure/definitions.php',
         'src/Modules/Notifications/Infrastructure/definitions.php',
+        'src/Modules/Reconciliation/Infrastructure/definitions.php',
         'src/Modules/Admin/Infrastructure/definitions.php',
     ];
 

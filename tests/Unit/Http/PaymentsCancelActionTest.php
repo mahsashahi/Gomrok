@@ -32,6 +32,8 @@ use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
 use Gomrok\Tests\Support\InMemoryProviderTypeDeclarations;
+use Gomrok\Tests\Support\InMemorySubscriptionPaymentLinkRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
 use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAccountDirectory;
@@ -77,6 +79,8 @@ final class PaymentsCancelActionTest extends TestCase
             new ProviderCapabilityResolver(InMemoryProviderTypeDeclarations::withKnownProviders()),
             (new StubProviderAdapterFactory())->add(self::PROVIDER_ACCOUNT, $adapter),
             $gatewayReferences,
+            new InMemorySubscriptionPaymentLinkRepository(),
+            new InMemorySubscriptionRepository(),
         );
 
         $handler = new CancelPaymentHandler($payments, $context, new RecordProviderTransactionHandler(
@@ -124,6 +128,8 @@ final class PaymentsCancelActionTest extends TestCase
             new ProviderCapabilityResolver(InMemoryProviderTypeDeclarations::withKnownProviders()),
             new StubProviderAdapterFactory(),
             $gatewayReferences,
+            new InMemorySubscriptionPaymentLinkRepository(),
+            new InMemorySubscriptionRepository(),
         );
         $handler = new CancelPaymentHandler($payments, $context, new RecordProviderTransactionHandler(
             $payments,

@@ -12,6 +12,9 @@ use Gomrok\Modules\Payments\Domain\GatewayReferenceRepository;
 use Gomrok\Modules\Payments\Domain\GatewayReferenceType;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderAdapterFactory;
 use Gomrok\Modules\Providers\Application\Adapter\UnsupportedProviderType;
+use Gomrok\Modules\Subscriptions\Application\RecordSubscriptionPayment\RecordSubscriptionPaymentCommand;
+use Gomrok\Modules\Subscriptions\Application\RecordSubscriptionPayment\RecordSubscriptionPaymentHandler;
+use Gomrok\Modules\Subscriptions\Application\RecordSubscriptionPayment\RecordSubscriptionPaymentResult;
 use Gomrok\Modules\Webhooks\Domain\WebhookEvent;
 use Gomrok\Modules\Webhooks\Domain\WebhookEventRepository;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogEntry;
@@ -62,6 +65,7 @@ final readonly class ProcessWebhookEventHandler
         private PaymentDirectory $payments,
         private ProviderAdapterFactory $adapterFactory,
         private RecordProviderTransactionHandler $recordTransaction,
+        private RecordSubscriptionPaymentHandler $recordSubscriptionPayment,
         private ErrorLogWriter $errorLog,
         private ClockInterface $clock,
     ) {
@@ -98,6 +102,17 @@ final readonly class ProcessWebhookEventHandler
         }
 
         $reference = $this->resolveGatewayReference($event->providerAccountId(), $providerReference);
+
+        // A subscription renewal charge (Phase 29 Q2): its own provider
+        // reference is a brand-new id never seen before, so the lookup above
+        // always misses. Resolve via the subscription it belongs to instead,
+        // and route to RecordSubscriptionPaymentHandler — the same fix
+        // serves Stripe's billing-engine webhooks and Mollie's real
+        // Subscription resource identically.
+        if ($reference === null && $event->subscriptionReference() !== null) {
+            return $this->attemptSubscriptionRenewal($event, $providerReference, $rawStatus, $event->subscriptionReference());
+        }
+
         if ($reference === null) {
             return $this->recordFailure($event, 'webhook.reference_not_found', "No gateway reference matches provider reference '{$providerReference}'.");
         }
@@ -138,6 +153,43 @@ final readonly class ProcessWebhookEventHandler
 
         $now = $this->clock->now();
         $event->markProcessed($now, $paymentId);
+        $this->events->save($event);
+
+        return new ProcessWebhookEventResult($this->requireId($event), 'processed');
+    }
+
+    private function attemptSubscriptionRenewal(WebhookEvent $event, string $providerReference, string $rawStatus, string $subscriptionReference): ProcessWebhookEventResult
+    {
+        $reference = $this->gatewayReferences->findByReference($event->providerAccountId(), GatewayReferenceType::Subscription, $subscriptionReference);
+        if ($reference === null || $reference->subscriptionId === null) {
+            return $this->recordFailure($event, 'webhook.subscription_not_found_yet', "No subscription matches subscription reference '{$subscriptionReference}'.");
+        }
+
+        try {
+            $mappedStatus = $this->adapterFactory->for($event->providerAccountId())->mapProviderStatusToInternalStatus($rawStatus);
+        } catch (UnsupportedProviderType $e) {
+            return $this->recordFinalFailure($event, 'webhook.provider_not_implemented', $e->getMessage());
+        }
+
+        $recorded = $this->recordSubscriptionPayment->handle(new RecordSubscriptionPaymentCommand(
+            clientId: $event->clientId(),
+            subscriptionId: $reference->subscriptionId,
+            providerPaymentReference: $providerReference,
+            rawStatus: $rawStatus,
+            mappedStatus: $mappedStatus->value,
+        ));
+
+        if ($recorded->isErr()) {
+            // Same reasoning as the payment path: a definitive domain-rule
+            // rejection will never change on a replay of the same status.
+            return $this->recordFinalFailure($event, $recorded->error()->code, $recorded->error()->message);
+        }
+
+        $result = $recorded->value();
+        \assert($result instanceof RecordSubscriptionPaymentResult);
+
+        $now = $this->clock->now();
+        $event->markProcessed($now, $result->paymentId);
         $this->events->save($event);
 
         return new ProcessWebhookEventResult($this->requireId($event), 'processed');

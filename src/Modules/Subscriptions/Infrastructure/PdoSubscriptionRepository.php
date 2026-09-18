@@ -95,6 +95,58 @@ final readonly class PdoSubscriptionRepository implements SubscriptionRepository
         return $subscriptions;
     }
 
+    public function findPendingMollieActivation(int $limit): array
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT s.* FROM subscriptions s
+              JOIN provider_accounts pa ON pa.id = s.provider_account_id
+              JOIN provider_types pt ON pt.id = pa.provider_type_id
+             WHERE pt.code = 'mollie'
+               AND s.status IN ('active', 'trialing')
+               AND NOT EXISTS (
+                 SELECT 1 FROM gateway_references gr
+                  WHERE gr.subscription_id = s.id AND gr.reference_type = 'subscription'
+               )
+             ORDER BY s.created_at ASC
+             LIMIT :limit",
+        );
+        $statement->bindValue('limit', $limit, PDO::PARAM_INT);
+        $statement->execute();
+
+        $subscriptions = [];
+        while (($row = $statement->fetch()) !== false) {
+            $subscription = $this->hydrate($row);
+            if ($subscription !== null) {
+                $subscriptions[] = $subscription;
+            }
+        }
+
+        return $subscriptions;
+    }
+
+    public function findRecentForReconciliation(\DateTimeImmutable $since, int $limit): array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT * FROM subscriptions
+              WHERE COALESCE(updated_at, created_at) >= :since
+              ORDER BY COALESCE(updated_at, created_at) ASC
+              LIMIT :limit',
+        );
+        $statement->bindValue('since', $since->format('Y-m-d H:i:s'));
+        $statement->bindValue('limit', $limit, PDO::PARAM_INT);
+        $statement->execute();
+
+        $subscriptions = [];
+        while (($row = $statement->fetch()) !== false) {
+            $subscription = $this->hydrate($row);
+            if ($subscription !== null) {
+                $subscriptions[] = $subscription;
+            }
+        }
+
+        return $subscriptions;
+    }
+
     /**
      * @return array<string, mixed>
      */

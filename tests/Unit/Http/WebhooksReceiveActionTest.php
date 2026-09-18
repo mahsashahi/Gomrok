@@ -15,17 +15,22 @@ use Gomrok\Modules\Providers\Application\Adapter\ParsedWebhookEvent;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderWebhookVerificationFailed;
 use Gomrok\Modules\Providers\Domain\PaymentMethod;
 use Gomrok\Modules\Providers\Domain\PurchaseType;
+use Gomrok\Modules\Subscriptions\Application\RecordSubscriptionPayment\RecordSubscriptionPaymentHandler;
 use Gomrok\Modules\Webhooks\Application\IngestWebhookEvent\IngestWebhookEventHandler;
 use Gomrok\Modules\Webhooks\Application\ProcessWebhookEvent\ProcessWebhookEventHandler;
 use Gomrok\Shared\Http\JsonResponder;
 use Gomrok\Shared\Infrastructure\Persistence\NullErrorLogWriter;
 use Gomrok\Tests\Support\FakePaymentProviderPort;
 use Gomrok\Tests\Support\FrozenClock;
+use Gomrok\Tests\Support\InMemoryCheckoutAttemptRepository;
 use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
 use Gomrok\Tests\Support\InMemoryPaymentAttemptRepository;
 use Gomrok\Tests\Support\InMemoryPaymentDirectory;
 use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionEventRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionPaymentLinkRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\InMemoryWebhookEventRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
 use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
@@ -76,12 +81,26 @@ final class WebhooksReceiveActionTest extends TestCase
             new FrozenClock('2026-09-14T12:00:00+00:00'),
             new RecordingDomainEventDispatcher(),
         );
+        $recordSubscriptionPayment = new RecordSubscriptionPaymentHandler(
+            new InMemorySubscriptionRepository(),
+            new InMemoryCheckoutAttemptRepository(),
+            $this->payments,
+            new InMemorySubscriptionPaymentLinkRepository(),
+            new InMemorySubscriptionEventRepository(),
+            $gatewayReferences,
+            $recordTransaction,
+            new RecordingAuditLogWriter(),
+            new SynchronousTransactions(),
+            new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
+        );
         $processor = new ProcessWebhookEventHandler(
             $events,
             $gatewayReferences,
             new InMemoryPaymentDirectory($this->payments),
             $adapterFactory,
             $recordTransaction,
+            $recordSubscriptionPayment,
             new NullErrorLogWriter(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
         );

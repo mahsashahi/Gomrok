@@ -44,4 +44,25 @@ final class InMemoryCheckoutAttemptRepository implements CheckoutAttemptReposito
     {
         return array_values(array_filter($this->byId, static fn (CheckoutAttempt $a): bool => $a->clientId() === $clientId));
     }
+
+    public function findStaleNonTerminal(\DateTimeImmutable $before, int $limit): array
+    {
+        $terminal = ['converted_to_payment', 'failed', 'canceled', 'expired', 'abandoned'];
+        $stale = array_values(array_filter($this->byId, static function (CheckoutAttempt $a) use ($terminal, $before): bool {
+            if (\in_array($a->status()->value, $terminal, true)) {
+                return false;
+            }
+            $lastActivity = $a->updatedAt() ?? $a->createdAt();
+
+            return $lastActivity < $before;
+        }));
+        usort($stale, static function (CheckoutAttempt $a, CheckoutAttempt $b): int {
+            $aTime = $a->updatedAt() ?? $a->createdAt();
+            $bTime = $b->updatedAt() ?? $b->createdAt();
+
+            return $aTime <=> $bTime;
+        });
+
+        return \array_slice($stale, 0, $limit);
+    }
 }

@@ -7,6 +7,174 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-18 — Phase 29 revision: Q4/Q5 reopened — renewal-payment actions + persistent daemon worker
+
+**Summary.** After Phase 29 was marked complete, the user revised its two remaining decisions
+(Q4: leave-deferred → fix-it-now; Q5: pending → persistent daemon) and asked to continue the
+phase. Both are now implemented.
+
+**Q4 — cancel/refund/capture on a renewal-originated payment.** A subscription-renewal charge has
+no checkout attempt of its own, so `ResolvePaymentActionContext::forPayment()` used to return
+`null` for one, and `CancelPaymentCommand`/`RefundPaymentCommand`/`CapturePaymentCommand` could
+only address a payment by `checkoutAttemptId` — meaning there was literally no way to even
+identify a renewal payment to these commands. Fixed both: `ResolvePaymentActionContext` now
+resolves the provider account/payment method via `subscription_payment_links` → `Subscription`
+when there's no checkout attempt, converging on the same downstream capability/adapter/
+gateway-reference resolution a checkout-originated payment already used; each command gained a
+trailing optional `paymentId` (checkout-attempt path unchanged, every existing positional call
+site untouched). No HTTP route reaches this yet — only direct command construction — since no
+admin payments screen or new API endpoint was requested.
+
+**Q5 — persistent daemon worker.** Built `bin/Worker.php` (`composer jobs:worker`): a continuous
+poll/claim loop around the unchanged `RunDueJobsHandler` abstraction, graceful SIGTERM/SIGINT
+shutdown (finishes the in-flight batch, never interrupts mid-batch), tight-loop draining when a
+batch found work, `sleep()` otherwise. Per the user's detailed sub-requirements (gathered via one
+follow-up clarifying question on the max-attempts/backoff shape): a recurring job never
+dead-letters or gets escalating backoff from repeated failure — it keeps retrying at its fixed
+interval forever, exactly as before — but its health is now tracked and surfaced. New `jobs`
+columns: `consecutive_failures`/`total_failures`/`last_failed_at`/`last_success_at`/`alerted_at`/
+`alert_acknowledged_at`/`alert_acknowledged_by`. `Job::recordFailure()`/`recordSuccess()` maintain
+these; an alert raises once per failure episode when `consecutive_failures` crosses `Job::
+ALERT_THRESHOLD` (3) — not on every subsequent failure — and clears only on the job's next
+success or an admin's explicit acknowledgement (new `jobs.retry`-gated `POST
+/admin/jobs/{jobId}/acknowledge-alert`, `AcknowledgeJobAlertHandler`). A job handler's returned
+`JobRunResult::failure()` (previously only a *thrown* exception) is now also logged to the
+existing `error_logs` table, so per-occurrence debugging history lives in the Error Logs screen
+rather than a new table. The admin Jobs screen shows an "N alerting" header badge, a per-row
+healthy/alerting/ack'd pill, consecutive/total failure counts and last-failed/succeeded
+timestamps in the expanded row, and an "Acknowledge alert" button.
+
+**New tables/columns.** No new table — one additive migration on `jobs`
+(`20260917235500_add_health_tracking_to_jobs_table.php`, 7 columns + `idx_jobs_alerted`),
+proposed and confirmed separately from the original two-table Phase 29 design. Rollback verified
+clean.
+
+**Verified with real, captured evidence:** the daemon was smoke-tested directly — self-bootstrapped
+and ran all 7 job types on first poll, idled silently on a second run with nothing due, and shut
+down cleanly on SIGTERM after finishing its batch (captured process logs). A throwaway job type
+was forced through 3 consecutive failures to seed a real alert; the admin Jobs screen was
+screenshotted showing "1 alerting" and an "alerting" pill, a real `POST .../acknowledge-alert` was
+executed via curl (DB row + `job.alert_acknowledged` audit entry confirmed), and re-screenshotted
+showing "ack'd." All throwaway evidence (the evidence job row, its audit entries, the temporary
+admin user) was cleaned up afterward; the 7 real job rows were untouched.
+
+**Tests.** 24 new tests (869 → 893; 0 errors, 0 failures, phpstan clean): `Job` entity (failure/
+success bookkeeping, alert-raised-once, acknowledge no-op/idempotent), `RunDueJobsHandler`
+(returned-failure also logged, recurring failure never dead-letters across 10 iterations, alert
+raised at the 3rd consecutive failure, thrown exception logged exactly once), `JobsScreenHandler`
+(alerting count, acknowledger name resolution), new `AcknowledgeJobAlertHandlerTest`, and 7 new
+cases across `CancelPaymentHandlerTest`/`RefundPaymentHandlerTest`/`CapturePaymentHandlerTest` for
+the renewal-originated payment paths. Run: `composer test` / `composer test:all`.
+
+**Files changed:** see `.claude/PhaseResults/Phase29Result.md`'s "Q4/Q5 revision" subsections for
+the complete list. Notably: `Job.php` (`fromStorage()` signature changed — 7 new required params;
+`schedule()` unchanged), `ResolvePaymentActionContext.php`, the three payment-action commands/
+handlers, `RunDueJobsHandler.php`, `PdoJobRepository.php`/`PdoJobDirectory.php`, `JobDirectory.php`
+(new `countAlerting()`), `JobsScreenHandler.php` (new `AdminUserRepository` dependency),
+`jobs.html.twig`, `routes.php`, `composer.json`.
+
+**Migration notes.** One additive migration, described above. **Breaking changes.** None at the
+public API level — `Job::fromStorage()`'s signature changed but both call sites
+(`PdoJobRepository`, `PdoJobDirectory`) were updated in the same change; `CancelPaymentCommand`/
+`RefundPaymentCommand`/`CapturePaymentCommand` gained new optional trailing parameters and
+`checkoutAttemptId` became nullable — every existing positional call site is unaffected.
+
+## 2026-09-17 — Phase 29 complete: Background jobs, reconciliation & observability
+
+**Summary.** Unified every background task — old and new — onto one DB-backed job queue, closed
+Mollie's subscription-renewal gap so it becomes as webhook-driven as Stripe, and added
+detection-only payment/subscription reconciliation with an admin report.
+
+**New tables:** `jobs` (self-rescheduling unified queue: `type`, `status`, `attempts`, `run_at`,
+`locked_at`/`locked_by`, `last_error`/`last_result`; no `client_id` — system-wide) and
+`reconciliation_findings` (one detected drift per row: `client_id`, polymorphic `target_type`/
+`target_id`, `local_status`, `provider_status_raw`, `mapped_provider_status`, `detected_at`,
+`resolved_at`/`resolved_by`). Additive column `webhook_events.subscription_reference` (separately
+proposed and confirmed mid-phase). Full design in `database-design.md`, diagrams in
+`database-diagram.md`/`.html`, rationale in `db_explain.md`.
+
+**Unified queue (`src/Shared/{Domain,Application,Infrastructure}/Jobs/`):** `Job` entity
+(`schedule`/`claim`/`recordSuccess`/`recordFailure`/`deadLetter`), `JobHandler` interface (a
+module registers one per job type it owns), `RunDueJobsHandler` — `run()` self-bootstraps every
+registered recurring handler, claims due jobs (`SELECT ... FOR UPDATE SKIP LOCKED`), dispatches,
+catches/logs a throwing handler without aborting the batch; `runOne()` (added for the admin "run
+now" action) claims and runs one specific job immediately, returning `null`/`true`/`false` for
+not-runnable/succeeded/ran-but-failed. `JobDirectory` (read port) backs the new admin Jobs screen.
+
+**Seven job handlers registered:** `webhook_retry_scan` (5m) and `notification_retry_scan` (1m) —
+the `jobs`-table versions of the Phase 25/28 standalone jobs, reusing `ProcessWebhookEventHandler`/
+`DeliverClientNotificationHandler` unchanged; `voucher_reservation_sweep` (5m, 60m staleness) and
+`checkout_abandonment_sweep` (15m, 60m staleness) — new sweeps reusing `ReleaseVoucherRedemptionHandler`/
+`ChangeCheckoutAttemptStatusHandler` unchanged; `mollie_subscription_activation_scan` (10m, Q2) —
+activates a real Mollie Subscription resource once a subscription's first-payment mandate is
+confirmed; `payment_reconciliation_scan` and `subscription_reconciliation_scan` (30m each,
+72h window) — poll each recently-touched payment/subscription's real provider status and record a
+`ReconciliationFinding` on disagreement, catching a missed/lost webhook. The original Phase 25/28
+standalone `src/Jobs/*.php` + `bin/*.php` scripts stay operational (Q5, worker-invocation shape
+still pending) until a real worker entry point retires them.
+
+**Mollie/Stripe webhook-routing fix (Q2):** `ParsedWebhookEvent`/`WebhookEvent` gained an optional
+`subscriptionReference`; `MollieAdapter::parseWebhook()` extracts it, `StripeAdapter::parseWebhook()`
+special-cases `invoice.payment_*` events with synthetic raw statuses. `ProcessWebhookEventHandler`
+now falls back to a subscription-reference lookup (`RecordSubscriptionPaymentHandler`, reusing its
+existing dedup idempotency) when the primary gateway-reference lookup misses. New
+`SupportsDeferredSubscriptionActivation` optional adapter interface (Mollie-only) +
+`MollieAdapter::activateSubscription()`. `CreateProviderSubscriptionHandler` now also records a
+`Customer`-type gateway reference for Mollie, needed later to activate the real subscription.
+
+**New Reconciliation module** (`src/Modules/Reconciliation/`): `ReconciliationFinding` entity
+(detect/markResolved, resolved ≠ fixed — reconciliation never mutates the payment/subscription
+itself), `ReconciliationFindingDirectory` (read), `ResolveReconciliationFindingHandler`
+(`reconciliation.resolve`, idempotent).
+
+**Two new admin screens:** `/admin/jobs` (list + filters + real "Run now" write action on a
+`pending` row, `jobs.retry`) and `/admin/reconciliation` (list + filters, defaults to `open`, real
+"Mark resolved" write action, `reconciliation.resolve` — new `AdminPermission` case, same reasoning
+as Phase 27's `ErrorLogsResolve`). Both wired into `routes.php` and the sidebar.
+
+**Five decisions** (full record in `.claude/PhaseResults/PhaseDecisions.md`): Q1 DB-backed unified
+`jobs` table (all background work, old and new, on one queue), Q2 finish real Mollie Subscriptions
+this phase (not deferred further), Q3 full breadth with trace-logs-only observability (no
+metrics/alerts/dashboards infra yet), **Q4 the `ResolvePaymentActionContext::forPayment()`
+null-for-renewal-payment gap stays deferred (user picked "leave it," not the recommended fix)**,
+**Q5 the worker-invocation shape (`bin/Worker.php`, cron-batch vs daemon) is still undecided —
+user said "ask me later."**
+
+**Verified with real, captured evidence:** a live `RunDueJobsHandler->run()` against the real dev
+DB self-bootstrapped and ran all 7 job types on first invocation; direct DB queries confirmed
+correct rescheduling at each designed interval. The admin Jobs screen was screenshotted showing all
+7 job types pending with real `last_result` JSON, a real `POST /admin/jobs/{id}/run-now` executed
+via `curl` against a real session (attempts 1→2, rescheduled +5m, audit entry `job.run_now`
+recorded), re-screenshotted showing the success banner. The admin Reconciliation screen was
+screenshotted with two seeded findings (2 open), a real `POST /admin/reconciliation/{id}/resolve`
+executed, re-screenshotted showing 1 open / 1 resolved with "by ‹admin name›" attribution and a
+real `reconciliation_finding.resolved` audit entry. All throwaway evidence data (seeded findings,
+the temporary evidence admin user) was cleaned from the shared local dev database afterward; the
+real job rows were left in place as genuine steady-state, not demo data.
+
+**Tests:** 75 new tests (794 → 869 total; 0 errors, 0 failures, phpstan clean) — `Job` entity,
+`RunDueJobsHandler` (`run()`/`runOne()`, self-bootstrap, throw-is-caught, dead-letter-on-unhandled-type,
+one-bad-job-doesn't-block-the-batch), `JobsScreenHandler`, `RunJobNowHandler`, all 7 job handlers
+individually (each against its real reused use-case with in-memory doubles, not mocks),
+`ReconciliationFinding` entity, `ReconciliationScreenHandler`, `ResolveReconciliationFindingHandler`,
+plus a 4-test MySQL round-trip integration test for `jobs`/`reconciliation_findings`/
+`webhook_events.subscription_reference` (`tests/Integration/JobsReconciliationPersistenceTest.php`).
+Run: `composer test` (unit) / `composer test:integration` / `composer test:all`.
+
+**Files changed:** see `.claude/PhaseResults/Phase29Result.md` for the complete list. Notably:
+`ContainerFactory.php`, `container.php`, `routes.php`, `AdminPermission.php`, and every test file
+that directly constructs `ProcessWebhookEventHandler` (gained a `RecordSubscriptionPaymentHandler`
+constructor parameter).
+
+**Database changes.** Two new tables (`20260917180001_create_jobs_table.php`,
+`20260917180002_create_reconciliation_findings_table.php`) plus one additive column
+(`20260917180003_add_subscription_reference_to_webhook_events.php`). Rollback verified clean.
+
+**Migration notes.** None beyond the three migrations above. **Breaking changes.** None —
+`WebhookEvent`'s new field is a trailing optional constructor param;
+`ProcessWebhookEventHandler`'s new dependency required updating its 4 test call sites (production
+DI already wired via `container.php`).
+
 ## 2026-09-17 — Phase 28 complete: Client callbacks / outbound notifications
 
 **Summary.** Built the full outbound notification pipeline: a payment or subscription reaching a

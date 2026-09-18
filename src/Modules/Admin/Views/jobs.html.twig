@@ -1,0 +1,134 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Jobs — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+  <h1 class="page-title" style="font-size:22px">Jobs</h1>
+  {% if screen.failedCount > 0 %}
+  <span class="status-pill status-failed">{{ screen.failedCount }} failed</span>
+  {% endif %}
+  {% if screen.alertingCount > 0 %}
+  <span class="status-pill status-open">{{ screen.alertingCount }} alerting</span>
+  {% endif %}
+</div>
+<p style="font-size:12px;color:var(--text-muted);margin:0 0 16px;max-width:680px">
+  Gomrok's background work queue — webhook/notification retry scans, checkout and voucher-reservation
+  sweeps, Mollie subscription activation, and payment/subscription reconciliation scans. Recurring
+  job types reschedule themselves after every run — even a persistently failing one keeps retrying
+  forever rather than stopping — and never dead-letter; 3+ consecutive failures raise a visible
+  alert below instead. A job stuck past its scheduled time can be run immediately from here.
+</p>
+
+{% if success %}
+<div style="background:oklch(94% 0.06 150);color:oklch(38% 0.1 150);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div style="background:oklch(95% 0.05 25);color:var(--danger);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ error }}</div>
+{% endif %}
+
+<form method="get" action="/admin/jobs" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+  <div class="form-field" style="min-width:140px">
+    <label>Status</label>
+    <select name="status">
+      <option value="all" {{ screen.filters.status == 'all' ? 'selected' : '' }}>All</option>
+      <option value="pending" {{ screen.filters.status == 'pending' ? 'selected' : '' }}>Pending</option>
+      <option value="processing" {{ screen.filters.status == 'processing' ? 'selected' : '' }}>Processing</option>
+      <option value="done" {{ screen.filters.status == 'done' ? 'selected' : '' }}>Done</option>
+      <option value="failed" {{ screen.filters.status == 'failed' ? 'selected' : '' }}>Failed</option>
+      <option value="dead_lettered" {{ screen.filters.status == 'dead_lettered' ? 'selected' : '' }}>Dead-lettered</option>
+    </select>
+  </div>
+  <div class="form-field" style="min-width:200px">
+    <label>Type</label>
+    <select name="type">
+      <option value="">Any</option>
+      {% for t in screen.availableTypes %}
+      <option value="{{ t }}" {{ screen.filters.type == t ? 'selected' : '' }}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+  {% if screen.filters.status != 'all' or screen.filters.type %}
+  <a href="/admin/jobs" class="link-btn">Clear</a>
+  {% endif %}
+</form>
+
+{% if screen.rows is empty %}
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+  <div style="font-size:12.5px;font-weight:700">No matching jobs</div>
+</div>
+{% else %}
+<div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff">
+  {% for row in screen.rows %}
+  <div x-data="{ open: false }">
+    <div class="timeline-toggle" @click="open = !open" style="display:grid;grid-template-columns:1.4fr 0.8fr 0.5fr 0.9fr 0.9fr 0.9fr 0.2fr;column-gap:12px;padding:11px 16px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+      <div style="font-weight:600">{{ row.type }}</div>
+      <div><span class="status-pill status-{{ row.status }}">{{ row.status }}</span></div>
+      <div style="color:var(--text-muted)">{{ row.attempts }}</div>
+      <div style="color:var(--text-muted)">next {{ row.runAtLabel }}</div>
+      <div style="color:var(--text-muted)">{{ row.lastAttemptLabel ?: '—' }}</div>
+      <div>
+        {% if row.hasOpenAlert %}
+        <span class="status-pill status-open">{{ row.isAlertUnacknowledged ? 'alerting' : 'ack\'d' }}</span>
+        {% else %}
+        <span style="color:var(--text-faint)">healthy</span>
+        {% endif %}
+      </div>
+      <div style="text-align:right;color:var(--text-faint)">▾</div>
+    </div>
+    <div x-show="open" x-cloak class="timeline-row" style="display:flex;flex-direction:column;gap:10px">
+      {% if row.lastResultJson %}
+      <div style="font-size:10.5px;color:var(--text-faint);font-family:ui-monospace,Menlo,monospace;word-break:break-all">{{ row.lastResultJson }}</div>
+      {% endif %}
+      {% if row.lastError %}
+      <div style="font-size:11px;color:var(--danger)">{{ row.lastError }}</div>
+      {% endif %}
+      {% if not row.lastResultJson and not row.lastError %}
+      <div style="font-size:11px;color:var(--text-faint)">No run recorded yet.</div>
+      {% endif %}
+      <div style="font-size:10.5px;color:var(--text-faint)">
+        consecutive failures {{ row.consecutiveFailures }} &middot; total failures {{ row.totalFailures }}
+        {% if row.lastFailedAtLabel %} &middot; last failed {{ row.lastFailedAtLabel }}{% endif %}
+        {% if row.lastSuccessAtLabel %} &middot; last succeeded {{ row.lastSuccessAtLabel }}{% endif %}
+      </div>
+      {% if row.hasOpenAlert %}
+      <div style="font-size:11px;color:oklch(45% 0.1 85)">
+        Alerting since {{ row.alertedAtLabel }}{% if row.alertAcknowledgedByLabel %} — acknowledged by {{ row.alertAcknowledgedByLabel }}{% endif %}.
+        The job keeps retrying on its normal schedule; this only clears once it succeeds again.
+      </div>
+      {% endif %}
+    </div>
+    {% if (row.isRunnableNow or row.isAlertUnacknowledged) and 'jobs.retry' in permissions %}
+    <div style="padding:8px 16px;border-bottom:1px solid var(--surface-alt);text-align:right;display:flex;gap:8px;justify-content:flex-end">
+      {% if row.isAlertUnacknowledged %}
+      <form method="post" action="/admin/jobs/{{ row.id }}/acknowledge-alert" style="display:inline">
+        <input type="hidden" name="return_query" value="{{ filter_query }}{{ filter_query ? '&' : '' }}page={{ screen.page }}">
+        <button type="submit" class="btn btn-secondary btn-sm">Acknowledge alert</button>
+      </form>
+      {% endif %}
+      {% if row.isRunnableNow %}
+      <form method="post" action="/admin/jobs/{{ row.id }}/run-now" style="display:inline">
+        <input type="hidden" name="return_query" value="{{ filter_query }}{{ filter_query ? '&' : '' }}page={{ screen.page }}">
+        <button type="submit" class="btn btn-secondary btn-sm">Run now</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:11.5px;color:var(--text-faint)">
+  <div>{{ screen.totalCount }} result{{ screen.totalCount == 1 ? '' : 's' }} &middot; page {{ screen.page }} of {{ screen.totalPages }}</div>
+  <div style="display:flex;gap:10px">
+    {% if screen.page > 1 %}
+    <a href="/admin/jobs?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page - 1 }}">&larr; Newer</a>
+    {% endif %}
+    {% if screen.page < screen.totalPages %}
+    <a href="/admin/jobs?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page + 1 }}">Older &rarr;</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

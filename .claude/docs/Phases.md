@@ -46,7 +46,7 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 26 | Subscriptions module | ☑ | N/A | N/A | 6–9h | N/A | N/A |
 | 27 | **Admin Module Views and Panels** | ☑ | 2026-09-14 15:00 | 2026-09-16 00:40 | 12–20h | N/A (spans multiple sessions) | N/A |
 | 28 | Client callbacks / outbound notifications | ☑ | 2026-09-17 16:00 | 2026-09-17 17:01 | 4–6h | ~1h 01m | N/A |
-| 29 | Background jobs, reconciliation & observability | ☐ | — | — | 6–9h | — | — |
+| 29 | Background jobs, reconciliation & observability | ☑ | 2026-09-17 17:34 | 2026-09-18 00:08 | 6–9h | 6h34m (includes a Q4/Q5 revision reopening the phase after initial completion) | N/A |
 | 30 | Hardening, docs & first-client go-live | ☐ | — | — | 6–10h | — | — |
 | | **Total** | | | | **~130–210h** | **—** | **—** |
 

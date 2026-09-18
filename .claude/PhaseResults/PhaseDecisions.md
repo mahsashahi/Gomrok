@@ -16,6 +16,170 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 29 — Background jobs, reconciliation & observability
+
+### Q5 — Worker execution model
+
+**Question:** Given Q1's DB-backed jobs table, how should the worker actually run — a persistent
+daemon (needs a process supervisor that doesn't exist until Phase 30's deploy target is chosen)
+or a cron-invoked batch worker (matches the exact pattern already proven for Phase 25/28)?
+
+**Options:**
+
+1. **Cron-invoked batch worker (Recommended)** — `bin/Worker.php` processes one batch of due jobs
+   then exits; external cron invokes it every minute. No new ops dependency.
+2. Persistent daemon worker — near-instant processing, but needs a process supervisor
+   (systemd/supervisord) this project doesn't have yet.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-17 23:26):** Option 2 — persistent daemon worker, not the recommended cron
+batch worker. User-specified requirements for the implementation:
+
+- Run the worker as a persistent daemon instead of a cron-invoked batch worker.
+- The worker continuously polls/claims due jobs and processes them (sleep-poll loop when no jobs
+  are due, not a single batch-then-exit).
+- Job claiming must remain concurrency-safe (unchanged: `SELECT ... FOR UPDATE SKIP LOCKED`).
+- Support retries, backoff, max attempts, delayed jobs, locking, and dead-letter/failed state —
+  all already modeled on `Job`/`JobRepository`/`RunDueJobsHandler`; the daemon must not
+  reimplement or bypass any of it.
+- Keep the worker logic behind the existing `JobHandler`/`RunDueJobsHandler` abstraction — the
+  daemon is purely an invocation shape around `RunDueJobsHandler::run()`, not a parallel
+  execution path.
+- Do not change any business job handler just because the execution model changed to persistent.
+- Document that a real production deployment will need a process supervisor (systemd,
+  supervisord, or equivalent) to keep the daemon running/restarted — Phase 30 finalizes the actual
+  deployment/supervisor configuration; this phase only builds and documents the daemon script
+  itself.
+
+**Status:** Decided
+
+---
+
+### Q4 — Cancel/refund/capture on a renewal-originated payment
+
+**Question:** `ResolvePaymentActionContext::forPayment()` returns `null` for a renewal-originated
+payment (no `checkout_attempt_id`), so cancel/refund/capture don't work on one today. This gap
+becomes more likely to matter once renewal automation (Q2) starts creating real renewal payments.
+Should this phase fix it?
+
+**Options:**
+
+1. Yes, fix it this phase — fall back to resolving provider context via
+   `subscription_payment_links` when there's no checkout attempt.
+2. **No, leave deferred** — keep it a named, unassigned gap for a future phase.
+
+**Recommended:** Option 1.
+
+**Selected:** Option 2 — leave deferred, do not expand this phase's scope further.
+
+**Status:** Decided
+
+**Revised (2026-09-17 23:26):** Changed to **Option 1 — fix it this phase.** User-specified
+requirements for the implementation:
+
+- If a payment has no `checkout_attempt_id`, resolve its provider/action context through
+  `subscription_payment_links` instead of returning `null`.
+- Keep the existing checkout-originated resolution path unchanged.
+- Renewal-originated payments should support refund/capture/cancel where the provider and
+  capability rules allow it — same capability gating as checkout-originated payments, no new
+  bypass.
+- Keep all existing gateway-reference and capability checks.
+- Add tests for renewal-originated payment actions.
+
+**Status:** Decided (revised)
+
+---
+
+### Q3 — Phase scope cut
+
+**Question:** The roadmap bundles queue/worker infra, 5+ concrete jobs, subscription renewal
+automation, reconciliation reports, an admin Jobs screen, and metrics/alerts/dashboards — Phase
+27 already ran 2–3× its estimate bundling less. How should this phase's scope be cut?
+
+**Options:**
+
+1. **Full breadth, trace-logs-only for observability** — build the jobs table/worker, migrate
+   both existing cron jobs onto it, add both sweep jobs, wire subscription renewal automation
+   (Q2), build a reconciliation report screen and the admin Jobs screen. Scope "metrics/alerts/
+   dashboards" down to structured trace logs only — no deploy target or observability stack has
+   been chosen yet (Phase 30), so real dashboards now would be premature infrastructure.
+2. Split into two sub-phases (29a jobs+renewal automation, 29b reconciliation+admin+trace logs).
+3. Narrow sharply — jobs infra + the 2 sweeps only, defer renewal automation/reconciliation/admin
+   screen/trace logs.
+
+**Recommended:** Option 1.
+
+**Selected:** Option 1 — full breadth this phase, with observability scoped to structured trace
+logs (no real dashboards/alerting infra).
+
+**Status:** Decided
+
+---
+
+### Q2 — Mollie subscription renewals
+
+**Question:** Subscription renewal automation splits into two real sub-problems. Stripe's own
+billing engine already pushes renewal webhooks — Gomrok just needs to route them (resolve the
+`Subscription`-typed gateway reference, call the already-built `RecordSubscriptionPaymentHandler`).
+Mollie is different: `MollieAdapter::createSubscription()` only performs the provisional
+first-payment/mandate step; there's no adapter method to actively charge a stored mandate and no
+real Mollie Subscription resource is ever created. How should Mollie's renewals work?
+
+**Options:**
+
+1. **Finish real Mollie Subscriptions** — after the first payment's mandate is confirmed via
+   webhook, call Mollie's Subscriptions API to create the real recurring resource. Mollie then
+   pushes its own renewal webhooks going forward — symmetric with Stripe, one event-routing fix
+   serves both providers.
+2. Gomrok-driven scheduled charging — keep Mollie's subscription provisional; add a
+   charge-the-mandate adapter method + a scheduled job that proactively charges subscriptions past
+   their billing period. Avoids new Mollie API surface but reimplements scheduling/retry logic
+   Mollie's own API already provides, and keeps Mollie architecturally different from Stripe.
+3. Defer Mollie renewals again, wire Stripe's routing fix only this phase.
+
+**Recommended:** Option 1.
+
+**Selected:** Option 1 — finish real Mollie Subscriptions API integration; both providers become
+webhook-driven and share the same event-routing fix.
+
+**Status:** Decided
+
+---
+
+### Q1 — Queue/job technology
+
+**Question:** No queue library exists in `composer.json`; the two jobs built so far
+(`RetryPendingWebhookEvents`, `RetryPendingClientNotifications`) are plain invokables run via
+`bin/*.php` + external cron, explicitly meant to be replaced here. What should the real job/queue
+mechanism be?
+
+**Options:**
+
+1. **DB-backed jobs table** — a `jobs` table (payload, status, attempts, `run_at`, `locked_at`) +
+   a worker loop (`bin/Worker.php`) polling it. No new infrastructure dependency, transactionally
+   consistent with the rest of Gomrok's writes, easy to inspect/retry from the admin panel.
+2. Redis-backed queue (Symfony Messenger / Beanstalkd / Redis client) — real broker, better
+   throughput/concurrency, standard tooling, but a new infrastructure dependency before a deploy
+   target is even chosen (Phase 30).
+3. Something else.
+
+**Recommended:** Option 1.
+
+**Selected:** Option 1 — DB-backed `jobs` table + a polling worker loop.
+
+**Follow-up confirmation (asked while proposing the DB design, not a numbered Q):** whether this
+means unifying *all* recurring background work — including the two jobs already built in Phases
+25/28 — under one self-rescheduling `jobs` table, or keeping those two as-is and using the new
+table only for Phase 29's new work. **User confirmed: unify everything.** Every recurring task
+(webhook retry, notification retry, both new sweeps, Mollie renewal charging, reconciliation)
+becomes a self-rescheduling job type in `jobs`, run by one worker entrypoint — matches Q3's
+"migrate both existing cron jobs onto it" literally.
+
+**Status:** Decided
+
+---
+
 ## Phase 28 — Client callbacks / outbound notifications
 
 ### Q5 — Which status transitions are notify-worthy

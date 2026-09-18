@@ -16,10 +16,13 @@ use Gomrok\Modules\Payments\Domain\Payment;
 use Gomrok\Modules\Payments\Domain\PaymentStatus;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderPaymentResult;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderRequestFailed;
+use Gomrok\Modules\Pricing\Domain\SubscriptionInterval;
 use Gomrok\Modules\Providers\Application\ProviderCapabilityResolver;
 use Gomrok\Modules\Providers\Application\Routing\ProviderRoutingDecisionSnapshot;
 use Gomrok\Modules\Providers\Domain\PaymentMethod;
 use Gomrok\Modules\Providers\Domain\PurchaseType;
+use Gomrok\Modules\Subscriptions\Domain\Subscription;
+use Gomrok\Modules\Subscriptions\Domain\SubscriptionPaymentLink;
 use Gomrok\Tests\Support\FakePaymentProviderPort;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
@@ -28,6 +31,8 @@ use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryProviderRoutingDecisionSnapshotRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
 use Gomrok\Tests\Support\InMemoryProviderTypeDeclarations;
+use Gomrok\Tests\Support\InMemorySubscriptionPaymentLinkRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
 use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
 use Gomrok\Tests\Support\StubProviderAccountDirectory;
@@ -40,12 +45,15 @@ final class CapturePaymentHandlerTest extends TestCase
 {
     private const CLIENT = 7;
     private const CHECKOUT_ATTEMPT = 100;
+    private const SUBSCRIPTION_CHECKOUT_ATTEMPT = 200;
     private const PACKAGE = 42;
     private const PROVIDER_ACCOUNT = 1;
 
     private DateTimeImmutable $now;
     private InMemoryPaymentRepository $payments;
     private InMemoryGatewayReferenceRepository $gatewayReferences;
+    private InMemorySubscriptionPaymentLinkRepository $paymentLinks;
+    private InMemorySubscriptionRepository $subscriptions;
     private FakePaymentProviderPort $adapter;
     private CapturePaymentHandler $handler;
 
@@ -54,6 +62,8 @@ final class CapturePaymentHandlerTest extends TestCase
         $this->now = new DateTimeImmutable('2026-09-13T12:00:00+00:00');
         $this->payments = new InMemoryPaymentRepository();
         $this->gatewayReferences = new InMemoryGatewayReferenceRepository();
+        $this->paymentLinks = new InMemorySubscriptionPaymentLinkRepository();
+        $this->subscriptions = new InMemorySubscriptionRepository();
         $this->adapter = new FakePaymentProviderPort();
         $this->handler = $this->buildHandler('stripe');
     }
@@ -125,6 +135,38 @@ final class CapturePaymentHandlerTest extends TestCase
         self::assertSame(502, $result->error()->httpStatus());
     }
 
+    #[Test]
+    public function capturesARenewalOriginatedPaymentByPaymentIdViaTheSubscriptionPaymentLink(): void
+    {
+        $paymentId = $this->seedRenewalPayment(PaymentStatus::Authorized);
+        $this->adapter->captureResult(new ProviderPaymentResult('pi_renewal_1', '', 'succeeded'));
+
+        $result = $this->handler->handle(new CapturePaymentCommand(clientId: self::CLIENT, paymentId: $paymentId));
+
+        self::assertTrue($result->isOk());
+        $value = $result->value();
+        \assert($value instanceof CapturePaymentResult);
+        self::assertSame('paid', $value->status);
+        self::assertSame('pi_renewal_1', $value->providerReference);
+        self::assertSame('pi_pending_renewal_1', $this->adapter->lastCaptureReference);
+
+        $payment = $this->payments->findById($paymentId);
+        self::assertNotNull($payment);
+        self::assertSame(PaymentStatus::Paid, $payment->status());
+    }
+
+    #[Test]
+    public function rejectsCaptureOnARenewalPaymentWhenTheProviderDoesNotSupportIt(): void
+    {
+        $this->handler = $this->buildHandler('mollie');
+        $paymentId = $this->seedRenewalPayment(PaymentStatus::Authorized);
+
+        $result = $this->handler->handle(new CapturePaymentCommand(clientId: self::CLIENT, paymentId: $paymentId));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('payment.capture_not_supported', $result->error()->code);
+    }
+
     private function buildHandler(string $providerTypeCode): CapturePaymentHandler
     {
         $routingSnapshots = new InMemoryProviderRoutingDecisionSnapshotRepository();
@@ -138,6 +180,8 @@ final class CapturePaymentHandlerTest extends TestCase
             new ProviderCapabilityResolver(InMemoryProviderTypeDeclarations::withKnownProviders()),
             (new StubProviderAdapterFactory())->add(self::PROVIDER_ACCOUNT, $this->adapter),
             $this->gatewayReferences,
+            $this->paymentLinks,
+            $this->subscriptions,
         );
 
         $recordTransaction = new RecordProviderTransactionHandler(
@@ -165,6 +209,44 @@ final class CapturePaymentHandlerTest extends TestCase
         if ($withDeepReference) {
             $this->gatewayReferences->save(GatewayReference::forPayment(self::CLIENT, self::PROVIDER_ACCOUNT, GatewayReferenceType::PaymentIntent, 'pi_deep_1', $paymentId, $this->now));
         }
+
+        return $paymentId;
+    }
+
+    /**
+     * A renewal charge (Phase 26 Q2 / Phase 29 Q4): no checkout attempt of
+     * its own, only linked to its subscription via `subscription_payment_links`
+     * — mirrors exactly what {@see \Gomrok\Modules\Subscriptions\Application\RecordSubscriptionPayment\RecordSubscriptionPaymentHandler}
+     * produces.
+     */
+    private function seedRenewalPayment(PaymentStatus $status): int
+    {
+        $subscription = Subscription::create(
+            self::CLIENT,
+            'user-1',
+            self::SUBSCRIPTION_CHECKOUT_ATTEMPT,
+            self::PACKAGE,
+            self::PROVIDER_ACCOUNT,
+            'EUR',
+            2900,
+            PaymentMethod::Card,
+            SubscriptionInterval::Monthly,
+            false,
+            null,
+            $this->now,
+        );
+        $this->subscriptions->save($subscription);
+        $subscriptionId = $subscription->id();
+        \assert($subscriptionId !== null);
+
+        $payment = Payment::create(self::CLIENT, null, 'user-1', self::PACKAGE, 'DE', 'EUR', 2900, PurchaseType::Subscription, PaymentMethod::Card, SubscriptionInterval::Monthly, $this->now);
+        $this->advanceTo($payment, $status);
+        $this->payments->save($payment);
+        $paymentId = $payment->id();
+        \assert($paymentId !== null);
+
+        $this->paymentLinks->save(SubscriptionPaymentLink::link($subscriptionId, $paymentId, null, null, $this->now));
+        $this->gatewayReferences->save(GatewayReference::forPayment(self::CLIENT, self::PROVIDER_ACCOUNT, GatewayReferenceType::PaymentIntent, 'pi_pending_renewal_1', $paymentId, $this->now));
 
         return $paymentId;
     }

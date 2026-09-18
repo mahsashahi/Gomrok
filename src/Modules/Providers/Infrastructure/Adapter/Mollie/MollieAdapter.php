@@ -6,6 +6,8 @@ namespace Gomrok\Modules\Providers\Infrastructure\Adapter\Mollie;
 
 use Brick\Money\Money as BrickMoney;
 use Gomrok\Modules\Payments\Domain\PaymentStatus;
+use Gomrok\Modules\Pricing\Domain\SubscriptionInterval;
+use Gomrok\Modules\Providers\Application\Adapter\ActivateSubscriptionCommand;
 use Gomrok\Modules\Providers\Application\Adapter\CreatePaymentCommand;
 use Gomrok\Modules\Providers\Application\Adapter\CreateSubscriptionCommand;
 use Gomrok\Modules\Providers\Application\Adapter\ParsedWebhookEvent;
@@ -19,6 +21,7 @@ use Gomrok\Modules\Providers\Application\Adapter\ProviderSubscriptionResult;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderSubscriptionStatus;
 use Gomrok\Modules\Providers\Application\Adapter\ProviderWebhookVerificationFailed;
 use Gomrok\Modules\Providers\Application\Adapter\RawWebhook;
+use Gomrok\Modules\Providers\Application\Adapter\SupportsDeferredSubscriptionActivation;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsManualPolling;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsRefunds;
 use Gomrok\Modules\Providers\Application\Adapter\SupportsSubscriptions;
@@ -35,20 +38,24 @@ use Mollie\Api\Types\PaymentMethod as MolliePaymentMethod;
 use Mollie\Api\Types\SequenceType;
 
 /**
- * Mollie implements the core port plus refunds, subscriptions (Phase 22 Q6 —
- * provisional: `createSubscription()` only performs the first-payment/mandate
- * step; the real Mollie Subscription resource is created later, out-of-band,
- * once Phase 25's webhook processing confirms the mandate), and manual status
- * polling — never the billing/customer portal (Phase 22: corrected a stale
- * Phase 10 seed; Mollie has no such product). The Mollie PHP SDK is used
- * **only** here (Hexagonal Architecture Rule 5). `getCapabilities()` defers
- * to the Phase 8 seeded declaration, same as `StripeAdapter`.
+ * Mollie implements the core port plus refunds, subscriptions (Phase 22 Q6:
+ * `createSubscription()` performs only the first-payment/mandate step;
+ * {@see activateSubscription()} — Phase 29 Q2 — creates the real Mollie
+ * Subscription resource once that mandate is confirmed, via
+ * {@see SupportsDeferredSubscriptionActivation}, the interface `StripeAdapter`
+ * never needs since Stripe Checkout creates its real subscription
+ * immediately), and manual status polling — never the billing/customer
+ * portal (Phase 22: corrected a stale Phase 10 seed; Mollie has no such
+ * product). The Mollie PHP SDK is used **only** here (Hexagonal Architecture
+ * Rule 5). `getCapabilities()` defers to the Phase 8 seeded declaration, same
+ * as `StripeAdapter`.
  */
 final readonly class MollieAdapter implements
     PaymentProviderPort,
     SupportsRefunds,
     SupportsSubscriptions,
-    SupportsManualPolling
+    SupportsManualPolling,
+    SupportsDeferredSubscriptionActivation
 {
     private const PROVIDER_TYPE_CODE = 'mollie';
 
@@ -133,7 +140,12 @@ final readonly class MollieAdapter implements
         /** @var array<array-key, mixed> $payload */
         $payload = (array) json_decode((string) json_encode($payment), true);
 
-        return new ParsedWebhookEvent($payment->id, 'payment.updated', $payment->id, $payment->status, $payload);
+        // A payment created under a real Mollie Subscription (Q2) carries
+        // the subscription's id — a renewal charge's own payment id has
+        // never been seen before, so this is what lets it resolve.
+        $subscriptionReference = \is_string($payment->subscriptionId) && $payment->subscriptionId !== '' ? $payment->subscriptionId : null;
+
+        return new ParsedWebhookEvent($payment->id, 'payment.updated', $payment->id, $payment->status, $payload, $subscriptionReference);
     }
 
     public function mapProviderStatusToInternalStatus(string $providerStatus): PaymentStatus
@@ -180,15 +192,16 @@ final readonly class MollieAdapter implements
     }
 
     /**
-     * Phase 22 Q6 — provisional. Mollie has no single-call "create a
-     * subscription" flow: a customer must first authorize recurring charges
-     * via a one-off "first payment" (`sequenceType=first`), which only
-     * produces a mandate once it succeeds; the real Mollie Subscription
-     * resource can only be created afterward. This method performs exactly
-     * that first-payment step and returns its checkout URL — the
+     * Phase 22 Q6. Mollie has no single-call "create a subscription" flow: a
+     * customer must first authorize recurring charges via a one-off "first
+     * payment" (`sequenceType=first`), which only produces a mandate once it
+     * succeeds; the real Mollie Subscription resource can only be created
+     * afterward. This method performs exactly that first-payment step and
+     * returns its checkout URL and Mollie customer id — the
      * `providerReference` returned here is a **payment** id (`tr_...`), not
-     * yet a real subscription id. Creating the actual Subscription resource
-     * once the mandate is confirmed is Phase 25's job (webhook processing).
+     * yet a real subscription id. {@see activateSubscription()} (Phase 29
+     * Q2) creates the actual Subscription resource once the mandate is
+     * confirmed.
      */
     public function createSubscription(CreateSubscriptionCommand $command): ProviderSubscriptionResult
     {
@@ -215,7 +228,7 @@ final readonly class MollieAdapter implements
             throw new ProviderRequestFailed($e->getMessage(), previous: $e);
         }
 
-        return new ProviderSubscriptionResult($payment->id, $payment->getCheckoutUrl() ?? '', $payment->status);
+        return new ProviderSubscriptionResult($payment->id, $payment->getCheckoutUrl() ?? '', $payment->status, $customer->id);
     }
 
     /**
@@ -251,6 +264,44 @@ final readonly class MollieAdapter implements
     public function mapProviderSubscriptionStatusToInternalStatus(string $providerStatus): string
     {
         return $this->mapper->fromSubscription($providerStatus);
+    }
+
+    /**
+     * The other half of Q2's provisional `createSubscription()`: called once
+     * the first-payment mandate is confirmed, this creates the *real*
+     * recurring Mollie Subscription resource. Mollie then pushes its own
+     * webhook for every future renewal charge, going forward — symmetric
+     * with Stripe from this point on.
+     */
+    public function activateSubscription(string $customerId, ActivateSubscriptionCommand $command): ProviderSubscriptionResult
+    {
+        $payload = [
+            'amount' => $this->toMollieAmount($command->amountMinor, $command->currencyCode),
+            'interval' => $this->toMollieInterval($command->interval),
+            'description' => $command->description,
+        ];
+        if ($command->webhookUrl !== null) {
+            $payload['webhookUrl'] = $command->webhookUrl;
+        }
+
+        try {
+            $subscription = $this->client->subscriptions->createForId($customerId, $payload);
+        } catch (UnauthorizedException|ForbiddenException $e) {
+            throw new ProviderAuthenticationFailed($e->getMessage(), previous: $e);
+        } catch (ApiException $e) {
+            throw new ProviderRequestFailed($e->getMessage(), previous: $e);
+        }
+
+        return new ProviderSubscriptionResult($subscription->id, '', $subscription->status);
+    }
+
+    private function toMollieInterval(SubscriptionInterval $interval): string
+    {
+        return match ($interval) {
+            SubscriptionInterval::Monthly => '1 month',
+            SubscriptionInterval::Quarterly => '3 months',
+            SubscriptionInterval::Yearly => '12 months',
+        };
     }
 
     private function fetchPaymentStatus(string $providerReference): ProviderPaymentStatus

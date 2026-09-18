@@ -34,4 +34,13 @@ interface VoucherRedemptionRepository
      * @return list<VoucherRedemption>
      */
     public function forVoucher(int $voucherId): array;
+
+    /**
+     * `reserved` rows whose `reserved_at` is older than `$before` — abandoned
+     * checkout attempts that never confirmed or released their voucher
+     * reservation (Phase 29's stale-reservation sweep).
+     *
+     * @return list<VoucherRedemption>
+     */
+    public function findStaleReserved(\DateTimeImmutable $before, int $limit): array;
 }

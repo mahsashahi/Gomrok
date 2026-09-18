@@ -19,4 +19,13 @@ interface CheckoutAttemptRepository
      * @return list<CheckoutAttempt>
      */
     public function forClient(int $clientId): array;
+
+    /**
+     * Non-terminal attempts (not converted, and not already an exit status)
+     * whose `updated_at` is older than `$before` — abandoned checkouts with
+     * no recent activity (Phase 29's checkout-abandonment sweep).
+     *
+     * @return list<CheckoutAttempt>
+     */
+    public function findStaleNonTerminal(\DateTimeImmutable $before, int $limit): array;
 }

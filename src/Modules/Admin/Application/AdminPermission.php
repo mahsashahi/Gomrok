@@ -60,6 +60,15 @@ enum AdminPermission: string
      */
     case ErrorLogsResolve = 'error_logs.resolve';
     case ReconciliationView = 'reconciliation.view';
+    /**
+     * Not in CLAUDE.md's suggested permission list — same reasoning as
+     * {@see ErrorLogsResolve}: a "mark reviewed" action the
+     * `reconciliation_findings` table (Phase 29) was designed for
+     * (`resolved_at`/`resolved_by`), which never mutates the payment/
+     * subscription the finding is about (reconciliation only ever detects
+     * drift, per `db_explain.md`).
+     */
+    case ReconciliationResolve = 'reconciliation.resolve';
     case AdminUsersView = 'admin_users.view';
     case AdminUsersCreate = 'admin_users.create';
     case AdminUsersUpdate = 'admin_users.update';

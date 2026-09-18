@@ -40,6 +40,7 @@ final class WebhookEvent
         private ?DateTimeImmutable $lastAttemptedAt,
         private readonly DateTimeImmutable $createdAt,
         private ?DateTimeImmutable $updatedAt,
+        private readonly ?string $subscriptionReference = null,
     ) {
     }
 
@@ -57,6 +58,7 @@ final class WebhookEvent
         string $rawPayload,
         array $headers,
         DateTimeImmutable $now,
+        ?string $subscriptionReference = null,
     ): self {
         return new self(
             null,
@@ -78,6 +80,7 @@ final class WebhookEvent
             null,
             $now,
             null,
+            $subscriptionReference,
         );
     }
 
@@ -104,6 +107,7 @@ final class WebhookEvent
         ?DateTimeImmutable $lastAttemptedAt,
         DateTimeImmutable $createdAt,
         ?DateTimeImmutable $updatedAt,
+        ?string $subscriptionReference = null,
     ): self {
         return new self(
             $id,
@@ -125,6 +129,7 @@ final class WebhookEvent
             $lastAttemptedAt,
             $createdAt,
             $updatedAt,
+            $subscriptionReference,
         );
     }
 
@@ -208,6 +213,11 @@ final class WebhookEvent
     public function providerReference(): ?string
     {
         return $this->providerReference;
+    }
+
+    public function subscriptionReference(): ?string
+    {
+        return $this->subscriptionReference;
     }
 
     public function rawPayload(): string

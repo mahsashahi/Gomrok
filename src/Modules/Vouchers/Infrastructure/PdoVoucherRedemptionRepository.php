@@ -118,6 +118,26 @@ final readonly class PdoVoucherRedemptionRepository implements VoucherRedemption
         return $rows;
     }
 
+    public function findStaleReserved(\DateTimeImmutable $before, int $limit): array
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT * FROM voucher_redemptions WHERE status = 'reserved' AND reserved_at < :before ORDER BY reserved_at ASC LIMIT :limit",
+        );
+        $statement->bindValue('before', $before->format(self::DT));
+        $statement->bindValue('limit', $limit, PDO::PARAM_INT);
+        $statement->execute();
+
+        $rows = [];
+        while (($row = $statement->fetch()) !== false) {
+            $redemption = $this->hydrate($row);
+            if ($redemption !== null) {
+                $rows[] = $redemption;
+            }
+        }
+
+        return $rows;
+    }
+
     public function redemptionsByUser(int $voucherId, string $clientUserRef): int
     {
         return $this->countForVoucherAndUser($voucherId, $clientUserRef, self::ACTIVE_STATUSES);

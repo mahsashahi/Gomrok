@@ -88,6 +88,29 @@ final readonly class PdoPaymentRepository implements PaymentRepository
         return $payments;
     }
 
+    public function findRecentForReconciliation(\DateTimeImmutable $since, int $limit): array
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT * FROM payments
+              WHERE status != 'created' AND COALESCE(updated_at, created_at) >= :since
+              ORDER BY COALESCE(updated_at, created_at) ASC
+              LIMIT :limit",
+        );
+        $statement->bindValue('since', $since->format(self::DT));
+        $statement->bindValue('limit', $limit, PDO::PARAM_INT);
+        $statement->execute();
+
+        $payments = [];
+        while (($row = $statement->fetch()) !== false) {
+            $payment = $this->hydrate($row);
+            if ($payment !== null) {
+                $payments[] = $payment;
+            }
+        }
+
+        return $payments;
+    }
+
     /**
      * @return array<string, scalar|null>
      */

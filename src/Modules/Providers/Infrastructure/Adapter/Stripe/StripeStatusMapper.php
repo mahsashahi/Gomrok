@@ -44,6 +44,13 @@ final class StripeStatusMapper
             'requires_capture' => PaymentStatus::Authorized,
             'succeeded' => PaymentStatus::Paid,
             'canceled' => PaymentStatus::Canceled,
+            // Not a real Stripe PaymentIntent status — a PaymentIntent itself
+            // never terminally "fails" (it reverts to requires_payment_method
+            // for retry). This is StripeAdapter's own deliberate synthetic
+            // marker for a `invoice.payment_failed` renewal-charge event
+            // (Phase 29 Q2), which *is* an unambiguous, authoritative "this
+            // charge failed" signal at the invoice level.
+            'payment_failed' => PaymentStatus::Failed,
             default => PaymentStatus::Pending, // requires_payment_method, requires_confirmation, processing, unrecognised
         };
     }

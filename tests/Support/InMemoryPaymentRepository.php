@@ -44,4 +44,24 @@ final class InMemoryPaymentRepository implements PaymentRepository
     {
         return array_values(array_filter($this->byId, static fn (Payment $p): bool => $p->clientId() === $clientId));
     }
+
+    public function findRecentForReconciliation(\DateTimeImmutable $since, int $limit): array
+    {
+        $recent = array_values(array_filter($this->byId, static function (Payment $p) use ($since): bool {
+            if ($p->status()->value === 'created') {
+                return false;
+            }
+            $lastActivity = $p->updatedAt() ?? $p->createdAt();
+
+            return $lastActivity >= $since;
+        }));
+        usort($recent, static function (Payment $a, Payment $b): int {
+            $aTime = $a->updatedAt() ?? $a->createdAt();
+            $bTime = $b->updatedAt() ?? $b->createdAt();
+
+            return $aTime <=> $bTime;
+        });
+
+        return \array_slice($recent, 0, $limit);
+    }
 }

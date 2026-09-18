@@ -825,7 +825,10 @@ two state machines in the codebase.
 
 ## Webhooks (Phase 25)
 
-The `Webhooks` module — one table, `webhook_events`.
+The `Webhooks` module — one table, `webhook_events`. `subscription_reference` (Phase 29 Q2,
+additive) is explained in the Phase 29 section below — it's what lets a renewal-charge webhook,
+whose own `provider_reference` is a brand-new id never seen before, resolve to an existing
+subscription instead of dead-ending.
 
 ### `webhook_events`
 
@@ -1042,3 +1045,83 @@ Two tables: `provider_account_notification_overrides` and `client_notification_l
   failure), `RetryPendingClientNotifications` (cron-invoked retries), and the admin Notifications
   screen's manual-retry action (resets a `dead_lettered` row back to `pending` with a fresh
   `next_attempt_at`).
+
+---
+
+## Background jobs, reconciliation & observability (Phase 29)
+
+Two tables: `jobs` and `reconciliation_findings`.
+
+### `jobs`
+
+- **Why one unified table, not one per job type** (Q1, user-confirmed follow-up) — Phases 25 and
+  28 each built their own standalone scanner (`RetryPendingWebhookEvents`,
+  `RetryPendingClientNotifications`), each reading its own domain table
+  (`webhook_events`/`client_notification_logs`) for due rows. That pattern works but doesn't
+  scale to N job kinds without N bespoke scanners, each reinventing claim/lock/retry logic.
+  `jobs` is the single place every recurring task — the two existing scanners now migrated onto
+  it, plus the voucher-reservation sweep, checkout-abandonment sweep, Mollie renewal charging, and
+  both reconciliation scans — goes through the same claim/attempt/health-tracking machinery, and
+  the same worker entrypoint runs all of them.
+- **Self-rescheduling, not a cron-schedule table.** There's no `schedules` table saying "run
+  `webhook_retry_scan` every minute." Instead, when a job handler finishes (success *or*
+  failure), it enqueues its own next occurrence directly — `run_at = now + <interval>`, where the
+  interval is a PHP constant per job type, not a database value. This is deliberately the
+  simplest correct way to get "recurring" behavior out of a one-shot job queue, and it means a
+  job's next run is only ever scheduled by code that just proved it can run, not by a separate
+  timer that might drift out of sync with reality.
+- **Claim locking exists even though there's one worker today.** `SELECT ... FOR UPDATE SKIP
+  LOCKED` on `(status, run_at)`, with `locked_at`/`locked_by` set on claim, protects against a
+  cron-invoked worker overlapping itself (a run that takes longer than the cron interval) — a
+  real, not hypothetical, failure mode once jobs like reconciliation scan every payment/
+  subscription and could legitimately run long as data grows.
+- **`payload` is nullable because every job type this phase introduces is a recurring scan with
+  no parameters of its own** — the column exists for a future genuinely one-off, enqueued task
+  (e.g. an admin-triggered "resync this one thing now" action), not because anything today needs
+  it.
+- **No `client_id` column** — every job type here operates globally across clients (a scan, not a
+  per-client entity). A future client-scoped one-off job would carry `client_id` inside its
+  `payload` instead.
+- **`consecutive_failures`/`total_failures`/`last_failed_at`/`last_success_at`/`alerted_at`/
+  `alert_acknowledged_at`/`alert_acknowledged_by` (Q5 revised, user-specified) exist because a
+  recurring job deliberately never dead-letters or gets escalating backoff from repeated
+  failure** — it always reschedules at its fixed interval, forever, so a persistently broken job
+  (bad credentials, schema drift, a downstream outage) would otherwise fail silently forever with
+  nothing more visible than `last_error` on one row. `consecutive_failures` resets to `0` on
+  success and, once it crosses `Job::ALERT_THRESHOLD` (a code constant, `3` — not per-job-type or
+  DB-configurable, since finer-grained tuning wasn't asked for), sets `alerted_at` exactly once
+  for that failure episode; further consecutive failures don't re-set it, avoiding alert spam. An
+  admin can acknowledge (`alert_acknowledged_at`/`_by`, no FK on the latter, same unconstrained
+  convention as `error_logs.resolved_by`) to silence it without it re-firing before the next
+  actual failure — only a real recovery (a success) clears both `alerted_at` and the
+  acknowledgement together, starting the next episode fresh. `total_failures` is a lifetime
+  counter that never resets, for at-a-glance job reliability on the admin screen.
+- **Per-occurrence failure history is not a new table** — a job handler's returned
+  `JobRunResult::failure()` (previously only a *thrown* exception was captured) is now also
+  logged to the existing `error_logs` table (`source: 'job'`), so debugging a repeatedly-failing
+  job uses the Error Logs screen already built for exactly this, rather than duplicating that
+  machinery here.
+
+### `reconciliation_findings`
+
+- **Detection only, by deliberate design, not because auto-correction was out of scope for time**
+  — reconciliation polls each provider's `getPaymentStatus()`/`getSubscriptionStatus()` (both
+  already exist on `PaymentProviderPort`/`SupportsSubscriptions`), compares the mapped result to
+  Gomrok's local status, and if they differ, writes a row here. It never calls `transitionTo()`
+  itself. Two concrete reasons: an out-of-band "correction" could apply a status
+  `PaymentStatus::allowedNextStatuses()` / `SubscriptionStatus`'s own transition graph would
+  reject if it arrived through the normal webhook path — silently bypassing a guard that exists
+  for a reason — and auto-correcting a real bug (e.g. a webhook that was missed) would hide the
+  bug instead of surfacing it for a human to actually investigate.
+- **`resolved_at`/`resolved_by` marks a finding *reviewed*, not *fixed*.** Mirrors `error_logs`'s
+  exact convention (Phase 27) rather than inventing a new one: an admin looked at this drift and
+  decided what to do about it (which might be nothing, if it's expected/benign) — the finding
+  itself is never mutated to reflect a "corrected" state, since Gomrok never performs the
+  correction.
+- **`mapped_provider_status` is nullable** because an adapter's `mapProviderStatusToInternalStatus()`
+  can legitimately return nothing meaningful for an unmapped/unknown raw provider status (the
+  same "store safely, never guess" rule webhook processing already follows) — the raw value is
+  always kept in `provider_status_raw` regardless.
+- **Set / advanced by** the two reconciliation job handlers (`payment_reconciliation_scan`,
+  `subscription_reconciliation_scan`) on detecting drift, and the admin reconciliation report
+  screen's "mark reviewed" action.

@@ -1,0 +1,95 @@
+{% extends 'layouts/shell.html.twig' %}
+
+{% block title %}Reconciliation — Gomrok Admin{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+  <h1 class="page-title" style="font-size:22px">Reconciliation</h1>
+  {% if screen.openCount > 0 %}
+  <span class="status-pill status-open">{{ screen.openCount }} open</span>
+  {% endif %}
+</div>
+<p style="font-size:12px;color:var(--text-muted);margin:0 0 16px;max-width:680px">
+  Drift detected between Gomrok's local payment/subscription status and what the provider actually
+  reports when polled. Detection only — nothing here mutates the payment or subscription itself;
+  "resolve" marks a finding reviewed, not fixed. Opens on unresolved rows by default.
+</p>
+
+{% if success %}
+<div style="background:oklch(94% 0.06 150);color:oklch(38% 0.1 150);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div style="background:oklch(95% 0.05 25);color:var(--danger);border-radius:8px;padding:9px 14px;font-size:12.5px;margin-bottom:14px">{{ error }}</div>
+{% endif %}
+
+<form method="get" action="/admin/reconciliation" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;background:#fff;border:1px solid var(--border-light);border-radius:9px;padding:12px 14px">
+  <div class="form-field" style="width:120px">
+    <label>Client ID</label>
+    <input type="text" name="client_id" value="{{ screen.filters.clientId }}" placeholder="any">
+  </div>
+  <div class="form-field" style="min-width:140px">
+    <label>Resolution</label>
+    <select name="resolution">
+      <option value="open" {{ screen.filters.resolution == 'open' ? 'selected' : '' }}>Open</option>
+      <option value="resolved" {{ screen.filters.resolution == 'resolved' ? 'selected' : '' }}>Resolved</option>
+      <option value="all" {{ screen.filters.resolution == 'all' ? 'selected' : '' }}>All</option>
+    </select>
+  </div>
+  <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+  {% if screen.filters.clientId or screen.filters.resolution != 'open' %}
+  <a href="/admin/reconciliation" class="link-btn">Clear</a>
+  {% endif %}
+</form>
+
+{% if screen.rows is empty %}
+<div style="border:1px dashed var(--border);border-radius:9px;padding:22px 18px;text-align:center">
+  <div style="font-size:12.5px;font-weight:700">No matching reconciliation findings</div>
+</div>
+{% else %}
+<div style="border:1px solid var(--border-light);border-radius:9px;overflow:hidden;background:#fff">
+  {% for row in screen.rows %}
+  <div>
+    <div style="display:grid;grid-template-columns:0.85fr 0.85fr 1fr 1fr 1fr 1fr;column-gap:12px;padding:11px 16px;font-size:12.5px;border-bottom:1px solid var(--surface-alt);align-items:center">
+      <div style="color:var(--text-muted)">{{ row.detectedLabel }}</div>
+      <div style="color:var(--text-muted)">{{ row.clientLabel }}</div>
+      <div>
+        <div style="font-weight:600">{{ row.targetType }} #{{ row.targetId }}</div>
+      </div>
+      <div>
+        <div>local: <strong>{{ row.localStatus }}</strong></div>
+        <div style="color:var(--text-muted)">provider: <strong>{{ row.mappedProviderStatus ?? row.providerStatusRaw }}</strong>{% if row.mappedProviderStatus and row.mappedProviderStatus != row.providerStatusRaw %} <span style="font-size:10px;color:var(--text-faint)">(raw: {{ row.providerStatusRaw }})</span>{% endif %}</div>
+      </div>
+      <div>
+        {% if row.isResolved %}
+        <span class="status-pill status-resolved">resolved</span>
+        {% if row.resolvedByLabel %}<div style="font-size:10px;color:var(--text-faint);margin-top:2px">by {{ row.resolvedByLabel }}</div>{% endif %}
+        {% else %}
+        <span class="status-pill status-open">open</span>
+        {% endif %}
+      </div>
+      <div style="text-align:right">
+        {% if not row.isResolved and 'reconciliation.resolve' in permissions %}
+        <form method="post" action="/admin/reconciliation/{{ row.id }}/resolve" style="display:inline">
+          <input type="hidden" name="return_query" value="{{ filter_query }}{{ filter_query ? '&' : '' }}page={{ screen.page }}">
+          <button type="submit" class="btn btn-secondary btn-sm">Mark resolved</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:11.5px;color:var(--text-faint)">
+  <div>{{ screen.totalCount }} result{{ screen.totalCount == 1 ? '' : 's' }} &middot; page {{ screen.page }} of {{ screen.totalPages }}</div>
+  <div style="display:flex;gap:10px">
+    {% if screen.page > 1 %}
+    <a href="/admin/reconciliation?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page - 1 }}">&larr; Newer</a>
+    {% endif %}
+    {% if screen.page < screen.totalPages %}
+    <a href="/admin/reconciliation?{{ filter_query ? filter_query ~ '&' : '' }}page={{ screen.page + 1 }}">Older &rarr;</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

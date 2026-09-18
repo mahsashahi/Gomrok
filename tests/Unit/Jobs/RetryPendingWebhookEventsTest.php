@@ -13,17 +13,22 @@ use Gomrok\Modules\Payments\Domain\Payment;
 use Gomrok\Modules\Payments\Domain\PaymentStatus;
 use Gomrok\Modules\Providers\Domain\PaymentMethod;
 use Gomrok\Modules\Providers\Domain\PurchaseType;
+use Gomrok\Modules\Subscriptions\Application\RecordSubscriptionPayment\RecordSubscriptionPaymentHandler;
 use Gomrok\Modules\Webhooks\Application\ProcessWebhookEvent\ProcessWebhookEventHandler;
 use Gomrok\Modules\Webhooks\Domain\WebhookEvent;
 use Gomrok\Modules\Webhooks\Domain\WebhookEventStatus;
 use Gomrok\Shared\Infrastructure\Persistence\NullErrorLogWriter;
 use Gomrok\Tests\Support\FakePaymentProviderPort;
 use Gomrok\Tests\Support\FrozenClock;
+use Gomrok\Tests\Support\InMemoryCheckoutAttemptRepository;
 use Gomrok\Tests\Support\InMemoryGatewayReferenceRepository;
 use Gomrok\Tests\Support\InMemoryPaymentAttemptRepository;
 use Gomrok\Tests\Support\InMemoryPaymentDirectory;
 use Gomrok\Tests\Support\InMemoryPaymentRepository;
 use Gomrok\Tests\Support\InMemoryProviderTransactionRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionEventRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionPaymentLinkRepository;
+use Gomrok\Tests\Support\InMemorySubscriptionRepository;
 use Gomrok\Tests\Support\InMemoryWebhookEventRepository;
 use Gomrok\Tests\Support\RecordingAuditLogWriter;
 use Gomrok\Tests\Support\RecordingDomainEventDispatcher;
@@ -76,12 +81,26 @@ final class RetryPendingWebhookEventsTest extends TestCase
             new FrozenClock('2026-09-14T12:00:00+00:00'),
             new RecordingDomainEventDispatcher(),
         );
+        $recordSubscriptionPayment = new RecordSubscriptionPaymentHandler(
+            new InMemorySubscriptionRepository(),
+            new InMemoryCheckoutAttemptRepository(),
+            $payments,
+            new InMemorySubscriptionPaymentLinkRepository(),
+            new InMemorySubscriptionEventRepository(),
+            $gatewayReferences,
+            $recordTransaction,
+            new RecordingAuditLogWriter(),
+            new SynchronousTransactions(),
+            new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
+        );
         $processor = new ProcessWebhookEventHandler(
             $events,
             $gatewayReferences,
             new InMemoryPaymentDirectory($payments),
             $adapterFactory,
             $recordTransaction,
+            $recordSubscriptionPayment,
             new NullErrorLogWriter(),
             new FrozenClock('2026-09-14T12:00:00+00:00'),
         );
@@ -117,15 +136,31 @@ final class RetryPendingWebhookEventsTest extends TestCase
         $events->save($failed);
 
         $adapterFactory = (new StubProviderAdapterFactory())->add(self::PROVIDER_ACCOUNT, new FakePaymentProviderPort());
+        $skipTestPayments = new InMemoryPaymentRepository();
+        $skipTestGatewayReferences = new InMemoryGatewayReferenceRepository();
+        $skipTestRecordTransaction = new RecordProviderTransactionHandler(
+            $skipTestPayments,
+            new InMemoryPaymentAttemptRepository(),
+            new InMemoryProviderTransactionRepository(),
+            new RecordingAuditLogWriter(),
+            new SynchronousTransactions(),
+            new FrozenClock('2026-09-14T12:00:00+00:00'),
+            new RecordingDomainEventDispatcher(),
+        );
         $processor = new ProcessWebhookEventHandler(
             $events,
-            new InMemoryGatewayReferenceRepository(),
-            new InMemoryPaymentDirectory(new InMemoryPaymentRepository()),
+            $skipTestGatewayReferences,
+            new InMemoryPaymentDirectory($skipTestPayments),
             $adapterFactory,
-            new RecordProviderTransactionHandler(
-                new InMemoryPaymentRepository(),
-                new InMemoryPaymentAttemptRepository(),
-                new InMemoryProviderTransactionRepository(),
+            $skipTestRecordTransaction,
+            new RecordSubscriptionPaymentHandler(
+                new InMemorySubscriptionRepository(),
+                new InMemoryCheckoutAttemptRepository(),
+                $skipTestPayments,
+                new InMemorySubscriptionPaymentLinkRepository(),
+                new InMemorySubscriptionEventRepository(),
+                $skipTestGatewayReferences,
+                $skipTestRecordTransaction,
                 new RecordingAuditLogWriter(),
                 new SynchronousTransactions(),
                 new FrozenClock('2026-09-14T12:00:00+00:00'),

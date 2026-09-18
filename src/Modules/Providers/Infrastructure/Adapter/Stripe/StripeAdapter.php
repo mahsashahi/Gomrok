@@ -140,11 +140,38 @@ final readonly class StripeAdapter implements
         }
 
         $object = $event->data->object;
-        $objectId = $object['id'] ?? null;
-        $objectStatus = $object['status'] ?? null;
 
         /** @var array<array-key, mixed> $payload */
         $payload = $event->toArray();
+
+        // A subscription renewal charge (Q2) — Stripe's own billing engine
+        // sends these; `object` is an Invoice, not a PaymentIntent, so its
+        // `id` (`in_...`) has never been seen before and its own `status`
+        // vocabulary doesn't map through `fromPaymentIntent()`. Resolve the
+        // *charge's* reference from `payment_intent` when present, and use a
+        // deliberate synthetic status string (`'succeeded'` /
+        // `'payment_failed'`) `StripeStatusMapper::fromPaymentIntent()`
+        // recognises — never a real Stripe status, self-consistent within
+        // this adapter only.
+        if (str_starts_with($event->type, 'invoice.payment_')) {
+            $subscriptionReference = $object['subscription'] ?? null;
+            $paymentIntentReference = $object['payment_intent'] ?? null;
+            $invoiceId = $object['id'] ?? null;
+            $reference = \is_string($paymentIntentReference) ? $paymentIntentReference : (\is_string($invoiceId) ? $invoiceId : null);
+            $rawStatus = $event->type === 'invoice.payment_succeeded' ? 'succeeded' : 'payment_failed';
+
+            return new ParsedWebhookEvent(
+                $event->id,
+                $event->type,
+                $reference,
+                $rawStatus,
+                $payload,
+                \is_string($subscriptionReference) ? $subscriptionReference : null,
+            );
+        }
+
+        $objectId = $object['id'] ?? null;
+        $objectStatus = $object['status'] ?? null;
 
         return new ParsedWebhookEvent(
             $event->id,

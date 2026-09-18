@@ -25,11 +25,11 @@ final readonly class PdoWebhookEventRepository implements WebhookEventRepository
             $statement = $this->pdo->prepare(
                 'INSERT INTO webhook_events
                     (client_id, provider_account_id, provider_type_code, event_id, event_type, raw_status,
-                     provider_reference, raw_payload, headers, status, attempt_count, error_code, error_message,
+                     provider_reference, subscription_reference, raw_payload, headers, status, attempt_count, error_code, error_message,
                      payment_id, processed_at, last_attempted_at, created_at, updated_at)
                  VALUES
                     (:client_id, :provider_account_id, :provider_type_code, :event_id, :event_type, :raw_status,
-                     :provider_reference, :raw_payload, :headers, :status, :attempt_count, :error_code, :error_message,
+                     :provider_reference, :subscription_reference, :raw_payload, :headers, :status, :attempt_count, :error_code, :error_message,
                      :payment_id, :processed_at, :last_attempted_at, :created_at, :updated_at)',
             );
             $statement->execute($this->bindings($event));
@@ -115,6 +115,7 @@ final readonly class PdoWebhookEventRepository implements WebhookEventRepository
             'event_type' => $event->eventType(),
             'raw_status' => $event->rawStatus(),
             'provider_reference' => $event->providerReference(),
+            'subscription_reference' => $event->subscriptionReference(),
             'raw_payload' => $event->rawPayload(),
             'headers' => json_encode($event->headers(), JSON_THROW_ON_ERROR),
             'status' => $event->status()->value,
@@ -164,6 +165,7 @@ final readonly class PdoWebhookEventRepository implements WebhookEventRepository
             $lastAttemptedAt !== null ? new DateTimeImmutable($lastAttemptedAt) : null,
             new DateTimeImmutable(Row::str($row['created_at'] ?? 'now')),
             $updatedAt !== null ? new DateTimeImmutable($updatedAt) : null,
+            Row::nullableStr($row['subscription_reference'] ?? null),
         );
     }
 }

@@ -179,6 +179,14 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
    yet" and "will retry" via the shared amber rule above. */
 .status-pill.status-sent { background: oklch(94% 0.06 150); color: oklch(38% 0.1 150); }
 .status-pill.status-dead_lettered { background: oklch(95% 0.05 25); color: var(--danger); }
+/* Jobs (Phase 29): `done` reuses the paid/green pair, `processing` reuses the
+   pending/amber pair (in-flight, like a not-yet-attempted notification) —
+   `failed` and `dead_lettered` already covered above. */
+.status-pill.status-done { background: oklch(94% 0.06 150); color: oklch(38% 0.1 150); }
+.status-pill.status-processing { background: oklch(95% 0.05 85); color: oklch(45% 0.1 85); }
+/* Reconciliation (Phase 29): `open` reuses the unresolved/amber pair — a
+   detected drift not yet reviewed, same severity framing as Error Logs. */
+.status-pill.status-open { background: oklch(95% 0.05 85); color: oklch(45% 0.1 85); }
 
 .timeline-toggle { cursor: pointer; user-select: none; }
 .timeline-row { background: var(--surface-alt); padding: 10px 20px 10px 44px; font-size: 13px; }

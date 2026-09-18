@@ -21,6 +21,7 @@ flowchart TD
     Subscriptions["Subscriptions<br/>subscriptions + subscription_events + subscription_payment_links (P26)"]
     Notifications["Notifications<br/>client_notification_logs + provider_account_notification_overrides (P28)"]
     Admin["Admin<br/>admin_users + admin_sessions + admin_login_attempts (P27)"]
+    Jobs["Jobs<br/>jobs + reconciliation_findings (P29)"]
     Ref -.-> Clients
     Ref -.-> Providers
     Ref -.-> Packages
@@ -53,10 +54,17 @@ flowchart TD
     Payments --> Subscriptions
     Payments --> Notifications
     Admin -.-> Payments
+    Webhooks --> Jobs
+    Notifications --> Jobs
+    Vouchers --> Jobs
+    Checkout --> Jobs
+    Subscriptions --> Jobs
+    Payments --> Jobs
+    Admin -.-> Jobs
 
     classDef done fill:#d5f5e3,stroke:#27ae60;
     classDef todo fill:#f8f9fa,stroke:#adb5bd,color:#868e96;
-    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions,Notifications,Admin done;
+    class Ref,Xc,Clients,Providers,Packages,Pricing,Vouchers,Checkout,Payments,Webhooks,Subscriptions,Notifications,Admin,Jobs done;
 ```
 
 Green = tables exist. Grey = designed in that module's phase.
@@ -946,6 +954,7 @@ erDiagram
         varchar event_type "nullable"
         varchar raw_status "nullable; part of dedup key"
         varchar provider_reference "nullable"
+        varchar subscription_reference "nullable; Phase 29 Q2, additive"
         mediumtext raw_payload "exact request body, never re-encoded"
         json headers "nullable"
         varchar status "received | processing | processed | retry_pending | failed"
@@ -1108,3 +1117,67 @@ the same "plain invokable + cron `bin/*.php` script" shape as `RetryPendingWebho
 constraint would drop a real second notification; idempotency instead relies on
 `Payment::transitionTo()`'s same-status no-op guard and Phase 25's webhook-dedup upstream. Full
 detail: `.claude/docs/database-design.md` → "Client notifications (Phase 28)".
+
+## Background jobs, reconciliation & observability (Phase 29)
+
+```mermaid
+erDiagram
+    jobs {
+        int id PK
+        varchar type "fixed, code-defined set"
+        text payload "JSON; nullable, one-off jobs only"
+        varchar status "pending | processing | done | failed | dead_lettered"
+        smallint attempts "every claim, regardless of outcome"
+        smallint consecutive_failures "resets to 0 on success"
+        int total_failures "lifetime, never resets"
+        datetime last_failed_at "nullable"
+        datetime last_success_at "nullable"
+        datetime alerted_at "nullable; set once per failure episode"
+        datetime alert_acknowledged_at "nullable"
+        int alert_acknowledged_by "nullable, no FK"
+        datetime run_at "when claimable"
+        datetime locked_at "nullable; claim marker"
+        varchar locked_by "nullable; claim marker"
+        text last_error "nullable"
+        text last_result "JSON; nullable"
+        datetime created_at
+        datetime updated_at "nullable"
+    }
+    reconciliation_findings {
+        int id PK
+        int client_id FK "-> clients.id (CASCADE)"
+        varchar target_type "payment | subscription"
+        int target_id "polymorphic, no FK"
+        varchar local_status
+        varchar provider_status_raw
+        varchar mapped_provider_status "nullable"
+        datetime detected_at
+        datetime resolved_at "nullable"
+        int resolved_by "nullable"
+        datetime created_at
+    }
+
+    clients ||--o{ reconciliation_findings : "owns"
+```
+
+Unified, self-rescheduling design (Q1, user-confirmed): every recurring background task —
+webhook retry and notification delivery/retry (migrated off their standalone Phase 25/28
+`bin/*.php` scanners), the voucher stale-reservation sweep (Phase 17), the checkout-attempt
+abandonment sweep (Phase 18), Mollie subscription renewal charging (Q2), and both reconciliation
+scans — is a `jobs` row. No separate cron-schedule table: a finished handler enqueues its own
+next occurrence (`run_at = now + <fixed interval per type>`, a PHP constant). Claimed via
+`SELECT ... FOR UPDATE SKIP LOCKED` on `(status, run_at)` so overlapping worker invocations can't
+double-process a row. Reconciliation (Q3: trace-logs-only observability this phase, no real
+metrics/alerting infra) polls each provider's `getPaymentStatus()`/`getSubscriptionStatus()` and
+records drift to `reconciliation_findings` — it never calls `transitionTo()` itself; every real
+status change still comes from an actual webhook or an explicit admin action.
+
+**Health tracking, not dead-letter (Q5 revised, user-specified).** A recurring job never
+dead-letters or gets escalating backoff from repeated failure — it keeps rescheduling at its
+fixed interval forever. `consecutive_failures` crossing `Job::ALERT_THRESHOLD` (3) raises a
+visible alert on the admin Jobs screen once per failure episode (`alerted_at` guards against
+re-alerting on every subsequent failure); an admin can acknowledge it, or it clears automatically
+on the job's next success. A job handler's returned `JobRunResult::failure()` is now also logged
+to `error_logs` (`source: 'job'`), so per-occurrence failure history lives in the existing Error
+Logs screen rather than a new table. Full detail: `.claude/docs/database-design.md` →
+"Background jobs, reconciliation & observability (Phase 29)".

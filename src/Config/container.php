@@ -8,8 +8,15 @@ use function DI\get;
 
 use Gomrok\Config\DatabaseSettings;
 use Gomrok\Config\Settings;
+use Gomrok\Modules\Checkout\Application\Jobs\CheckoutAbandonmentSweepHandler;
+use Gomrok\Modules\Notifications\Application\Jobs\NotificationRetryScanHandler;
 use Gomrok\Modules\Notifications\Application\Subscribers\EnqueueOnPaymentStatusChanged;
 use Gomrok\Modules\Notifications\Application\Subscribers\EnqueueOnSubscriptionStatusChanged;
+use Gomrok\Modules\Reconciliation\Application\Jobs\PaymentReconciliationScanHandler;
+use Gomrok\Modules\Reconciliation\Application\Jobs\SubscriptionReconciliationScanHandler;
+use Gomrok\Modules\Subscriptions\Application\Jobs\MollieSubscriptionActivationScanHandler;
+use Gomrok\Modules\Vouchers\Application\Jobs\VoucherReservationSweepHandler;
+use Gomrok\Modules\Webhooks\Application\Jobs\WebhookRetryScanHandler;
 use Gomrok\Shared\Application\Audit\AuditLogDirectory;
 use Gomrok\Shared\Application\Audit\AuditLogWriter;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogDirectory;
@@ -17,10 +24,13 @@ use Gomrok\Shared\Application\ErrorLog\ErrorLogResolver;
 use Gomrok\Shared\Application\ErrorLog\ErrorLogWriter;
 use Gomrok\Shared\Application\Events\DomainEventDispatcher;
 use Gomrok\Shared\Application\Idempotency\IdempotencyStore;
+use Gomrok\Shared\Application\Jobs\JobDirectory;
+use Gomrok\Shared\Application\Jobs\RunDueJobsHandler;
 use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Application\SecretCipher;
 use Gomrok\Shared\Application\TokenGenerator;
 use Gomrok\Shared\Application\Transactions;
+use Gomrok\Shared\Domain\Jobs\JobRepository;
 use Gomrok\Shared\Http\IdempotencyMiddleware;
 use Gomrok\Shared\Infrastructure\Crypto\SodiumSecretCipher;
 use Gomrok\Shared\Infrastructure\Events\SynchronousDomainEventDispatcher;
@@ -31,6 +41,8 @@ use Gomrok\Shared\Infrastructure\Persistence\PdoErrorLogDirectory;
 use Gomrok\Shared\Infrastructure\Persistence\PdoErrorLogResolver;
 use Gomrok\Shared\Infrastructure\Persistence\PdoErrorLogWriter;
 use Gomrok\Shared\Infrastructure\Persistence\PdoIdempotencyStore;
+use Gomrok\Shared\Infrastructure\Persistence\PdoJobDirectory;
+use Gomrok\Shared\Infrastructure\Persistence\PdoJobRepository;
 use Gomrok\Shared\Infrastructure\Persistence\PdoReferenceCatalog;
 use Gomrok\Shared\Infrastructure\Persistence\TransactionRunner;
 use Gomrok\Shared\Infrastructure\RandomTokenGenerator;
@@ -95,6 +107,23 @@ return [
         ->constructorParameter('subscribers', [
             get(EnqueueOnPaymentStatusChanged::class),
             get(EnqueueOnSubscriptionStatusChanged::class),
+        ]),
+
+    // The unified background-work queue (Phase 29 Q1) — every recurring
+    // task, old and new, is a self-rescheduling job type here (Q1's
+    // follow-up confirmation), so its handler list is assembled in this
+    // shared config rather than any one module's own definitions.php.
+    JobRepository::class => get(PdoJobRepository::class),
+    JobDirectory::class => get(PdoJobDirectory::class),
+    RunDueJobsHandler::class => autowire(RunDueJobsHandler::class)
+        ->constructorParameter('handlers', [
+            get(WebhookRetryScanHandler::class),
+            get(NotificationRetryScanHandler::class),
+            get(VoucherReservationSweepHandler::class),
+            get(CheckoutAbandonmentSweepHandler::class),
+            get(MollieSubscriptionActivationScanHandler::class),
+            get(PaymentReconciliationScanHandler::class),
+            get(SubscriptionReconciliationScanHandler::class),
         ]),
 
     // Secret encryption (Phase 9) — lazy: only fails if actually resolved with no key.
