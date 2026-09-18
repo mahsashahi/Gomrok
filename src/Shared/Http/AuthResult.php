@@ -19,6 +19,7 @@ final readonly class AuthResult
         public int $failureStatus,
         public string $failureCode,
         public string $failureTitle,
+        public ?int $retryAfterSeconds = null,
     ) {
     }
 
@@ -37,6 +38,16 @@ final readonly class AuthResult
     public static function clientDisabled(): self
     {
         return new self(false, null, 403, 'client_disabled', 'Client is disabled');
+    }
+
+    /**
+     * Too many recent failed attempts for this credential (Phase 30A Q1) —
+     * 429, not 401: doesn't confirm or deny the credential's own validity,
+     * only that this identifier has attracted too many recent failures.
+     */
+    public static function tooManyAttempts(int $retryAfterSeconds): self
+    {
+        return new self(false, null, 429, 'rate_limited', 'Too many failed authentication attempts. Try again later.', $retryAfterSeconds);
     }
 
     public function client(): AuthenticatedClient

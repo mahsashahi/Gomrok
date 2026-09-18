@@ -117,6 +117,17 @@ final class PriceResolverTest extends TestCase
     }
 
     #[Test]
+    public function aRealPackageOwnedByAnotherClientIsNotFound(): void
+    {
+        $this->group('default', priority: 0, countries: [], currency: 'EUR', isDefault: true);
+
+        $result = $this->resolver->resolve(self::CLIENT + 1, self::PACKAGE, 'DE');
+
+        self::assertTrue($result->isErr());
+        self::assertSame('package.not_found', $result->error()->code);
+    }
+
+    #[Test]
     public function aCrossCurrencyDefaultConvertsViaTheClientRate(): void
     {
         $this->group('us', priority: 1, countries: ['US'], currency: 'USD');

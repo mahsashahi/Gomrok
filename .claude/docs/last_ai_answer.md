@@ -1,69 +1,57 @@
-# Q: Phase 29 revision complete — Q4 (renewal-payment actions) and Q5 (persistent daemon worker)
+# Q: Phase 30B complete (within its narrowed scope) — Documentation and Televika go-live prep
 
-Phase 29's two previously-open decisions are now revised and implemented, per your instructions.
+Phase 30B is complete for what it was actually scoped to do. **Important:** Q1 ("prep everything,
+stop before real go-live") and Q4 ("skip validation now, leave it to the go-live checklist") both
+explicitly deferred the real Televika go-live itself — so **Phase 30 overall is not yet
+complete**, even though both of its sub-phases now are within their own scopes.
 
-**Q4 — cancel/refund/capture on renewal-originated payments (now Option 1, fixed):**
-- `ResolvePaymentActionContext::forPayment()` no longer returns `null` for a payment with no
-  checkout attempt — it resolves the provider account/payment method via
-  `subscription_payment_links` → the owning `Subscription`, then converges on the exact same
-  downstream capability/adapter/gateway-reference resolution a checkout-originated payment already
-  used. No existing check was bypassed.
-- Discovered mid-implementation that this alone wasn't enough: all three of
-  `CancelPaymentCommand`/`RefundPaymentCommand`/`CapturePaymentCommand` could only address a
-  payment by `checkoutAttemptId`, and a renewal payment has none — so there was no way to even
-  identify one to these commands. Each command gained a trailing optional `paymentId`
-  (`checkoutAttemptId` is now nullable); the checkout-originated path is byte-for-byte unchanged,
-  every existing positional call site untouched.
-- Added 7 new tests across the three handler test files covering the renewal path (successful
-  action, provider-not-supported, cross-client not-found).
-- No HTTP route reaches this yet — only direct command construction — since no admin payments
-  screen or new API endpoint was requested.
+**Four new documents, all written from the real codebase, not invented:**
 
-**Q5 — persistent daemon worker (now Option 2, built):**
-- Built `bin/Worker.php` (`composer jobs:worker`): continuously polls/claims due jobs through the
-  unchanged `RunDueJobsHandler` abstraction, drains a backlog in a tight loop, sleeps otherwise,
-  and traps SIGTERM/SIGINT to stop *after* the in-flight batch — never mid-batch.
-- Before writing the schema I asked one clarifying question on the max-attempts/backoff shape,
-  since your literal Q5 requirements implied real design choices. Your answers: recurring jobs
-  never dead-letter or get escalating backoff from repeated failure (they keep retrying at their
-  fixed interval forever), but health must be tracked and a spam-guarded alert must surface once a
-  job crosses 3 consecutive failures — visible on the admin Jobs screen, silenceable by an admin,
-  auto-clearing on the job's next success.
-- Proposed and got your confirmation on one additive migration (7 new `jobs` columns:
-  `consecutive_failures`, `total_failures`, `last_failed_at`, `last_success_at`, `alerted_at`,
-  `alert_acknowledged_at`, `alert_acknowledged_by`) before creating it.
-- `Job::recordFailure()`/`recordSuccess()` now maintain this bookkeeping; a new
-  `AcknowledgeJobAlertHandler` (`jobs.retry`, idempotent) backs a new
-  `POST /admin/jobs/{jobId}/acknowledge-alert` route. A job handler's *returned* failure (not just
-  a thrown exception) is now also logged to the existing `error_logs` table, so per-occurrence
-  debugging history lives in the Error Logs screen already built for exactly this, rather than a
-  new table.
-- The admin Jobs screen now shows an "N alerting" badge, a per-row healthy/alerting/ack'd pill,
-  failure counts and timestamps in the expanded row, and an "Acknowledge alert" button.
+- `.claude/knowledge/DeploymentRunbook.md` — a full step-by-step illustrative single-host Linux
+  deployment runbook (nginx + php-fpm + MySQL + systemd + `bin/Worker.php`), covering every
+  section your Q3 spec asked for (host prep through post-deployment checks), clearly labeled a
+  reference example, not a commitment, with a portability section for Docker/managed-platform/
+  multi-host targets.
+- `.claude/docs/ApiReference.md` — hand-written Markdown reference for every client-facing
+  `/api/v1/*` endpoint (auth, idempotency, error shape, every request/response body, a worked
+  end-to-end example), written directly from `src/Config/routes.php` and every real action class.
+- `.claude/docs/GoLiveChecklist.md` — a 10-stage staged checklist taking Televika from ready-code
+  to real production: client/provider/callback configuration, a controlled test-mode transaction,
+  real cutover, first real transaction, post-go-live validation, plus a client-specific rollback
+  section (disable client, revoke keys). **Prepared, not executed** — no real client, credentials,
+  or transaction exists.
+- `.claude/docs/MonitoringChecklist.md` — a tool-agnostic "check this / alert when" checklist
+  across 9 categories (app/DB health, error_logs, jobs, webhooks, notifications, HTTP error rates,
+  reconciliation, security signals) — no monitoring product chosen or assumed.
 
-**Real evidence captured:** the daemon was smoke-tested directly — it self-bootstrapped and ran
-all 7 real job types on first poll, idled silently with nothing due on a second run, and shut down
-cleanly on SIGTERM (captured process logs, all included in the phase result). A throwaway job was
-forced through 3 failures to seed a real alert; the Jobs screen was screenshotted showing "1
-alerting," a real `POST .../acknowledge-alert` was executed and verified against the database and
-audit log, and re-screenshotted showing "ack'd." All throwaway data was cleaned up afterward; the 7
-real job rows were untouched throughout.
+**Closed a real, pre-existing documentation gap.** While doing 30B's "final schema docs
+reconciliation" scope item, I queried the real live database directly (`SHOW CREATE TABLE`) and
+confirmed Phase 27's `admin_users` / `admin_sessions` / `admin_login_attempts` tables — real since
+that phase — had never been written up in `database-design.md`, `database-diagram.md` (+
+`.html`), or `db_explain.md`. `database-design.md` itself already flagged this as a known, unfixed
+gap. Backfilled all three docs from the real schema; table count corrected from 60 to **63**.
 
-**Tests:** 24 new (869 → 893 total), all passing; `phpstan analyse` clean.
+**Cross-references updated** (`Rule.md`, `FileIndex.md`, `Deployment.md`, `DeploymentSkill.md`)
+to point at the now-populated documents instead of "placeholder — not yet written."
 
-**Explicitly still out of scope, called out rather than silently dropped:**
-- No admin or client-facing route yet reaches a renewal payment's cancel/refund/capture — only
-  direct command construction is wired up and tested.
-- Production process-supervisor configuration for `bin/Worker.php` (systemd/supervisord/
-  equivalent) is explicitly Phase 30's, per your own Q5 requirement — this phase only built and
-  documented the daemon script itself.
-- The alert threshold (3) is a single hardcoded constant, not per-job-type or DB-configurable —
-  matches "a configurable threshold, e.g. 3 or 5" read as "pick one sensible value."
+**No application code changed this phase.** Re-ran everything anyway to confirm nothing broke:
+`composer test` → 876 tests green; `composer test:integration` → 45 tests green, 3 expected
+self-skips (live-provider tests without real credentials); 921 total, exactly matching Phase 30A's
+count. `composer stan` → clean. **`mkdocs build` could not be run** — `mkdocs` isn't installed in
+this environment — stated explicitly rather than assumed clean, per the Visual and Output
+Verification Rule; installing it (`pip install mkdocs-material pymdown-extensions`) or adding a CI
+step are the two options if you want that verified for real.
 
-Full detail: `.claude/PhaseResults/Phase29Result.md` (its "Q4/Q5 revision" subsections).
-`.claude/Changelog.md`, `.claude/docs/Phases.md`, and `.claude/PhaseResults/PhaseDecisions.md`
-(with full change history on the revised Q4/Q5 entries) are all updated.
+**One cleanup note:** a `docker compose up -d mysql` attempt failed on a port conflict and left an
+orphaned, never-started container behind (`gomrok-mysql-1`) — removed it (`docker compose rm -f
+mysql`) once I found the real dev database was already reachable on a different port from `.env`.
 
-Phase 29 is now fully complete with nothing knowingly deferred except what's explicitly called out
-above. Next recommended phase: **Phase 30 — Hardening, docs & first-client go-live**, which now
-also owns setting up the real production supervisor for the daemon this phase built.
+Full detail: `.claude/PhaseResults/Phase30BResult.md`. `.claude/Changelog.md` and
+`.claude/docs/Phases.md` (Phase 30B row, plus a "Scope narrowed by Q1/Q4" note explaining exactly
+what remains open) are both updated.
+
+**What's left before Phase 30 — and the whole 30-phase plan — is truly done:** working through
+`.claude/docs/GoLiveChecklist.md` for real, against a real production host (following
+`DeploymentRunbook.md`) and real Stripe/Mollie/PayPal/Ziraat credentials for Televika — none of
+which exist yet and none of which I can generate. That's a business/infrastructure decision, not
+an engineering one.

@@ -123,11 +123,13 @@ loose in the project root. Layout:
 ├── knowledge/           stable policies (rarely change)
 │   ├── Knowledge.md          durable domain knowledge / gotchas
 │   ├── SecurityRules.md  TenantIsolation.md  RolePermissionModel.md
-│   └── DeploymentRunbook.md  DnsRecords.md  LocalAssets.md  MediaStorage.md  (placeholders)
+│   ├── DeploymentRunbook.md   full step-by-step runbook (Phase 30B, illustrative example)
+│   └── DnsRecords.md  LocalAssets.md  MediaStorage.md  (placeholders)
 ├── docs/               reference docs Claude reads before implementing
 │   ├── Architecture.md  Phases.md  Commands.md  last_ai_answer.md  ClaudeOld.md
 │   ├── ProjectDescription.md  Domain.md  Permissions.md  Ui.md  Recommendations.md
-│   ├── Deployment.md  Server.md   (placeholders — no infra chosen yet)
+│   ├── ApiReference.md  GoLiveChecklist.md  MonitoringChecklist.md   (Phase 30B)
+│   ├── Deployment.md  Server.md   (short pointer / placeholder — no real infra chosen yet)
 │   └── Design/              admin-panel design export (GomrokAdminPanelV4.dc.html + Support.js)
 └── PhaseResults/       Readme.md, Template.md, PhaseNNResult.md (per-phase, append-only),
                         PhaseDecisions.md (every phase decision Q/options/selection — moved
@@ -217,9 +219,14 @@ The complete list of the project's documentation files. Keep this table in sync 
 | commands/\*.md | `.claude/commands/<Command>.md` (+ `phases/`, `workflow/`) | Slash-command definitions: `/Implement /Plan /Refactor /Review /Spec`, their `/workflow:*` multi-agent variants, and `/phases:*` thin pointers to `docs/Phases.md`. **Templates.** |
 | skills/\*.md | `.claude/skills/<Topic>Skill.md` | How-to guides (`BackendSkill`, `DatabaseSkill`, `FrontendSkill`, `GitSkill`, `SecuritySkill`, `TestingSkill`, `DeploymentSkill`) + `SkillTemplate.md`. **Templates.** Flat files, not invocable Claude Code skills (those need `skills/<name>/SKILL.md`). |
 | docs — reference | `.claude/docs/{ProjectDescription,Domain,Permissions,Ui}.md` | Thin reference docs that **point at** `CLAUDE.md` / `Architecture.md` / `.claude/docs/Design/` rather than duplicating them. |
-| docs — placeholders | `.claude/docs/{Deployment,Server}.md`, `.claude/docs/Recommendations.md` | `Deployment`/`Server`: empty until infra is chosen (Phase 30). `Recommendations`: cross-phase rollup of open follow-ups from each `PhaseNNResult.md` → Deferred Work. |
+| docs — placeholders | `.claude/docs/Server.md`, `.claude/docs/Recommendations.md` | `Server`: empty — no real host chosen yet (see `GoLiveChecklist.md` Stage 0). `Recommendations`: cross-phase rollup of open follow-ups from each `PhaseNNResult.md` → Deferred Work. |
+| Deployment.md | `.claude/docs/Deployment.md` | Short status/pointer doc — no real target chosen yet; points at `DeploymentRunbook.md` / `ApiReference.md` / `GoLiveChecklist.md` / `MonitoringChecklist.md` (all populated Phase 30B) plus the Phase 30A background-worker requirement. |
+| ApiReference.md | `.claude/docs/ApiReference.md` | Hand-written Markdown reference (Phase 30B Q2) for every client-facing `/api/v1/*` endpoint — auth, idempotency, error shape, request/response bodies, a worked example. |
+| GoLiveChecklist.md | `.claude/docs/GoLiveChecklist.md` | Staged checklist (Phase 30B) for taking Televika from ready-code to real production transacting: client/provider/callback config, a controlled test-mode transaction, real cutover, first real transaction, post-go-live validation, rollback. Prepared, not executed (Q1/Q4). |
+| MonitoringChecklist.md | `.claude/docs/MonitoringChecklist.md` | Tool-agnostic (Phase 30B Q5) "check this / alert when" checklist: app health, DB health, error_logs, jobs, webhooks, notifications, HTTP error rates, reconciliation, security signals. |
 | knowledge — policies | `.claude/knowledge/{SecurityRules,TenantIsolation,RolePermissionModel}.md` | Stable policy statements that pin the corresponding `CLAUDE.md` sections. |
-| knowledge — placeholders | `.claude/knowledge/{DeploymentRunbook,DnsRecords,LocalAssets,MediaStorage}.md` | Empty until real infrastructure exists — no hosts/records/credentials invented. |
+| DeploymentRunbook.md | `.claude/knowledge/DeploymentRunbook.md` | Full step-by-step deployment runbook (Phase 30B) — an **illustrative single-host Linux example** (nginx/php-fpm/MySQL/systemd), not a firm commitment; includes a portability section for Docker/other targets. |
+| knowledge — placeholders | `.claude/knowledge/{DnsRecords,LocalAssets,MediaStorage}.md` | Empty until real infrastructure exists — no hosts/records/credentials invented. |
 | templates | `.claude/docs/FeatureTemplate.md`, `.claude/knowledge/PolicyTemplate.md`, `.claude/skills/SkillTemplate.md`, `.claude/commands/phases/PhaseTemplate.md` | Copy-me templates for the `[feature].md` / `[policy].md` / `[tech]-skill.md` / `phase-NN-[name].md` placeholders in `struct.md`. |
 | skeleton Readmes | `.claude/{agents,commands,skills,commands/phases}/Readme.md` | Notes on what each folder is for. |
 | database docs | `.claude/docs/database-design.md` (canonical) · `database-diagram.md` (+ `.html`) · `db_explain.md` · root `mkdocs.yml` | The schema: full spec, Mermaid ER diagrams per module, per-table plain-language guide, mkdocs site config. Kebab-case (§3.1 exception). Kept in lock-step (§5). |
@@ -233,7 +240,11 @@ asset export rather than reference documentation; their `Readme.md` files are st
 - Work follows the **30-phase plan in `.claude/docs/Phases.md`**. Keep its status table current.
 - The phase count (**30**) and **Phase 27 = "Admin Module Views and Panels"** are fixed. Adding a
   new phase or materially rescoping an existing one requires explicit user confirmation first.
-  *(CLAUDE.md → Visual and Output Verification Rule)*
+  *(CLAUDE.md → Visual and Output Verification Rule)* **Phase 30 is split into 30A (production
+  hardening) / 30B (docs + Televika go-live)** — user-confirmed 2026-09-18, Phase 30 Q1 in
+  `PhaseDecisions.md`; the phase count stays 30, this is an internal division of Phase 30's own
+  scope. 30A must be fully validated before 30B begins; the real Televika production go-live must
+  not start before 30A is confirmed complete.
 - **Before any code in a phase:** explain what the phase will do, then ask the phase's decision
   questions **one at a time** (§4.2). Do not start a decision-dependent part of the phase until
   its questions are answered. Never re-ask an answered question. *(CLAUDE.md → Interactive Phase
@@ -257,7 +268,10 @@ record of actual work. After a phase is complete, write exactly one
 `.claude/PhaseResults/Readme.md`; the binding points:
 
 - **A phase is not fully completed until its result file is completed.**
-- One result file per phase. Applies automatically to **all** phases.
+- One result file per phase. Applies automatically to **all** phases. **Exception:** Phase 30's
+  30A/30B split gets one result file per sub-phase — `Phase30AResult.md` and `Phase30BResult.md`
+  — since each sub-phase completes and gets its own evidence/summary independently; there is no
+  separate `Phase30Result.md`.
 - Record what *actually* happened — **never document planned work as completed work**, never copy
   the plan text from `.claude/docs/Phases.md`.
 - **Never invent** timestamps, token usage, test results, or implementation details. Unavailable

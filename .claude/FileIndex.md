@@ -23,9 +23,13 @@ A map of the files worth knowing about. Keep in sync when files are added / move
 | `.claude/PhaseResults/PhaseNNResult.md` `+ {Readme,Template}.md` | Per-phase records + convention/template. |
 | `.claude/knowledge/Knowledge.md` | Durable domain knowledge / gotchas. |
 | `.claude/knowledge/{SecurityRules,TenantIsolation,RolePermissionModel}.md` | Policy statements pinning the matching `CLAUDE.md` sections. |
-| `.claude/knowledge/{DeploymentRunbook,DnsRecords,LocalAssets,MediaStorage}.md` | Placeholders — filled when real infra exists. |
+| `.claude/knowledge/DeploymentRunbook.md` | Full step-by-step deployment runbook (Phase 30B) — illustrative single-host Linux example, not a firm commitment. |
+| `.claude/knowledge/{DnsRecords,LocalAssets,MediaStorage}.md` | Placeholders — filled when real infra exists. |
 | `.claude/docs/{ProjectDescription,Domain,Permissions,Ui}.md` | Thin reference docs pointing at `CLAUDE.md` / `Architecture.md` / `.claude/docs/Design/`. |
-| `.claude/docs/{Deployment,Server}.md` | Placeholders — no infra chosen yet (Phase 30). |
+| `.claude/docs/ApiReference.md` | Client-facing `/api/v1/*` reference (Phase 30B). |
+| `.claude/docs/GoLiveChecklist.md` | Staged Televika production go-live checklist (Phase 30B) — prepared, not executed. |
+| `.claude/docs/MonitoringChecklist.md` | Tool-agnostic monitoring/alerting checklist (Phase 30B). |
+| `.claude/docs/{Deployment,Server}.md` | Short pointer / placeholder — no real infra target chosen yet. |
 | `.claude/docs/Recommendations.md` | Cross-phase rollup of open follow-ups. |
 | `.claude/agents/<Role>Agent.md` | 10 subagent definition templates (`BackendAgent`, `ReviewAgent`, …). |
 | `.claude/commands/<Command>.md` (+ `phases/`, `workflow/`) | Slash-command templates: `/Implement /Plan /Refactor /Review /Spec`, `/workflow:*`, `/phases:*`. |

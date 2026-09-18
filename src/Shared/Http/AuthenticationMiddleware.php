@@ -16,7 +16,9 @@ use Psr\Http\Server\RequestHandlerInterface;
  * (`Authorization: Bearer gk_<mode>_<key_id>.<secret>` — Phase 7 Q1). On success
  * it populates {@see ClientContext} and sets the `authClient` / `authClientId` /
  * `authKeyMode` request attributes; on failure it returns the problem response
- * directly (401 for any credential issue, 403 for a disabled client — Q4).
+ * directly (401 for any credential issue, 403 for a disabled client — Q4, 429
+ * with `Retry-After` when the key is locked out from too many recent failed
+ * attempts — Phase 30A Q1).
  *
  * Registered on the group only — public routes never see it.
  */
@@ -78,6 +80,10 @@ final readonly class AuthenticationMiddleware implements MiddlewareInterface
 
         if ($result->failureStatus === 401) {
             $response = $response->withHeader('WWW-Authenticate', 'Bearer realm="gomrok"');
+        }
+
+        if ($result->retryAfterSeconds !== null) {
+            $response = $response->withHeader('Retry-After', (string) $result->retryAfterSeconds);
         }
 
         return $response;

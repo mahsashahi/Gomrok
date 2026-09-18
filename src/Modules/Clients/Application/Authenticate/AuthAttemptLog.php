@@ -13,4 +13,10 @@ use DateTimeImmutable;
 interface AuthAttemptLog
 {
     public function record(AuthAttempt $attempt, DateTimeImmutable $at): void;
+
+    /**
+     * Count of failed attempts for `$keyId` since `$since` — the lockout
+     * check reads this (Phase 30A Q1, mirrors `AdminLoginAttemptRepository::countFailedSince()`).
+     */
+    public function countFailedSince(string $keyId, DateTimeImmutable $since): int;
 }

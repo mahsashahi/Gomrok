@@ -16,6 +16,381 @@ end.** (`.claude/Rule.md` §4.2.)
 
 ---
 
+## Phase 30B — Documentation and Televika go-live
+
+### Q5 — Monitoring/alerting checklist scope
+
+**Question:** Should the monitoring/alerting checklist also assume an illustrative example
+toolchain (like Q3's deployment runbook), or stay tool-agnostic since no observability stack has
+been chosen at all (Phase 29 Q3 deliberately scoped observability to trace-logs-only)?
+
+**Options:**
+
+1. **Tool-agnostic checklist (Recommended)** — list what to watch and why (`error_logs`
+   unresolved count, jobs "alerting" count, webhook/notification dead-letter counts, HTTP error
+   rates, DB connection health) phrased as "check this / alert when X" without assuming any
+   specific monitoring product.
+2. Illustrative example toolchain, like the runbook — pick one concrete example and write the
+   checklist against it, clearly labeled illustrative.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — tool-agnostic checklist, no assumed monitoring product.
+
+**Status:** Decided
+
+---
+
+### Q4 — Standing in for "controlled production transaction tests"
+
+**Question:** Since real go-live is excluded this phase (Q1), what should stand in for
+"controlled production transaction tests" to validate the flow as thoroughly as possible short of
+real money?
+
+**Options:**
+
+1. Full test-mode walkthrough with evidence — create a real Televika client record (client + API
+   key + at least one package/price/provider config, all test-mode), then drive a complete real
+   checkout → payment → webhook → notification flow end-to-end, capturing real evidence at each
+   step. Leaves only "swap test-mode credentials for real ones" as the final go-live step.
+2. **Skip validation now, leave it entirely to the go-live checklist** — don't create any
+   Televika-specific data or run any test-mode walkthrough this phase; just write "run a
+   controlled test-mode transaction, then a real one" as steps in the go-live checklist for
+   whoever executes it later.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 2 — skip validation this phase; the go-live checklist itself
+carries the test-mode-then-real-transaction steps for later execution.
+
+**Status:** Decided
+
+---
+
+### Q3 — Deployment runbook specificity
+
+**Question:** The deployment runbook needs to be concrete to be useful, but the real hosting
+target is still unknown. How specific should it be?
+
+**Options:**
+
+1. **Illustrative single-host example (Recommended)** — write it against one concrete, common
+   example target (a single Linux VPS with systemd, matching what Phase 30A Q3 already floated),
+   clearly labeled as an example to adapt, not a firm commitment.
+2. Fully generic, provider-agnostic — describe each step's intent/inputs/outputs without any
+   concrete commands tied to a specific OS/supervisor/web server.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — illustrative single-host example. User-specified reference
+shape and required content, recorded verbatim:
+
+> Write the deployment runbook using a concrete illustrative single-host Linux deployment
+> example. Use this reference shape: Linux VPS/VM, nginx, php-fpm, MySQL, systemd, Gomrok
+> persistent `bin/Worker.php`.
+>
+> Important: clearly label this as a reference/illustrative deployment example; do not treat it
+> as a permanent architectural commitment; the real production hosting target may still be
+> different; the runbook should be concrete enough to follow step by step.
+>
+> Include practical steps for: preparing the host; required PHP extensions; Composer install;
+> environment configuration; database configuration; running migrations; filesystem permissions;
+> nginx configuration; php-fpm configuration; systemd worker installation; starting/restarting
+> services; health checks; application verification; worker verification; logging; rollback;
+> deployment verification; post-deployment checks.
+>
+> Also include a short portability section explaining what changes if the final production target
+> becomes Docker/container-based or another hosting platform.
+>
+> Do not deploy anything yet. This runbook is documentation only until the user provides the real
+> production hosting target and credentials.
+
+**Status:** Decided
+
+---
+
+### Q2 — API reference format
+
+**Question:** What format should the API reference deliverable take?
+
+**Options:**
+
+1. **Hand-written Markdown (Recommended)** — a Markdown doc under `.claude/docs/` walking through
+   every `/api/v1` endpoint (request/response shapes, auth, idempotency, error codes), written and
+   kept in sync by hand, same style as every other doc in this project. No new tooling.
+2. OpenAPI/Swagger spec — a machine-readable `openapi.yaml`/`json`. Enables auto-generated
+   interactive docs and client SDK generation later, but is a new artifact type this project has
+   never used, with its own accuracy-maintenance discipline and no existing tooling/CI to validate
+   it against the real routes.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — hand-written Markdown, matching this project's existing
+documentation style.
+
+**Status:** Decided
+
+---
+
+### Q1 — Handling the missing production infra/credentials gap
+
+**Question:** No production hosting target and no real payment-provider credentials exist yet.
+How should this phase handle that gap?
+
+**Options:**
+
+1. **Prep everything, stop before real go-live (Recommended)** — do every deliverable that
+   doesn't require real infra/credentials: final docs, runbook, mkdocs build, schema
+   reconciliation, admin screenshots, and a complete written go-live checklist, written precisely
+   enough to execute directly once real infra/credentials exist. Explicitly do not deploy
+   anywhere or touch real payment credentials. The phase's literal exit criterion ("Televika
+   transacting in production") stays open as a final manual step, clearly called out — not
+   silently skipped.
+2. You provide infra + credentials now, assistant drives the full go-live — pause for the user to
+   hand over real hosting access and real production provider credentials for Televika, then
+   actually deploy, configure, and drive a real controlled transaction test.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — prep everything possible without real infra/credentials;
+stop before the actual production deployment/go-live step.
+
+**Status:** Decided
+
+---
+
+## Phase 30A — Production hardening
+
+### Q5 — Production-safety self-check
+
+**Question:** "Verify local/dev-only helpers cannot leak into production" (dev-only routes,
+seeders, debug mode). Should this be enforced automatically or just checked manually?
+
+**Options:**
+
+1. **Automated boot-time guard (Recommended)** — add a startup check in the app bootstrap: if
+   `APP_ENV` indicates production but an unsafe condition is detected (`APP_DEBUG` on, a
+   dev-only seeder/route reachable, a known-weak/default secret value), the app refuses to boot
+   or logs a critical alert immediately. Self-enforcing — a misconfiguration can't silently reach
+   production even if a human forgets to check a list.
+2. Manual checklist only — no enforcement code; just a written pre-deploy checklist item
+   (documented in Phase 30B's runbook) that an operator checks by hand before each deploy.
+   Simpler, no new code path to maintain or get wrong itself, but relies entirely on a human
+   remembering to check it every time.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — automated boot-time guard in the app bootstrap.
+
+**Status:** Decided
+
+---
+
+### Q4 — Security pass method
+
+**Question:** How should the security pass itself (webhook signatures, replay protection,
+price/package manipulation, multi-client isolation, secret storage) actually be done?
+
+**Options:**
+
+1. **Manual review + targeted tests (Recommended)** — walk each listed area's existing code by
+   hand against a checklist, and write new PHPUnit tests that prove the protection holds (e.g. "a
+   manipulated price is rejected," "an unsigned webhook is rejected," "a duplicate webhook
+   processes exactly once," "client A cannot read client B's data"). Matches how every prior
+   phase in this project was tested — no new tooling, real proof via the existing suite.
+2. Manual review + tests, plus automated tooling — everything in Option 1, plus `composer audit`
+   for known dependency CVEs, and a static-analysis security ruleset if one fits cleanly into the
+   existing `phpstan.neon` setup. Catches classes of issues manual review tends to miss, at the
+   cost of possibly introducing new tooling/config to maintain.
+3. Automated tooling only — skip a manual line-by-line review; rely on `composer audit` + static
+   analysis security rules. Fastest, but won't catch business-logic security gaps specific to
+   Gomrok — those need a human reading the actual code against the actual threat model.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — manual checklist-driven review with new targeted PHPUnit
+tests proving each protection holds; no new tooling.
+
+**Status:** Decided
+
+---
+
+### Q3 — Process supervisor for `bin/Worker.php`
+
+**Question:** `bin/Worker.php` (the Phase 29 daemon) needs a real production process supervisor,
+but no deployment target/hosting has been chosen yet. What should this phase assume and
+configure?
+
+**Options:**
+
+1. Single Linux host with systemd — assume the most common minimal-ops target for a project this
+   size: a bare/VPS Linux host. Write a real systemd unit file (`Restart=always`, journald
+   logging) for `bin/Worker.php`, plus the PHP built-in server or php-fpm behind a reverse proxy
+   for the app itself. Concrete and testable now; if the real target later turns out to be
+   different, the unit file is small to replace.
+2. Docker/container-based — write a Dockerfile `CMD` + container restart policy / healthcheck for
+   the worker process instead of a systemd unit — appropriate if Gomrok will run in
+   Docker/Compose/a container platform in production. This repo already has a `docker-compose.yml`
+   for local dev, so there's a natural starting point, but it currently only defines PHP+MySQL for
+   development, not a production image.
+3. **Defer the concrete file, document generically (Recommended by the assistant was systemd;
+   user selected this option instead)** — don't commit to a specific supervisor mechanism yet;
+   write the requirement and the interface contract ("needs `Restart=always`-equivalent behavior")
+   in `Deployment.md` without a systemd unit or Dockerfile, since the actual hosting choice is a
+   business decision not yet made. Lowest commitment, but leaves 30A's own "queue worker/
+   supervisor configuration" item essentially undone as a concrete artifact.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 3 — defer the concrete supervisor file; document the
+requirement generically in `Deployment.md` (needs `Restart=always`-equivalent behavior) without
+committing to systemd or Docker, since the real production hosting target is not yet decided.
+
+**Status:** Decided
+
+---
+
+### Q2 — Load/soak testing method
+
+**Question:** No load-testing tooling exists in this repo yet. How should load/soak testing of
+the payment and webhook paths, and idempotency-under-concurrency verification, actually be done?
+
+**Options:**
+
+1. **Lightweight PHP scripts (Recommended)** — write dev-only PHP scripts that fire concurrent
+   requests (via `curl_multi` or parallel child processes) at the local payment/webhook/
+   idempotency endpoints against the dev DB, then assert on the results (no duplicate payments,
+   no lost updates, correct final state). No new runtime dependency — matches this project's
+   consistent preference (Phase 29 Q1 rejected Redis for the same reason) and reuses the existing
+   PHP/PHPUnit toolchain.
+2. Real load-testing tool (k6 / ab / siege) — add a real load-generation tool as a new dev-only
+   dependency and write proper load/soak test scripts with it. Produces standard
+   throughput/latency reports and is the industry-normal choice, but introduces a new tool
+   (Node-based for k6, or a system package for ab/siege) this project has avoided elsewhere.
+3. Design review + documentation only, no load generation — review the hot paths for lock
+   contention and race conditions by reading the code and existing tests, and document expected
+   behavior and any risk found. Fastest, but doesn't actually prove anything under real
+   concurrent load — weaker evidence for a phase whose whole point is verification.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — lightweight PHP concurrent-request scripts, no new
+dependency.
+
+**Status:** Decided
+
+---
+
+### Q1 — Client API rate limiting / failed-auth lockout
+
+**Question:** Client API auth currently logs every attempt (`client_auth_attempts`) but never
+enforces a lockout, unlike admin login, which already has one (5 failed attempts / 15 min, per
+email). What should client API rate limiting / failed-auth lockout key on?
+
+**Options:**
+
+1. **Lock by `key_id` (Recommended)** — mirrors the admin pattern exactly: too many failed
+   secret-checks against the same `key_id` within a window rejects outright, even with the
+   correct secret, until the window clears. Protects a specific credential under attack (e.g. a
+   leaked `key_id` being brute-forced) without affecting other clients' traffic.
+2. Lock by source IP — too many failed attempts from the same IP (regardless of which `key_id`)
+   get throttled. Protects against a single attacker scanning/guessing many different `key_id`s
+   from one source, but is less useful behind shared IPs (NAT, corporate proxies) and does
+   nothing if the attacker rotates IPs.
+3. Both `key_id` and IP — track both dimensions; either threshold tripping locks that dimension
+   out. Most robust coverage, but doubles the bookkeeping (two counters, two windows) and is more
+   to test and reason about for a first pass.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 1 — lock by `key_id`, mirroring the admin login pattern.
+
+**Status:** Decided
+
+---
+
+## Phase 30 — Hardening, docs & first-client go-live
+
+### Q1 — Phase scope cut
+
+**Question:** Phase 30 bundles a security pass, load/soak testing, final docs (schema
+reconciliation, mkdocs, API reference, operations runbook), and real Televika go-live — plus a
+carry-over from Phase 29's Q5 revision (choosing/configuring the production process supervisor
+for `bin/Worker.php`). That is a lot to do in one pass. How should the scope be handled?
+
+**Options:**
+
+1. **Full breadth, one pass (Recommended)** — do the whole listed scope in this phase: security
+   pass + load/soak testing + docs + supervisor config + Televika onboarding through a staged
+   go-live checklist. Matches the phase as written in `Phases.md`; no rescoping needed.
+2. Split into sub-phases — break this into e.g. 30a (security + load testing + supervisor
+   config) and 30b (docs + Televika onboarding + go-live). Lower risk of one giant phase running
+   2-3x its estimate (like Phase 27 did), but means formally rescoping Phase 30 in `Phases.md`,
+   which needs its own explicit confirmation.
+3. Narrow this pass to security + docs only — do the security pass, load testing, and doc
+   reconciliation now; defer Televika's actual go-live (and the process-supervisor setup, which
+   only matters once something is actually deployed) to a later, explicitly-scheduled effort.
+   Lowest risk per sitting, but leaves the phase's own stated exit criteria ("Televika
+   transacting successfully in production") unmet until that later effort happens.
+
+**Recommended:** Option 1.
+
+**Selected (2026-09-18):** Option 2 — split into two explicit sub-phases, kept under the overall
+Phase 30 umbrella (not a new top-level phase; the 30-phase count stays fixed).
+
+**Decision Notes (user's instructions, recorded verbatim):**
+
+> Split Phase 30 into two explicit sub-phases while keeping both under Phase 30.
+>
+> IMPORTANT DOCUMENTATION RULE: Before starting any implementation work, first update all
+> relevant project documentation to reflect the Phase 30 split. At minimum, review and update
+> where applicable: `Phases.md`, `CLAUDE.md`, `Architecture.md`, `PhaseDecisions.md`, any phase
+> roadmap / phase summary documents, any other documentation that references Phase 30 scope,
+> sequencing, exit criteria, deployment, go-live, or deferred work. Add the Phase 30A / Phase 30B
+> structure consistently everywhere it is relevant.
+>
+> After updating the documentation: show me exactly what you changed, show me the revised Phase
+> 30A and Phase 30B scope, show me any changed exit criteria or sequencing rules, do NOT start
+> implementation yet, wait for my confirmation before beginning Phase 30A.
+>
+> **Phase 30A — Production hardening:** security hardening; rate limiting / failed-auth lockout;
+> secret/config review; production-safe environment checks; queue worker/supervisor
+> configuration; load testing; soak testing; reconciliation/load failure testing; deployment/
+> runtime readiness; verify local/dev-only helpers cannot leak into production; complete any
+> remaining production-blocking technical gaps.
+>
+> **Phase 30B — Documentation and Televika go-live:** final operational documentation;
+> deployment/runbook; rollback procedures; monitoring/alerting checklist; Televika client
+> configuration; provider account configuration; callback/notification endpoint configuration;
+> production API credentials setup; staged go-live checklist; controlled production transaction
+> tests; verify Televika can transact successfully end-to-end; final post-go-live validation.
+>
+> Rules: update `Phases.md` to document Phase 30A and Phase 30B clearly; update `CLAUDE.md` if
+> Phase 30 sequencing/scope rules are referenced there; update any architecture/deferred-work
+> documentation that would otherwise become inconsistent; keep Phase 30A and Phase 30B under the
+> overall Phase 30 umbrella; do not mark Phase 30 complete until both sub-phases are complete;
+> Phase 30A must be fully validated before Phase 30B begins; the real Televika production go-live
+> must not begin until Phase 30A is confirmed complete; keep the original overall Phase 30 exit
+> criterion — Televika must successfully transact in production before Phase 30 is considered
+> complete.
+
+**Documentation updated in this same change** (per the rule above, before any implementation):
+`.claude/docs/Phases.md` (status table split into 30A/30B rows; fixed-phase-count note updated;
+the single Phase 30 section replaced with an umbrella intro + `### Phase 30A` / `### Phase 30B`
+subsections carrying the scope listed above), `.claude/Rule.md` (§4 phase-workflow note on the
+split; §4.1 result-file naming exception for `Phase30AResult.md`/`Phase30BResult.md`; the
+`Deployment`/`Server` placeholder row pointer), `.claude/FileIndex.md` (same placeholder pointer
+update), `.claude/docs/Deployment.md` (points to 30A for infra choice, 30B for the runbook),
+`.claude/knowledge/DeploymentRunbook.md` (points to 30B), `.claude/skills/DeploymentSkill.md`
+(environment handling = 30A, release-step runbook = 30B), `.claude/PhaseResults/Readme.md`
+(naming-tree example and the "one result file per phase" rule updated with the 30A/30B
+exception). `CLAUDE.md` and `.claude/docs/Architecture.md` were checked and contain no Phase-30
+references needing an update — nothing changed in either.
+
+**Status:** Decided
+
+---
+
 ## Phase 29 — Background jobs, reconciliation & observability
 
 ### Q5 — Worker execution model

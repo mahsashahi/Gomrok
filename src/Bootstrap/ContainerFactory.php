@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace Gomrok\Bootstrap;
 
 use DI\ContainerBuilder;
+use Gomrok\Config\Settings;
 use Psr\Container\ContainerInterface;
 
 /**
  * Builds the PHP-DI container from `src/Config/container.php` plus each module's
  * `Infrastructure/definitions.php`. Shared by the HTTP entrypoint
- * ({@see AppFactory}) and CLI runners so they wire dependencies identically.
+ * ({@see AppFactory}) and CLI runners so they wire dependencies identically —
+ * which also makes this the one choke point where {@see ProductionSafetyGuard}
+ * runs for every entrypoint (Phase 30A Q5).
  */
 final class ContainerFactory
 {
@@ -50,6 +53,12 @@ final class ContainerFactory
             $builder->addDefinitions($moduleDefinitions);
         }
 
-        return $builder->build();
+        $container = $builder->build();
+
+        $settings = $container->get(Settings::class);
+        \assert($settings instanceof Settings);
+        ProductionSafetyGuard::check($settings);
+
+        return $container;
     }
 }

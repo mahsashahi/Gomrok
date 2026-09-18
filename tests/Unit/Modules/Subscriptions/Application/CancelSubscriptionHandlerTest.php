@@ -118,6 +118,18 @@ final class CancelSubscriptionHandlerTest extends TestCase
         self::assertSame('subscription.not_found', $result->error()->code);
     }
 
+    #[Test]
+    public function aRealSubscriptionOwnedByAnotherClientIsNotFound(): void
+    {
+        $subscriptionId = $this->seedSubscription(withSubscriptionReference: true);
+
+        $result = $this->handler->handle(new CancelSubscriptionCommand(self::CLIENT + 1, $subscriptionId));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('subscription.not_found', $result->error()->code);
+        self::assertNull($this->adapter->lastCancelSubscriptionReference);
+    }
+
     private function buildHandler(string $providerTypeCode): CancelSubscriptionHandler
     {
         $accounts = (new StubProviderAccountDirectory())->add(self::PROVIDER_ACCOUNT, self::CLIENT, 'account-main', $providerTypeCode);

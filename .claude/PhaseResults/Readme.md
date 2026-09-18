@@ -21,7 +21,8 @@ to it.
 ├── Phase02Result.md
 ├── Phase03Result.md
 ...
-└── Phase30Result.md
+├── Phase30AResult.md    Phase 30's "A" sub-phase (production hardening) — see Rule
+└── Phase30BResult.md    Phase 30's "B" sub-phase (docs & Televika go-live)
 ```
 
 `PhaseNNResult.md` — PascalCase per `.claude/Rule.md`, `NN` zero-padded (`Phase01Result.md`, not
@@ -48,7 +49,11 @@ explicitly when there are none — never leave them blank.
    was actually implemented.
 2. Create the result file only **after** the phase is complete — and **a phase is not fully
    completed until its result file is completed**.
-3. Exactly **one** result file per phase.
+3. Exactly **one** result file per phase. **Exception: Phase 30** is split into 30A (production
+   hardening) and 30B (docs & Televika go-live) — user-confirmed 2026-09-18, see Phase 30 Q1 in
+   `PhaseDecisions.md`. Each sub-phase gets its own result file (`Phase30AResult.md`,
+   `Phase30BResult.md`) since each completes and is evidenced independently; there is no separate
+   `Phase30Result.md`. 30A must be complete before 30B begins.
 4. **Never document planned work as completed work.** Describe what actually happened; do not
    copy the plan text from `.claude/docs/Phases.md`.
 5. **Never invent** timestamps, token usage, test results, or implementation details. If exact

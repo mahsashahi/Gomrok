@@ -195,6 +195,17 @@ final class CreateSubscriptionHandlerTest extends TestCase
         self::assertSame('checkout_attempt.not_found', $result->error()->code);
     }
 
+    #[Test]
+    public function aRealAttemptOwnedByAnotherClientIsNotFound(): void
+    {
+        $attemptId = $this->seedAttempt();
+
+        $result = $this->handler->handle(new CreateSubscriptionCommand(self::CLIENT + 1, $attemptId, 501));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('checkout_attempt.not_found', $result->error()->code);
+    }
+
     private function seedAttempt(): int
     {
         $attempt = CheckoutAttempt::start(self::CLIENT, 'user-1', 'order-1', self::PACKAGE, 'DE', 'EUR', PurchaseType::Subscription, null, SubscriptionInterval::Monthly, $this->now);

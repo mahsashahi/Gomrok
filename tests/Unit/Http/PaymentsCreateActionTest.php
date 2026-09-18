@@ -74,6 +74,7 @@ final class PaymentsCreateActionTest extends TestCase
     private const PROVIDER_ACCOUNT = 1;
 
     private StubPackageDirectory $packages;
+    private InMemoryPricingDecisionSnapshotRepository $pricingSnapshots;
     private PaymentsCreateAction $action;
 
     protected function setUp(): void
@@ -101,6 +102,7 @@ final class PaymentsCreateActionTest extends TestCase
             $clock,
         );
         $pricingSnapshots = new InMemoryPricingDecisionSnapshotRepository();
+        $this->pricingSnapshots = $pricingSnapshots;
 
         $vouchers = new InMemoryVoucherRepository();
         $redemptions = new InMemoryVoucherRedemptionRepository();
@@ -177,6 +179,39 @@ final class PaymentsCreateActionTest extends TestCase
     }
 
     #[Test]
+    public function aClientSuppliedPriceFieldIsIgnoredAndTheServerResolvedPriceIsUsed(): void
+    {
+        // Phase 30A Q4 security pass: CLAUDE.md — "Gomrok must calculate and
+        // validate the final price itself" / "Client-supplied prices must not
+        // be trusted as the source of truth." This action never even reads
+        // an amount/price field from the request body (see PaymentsCreateAction
+        // — only attempt_reference/package/country/currency/etc. are parsed);
+        // this test proves a malicious payload smuggling one in has no effect.
+        $response = ($this->action)(
+            (new ServerRequestFactory())->createServerRequest('POST', '/api/v1/payments')
+                ->withParsedBody([
+                    'attempt_reference' => 'order-manipulated',
+                    'package' => 'pro',
+                    'country' => 'DE',
+                    'currency' => 'EUR',
+                    // Attacker-supplied fields attempting to override the price.
+                    'amount_minor' => 1,
+                    'price' => 1,
+                    'final_price' => 1,
+                    'amount' => 1,
+                ]),
+            (new ResponseFactory())->createResponse(),
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        $body = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        /** @var array{checkout_attempt_id: int} $body */
+        $snapshot = $this->pricingSnapshots->findByCheckoutAttemptId($body['checkout_attempt_id']);
+        self::assertNotNull($snapshot);
+        self::assertSame(2900, $snapshot->amountMinor, 'the server-resolved default package price, unaffected by the injected fields');
+    }
+
+    #[Test]
     public function missingFieldsAreAValidationError(): void
     {
         $response = ($this->action)(
@@ -189,6 +224,26 @@ final class PaymentsCreateActionTest extends TestCase
         $body = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
         /** @var array{code: string} $body */
         self::assertSame('payments.missing_fields', $body['code']);
+    }
+
+    #[Test]
+    public function aPackageBelongingToAnotherClientIsNotFoundEvenByNumericId(): void
+    {
+        // Phase 30A Q4 security pass — multi-client isolation. StubPackageDirectory::findById()
+        // (like the real PdoPackageDirectory) resolves by numeric id alone, not scoped to a
+        // client — PaymentsCreateAction itself must enforce ownership, which this proves.
+        $this->packages->add(99, self::CLIENT + 1, 'other-clients-package');
+
+        $response = ($this->action)(
+            (new ServerRequestFactory())->createServerRequest('POST', '/api/v1/payments')
+                ->withParsedBody(['attempt_reference' => 'order-3', 'package' => '99', 'country' => 'DE', 'currency' => 'EUR']),
+            (new ResponseFactory())->createResponse(),
+        );
+
+        self::assertSame(404, $response->getStatusCode());
+        $body = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        /** @var array{code: string} $body */
+        self::assertSame('package.not_found', $body['code']);
     }
 
     #[Test]

@@ -49,7 +49,17 @@ final readonly class PdoIdempotencyStore implements IdempotencyStore
             });
         } catch (PDOException $e) {
             // Lost the insert race — another request claimed the key first.
-            if ($this->isUniqueViolation($e)) {
+            // Under real concurrent load (Phase 30A Q2's load-test script
+            // found this, not a hypothetical) two simultaneous INSERTs
+            // against the same unique index don't only fail cleanly with a
+            // duplicate-key error (1062, the case this originally handled):
+            // InnoDB's gap-locking during a unique-index insert can also
+            // deadlock (1213) or lock-wait-timeout (1205) one of the two
+            // transactions. Either way the *other* transaction won and
+            // already committed its row, and `TransactionRunner` has
+            // already rolled this one back — so the fix is the same as the
+            // 1062 case: re-read and report the winner.
+            if ($this->isLostInsertRace($e)) {
                 return $this->readRecord($clientId, $key)
                     ?? new IdempotencyRecord(IdempotencyStatus::Processing, $requestFingerprint, null, null, null);
             }
@@ -247,8 +257,18 @@ final readonly class PdoIdempotencyStore implements IdempotencyStore
         );
     }
 
-    private function isUniqueViolation(PDOException $e): bool
+    /**
+     * True for any MySQL error that means "this transaction lost a race for
+     * the same unique key to another concurrent one" (Phase 30A Q2 — found
+     * under real concurrent load, not by inspection): 1062 duplicate key,
+     * 1213 deadlock, 1205 lock wait timeout. All three leave the *other*
+     * transaction's row as the current truth; `TransactionRunner` has
+     * already rolled this one back by the time this is checked.
+     */
+    private function isLostInsertRace(PDOException $e): bool
     {
-        return $e->errorInfo !== null && ($e->errorInfo[1] ?? null) === 1062;
+        $code = $e->errorInfo[1] ?? null;
+
+        return \in_array($code, [1062, 1213, 1205], true);
     }
 }

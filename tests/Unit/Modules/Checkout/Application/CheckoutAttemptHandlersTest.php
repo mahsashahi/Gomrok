@@ -146,6 +146,30 @@ final class CheckoutAttemptHandlersTest extends TestCase
     }
 
     #[Test]
+    public function startingAnAttemptForAnotherClientsPackageIsNotFound(): void
+    {
+        // Package 42 is scoped to self::CLIENT only; self::CLIENT + 1 is a
+        // real, valid, active client of its own (not merely a nonexistent
+        // id) — a different client must still not be able to start a
+        // checkout attempt against another client's package.
+        $handler = new CreateCheckoutAttemptHandler(
+            $this->attempts,
+            new StubClientDirectory(self::CLIENT + 1),
+            (new StubPackageDirectory())->add(self::PACKAGE, self::CLIENT, 'pro'),
+            new InMemoryReferenceCatalog(),
+            $this->audit,
+            new SynchronousTransactions(),
+            $this->clock,
+        );
+        $command = new CreateCheckoutAttemptCommand(self::CLIENT + 1, 'order-x', self::PACKAGE, 'DE', 'EUR', purchaseType: 'one_time_payment');
+
+        $result = $handler->handle($command);
+
+        self::assertTrue($result->isErr());
+        self::assertSame('package.not_found', $result->error()->code);
+    }
+
+    #[Test]
     public function startingTwiceWithTheSameAttemptReferenceIsIdempotent(): void
     {
         $handler = $this->createHandler();
@@ -263,6 +287,31 @@ final class CheckoutAttemptHandlersTest extends TestCase
         self::assertSame(CheckoutAttemptStatus::Canceled, $this->attempts->findById($attemptId)?->status());
         self::assertSame('checkout_attempt.terminal', $handler->handle($attemptId, self::CLIENT, 'pricing_resolved')->error()->code);
         self::assertSame('checkout_attempt.not_found', $handler->handle(999_999, self::CLIENT, 'canceled')->error()->code);
+    }
+
+    #[Test]
+    public function aRealAttemptOwnedByAnotherClientIsNotFoundForEveryHandlerInTheFlow(): void
+    {
+        $attemptId = $this->start();
+        $another = self::CLIENT + 1;
+
+        self::assertSame(
+            'checkout_attempt.not_found',
+            $this->pricingHandler()->handle(new ResolveCheckoutPricingCommand($attemptId, $another))->error()->code,
+        );
+        self::assertSame(
+            'checkout_attempt.not_found',
+            $this->voucherHandler()->handle(new ReserveCheckoutVoucherCommand($attemptId, $another, 'WELCOME10'))->error()->code,
+        );
+        self::assertSame(
+            'checkout_attempt.not_found',
+            $this->providerHandler()->handle(new SelectCheckoutProviderCommand($attemptId, $another, 'test'))->error()->code,
+        );
+        self::assertSame(
+            'checkout_attempt.not_found',
+            $this->statusHandler()->handle($attemptId, $another, 'canceled')->error()->code,
+        );
+        self::assertSame(CheckoutAttemptStatus::Started, $this->attempts->findById($attemptId)?->status(), 'none of the cross-client calls above may have advanced the real attempt');
     }
 
     private function start(): int

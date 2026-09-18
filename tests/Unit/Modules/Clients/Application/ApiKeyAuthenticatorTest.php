@@ -177,6 +177,91 @@ final class ApiKeyAuthenticatorTest extends TestCase
         self::assertSame(7, $this->attempts->last()->clientId);
     }
 
+    #[Test]
+    public function locksOutAKeyIdAfterFiveFailedAttemptsWithinTheWindow(): void
+    {
+        $this->seedActiveClientWithKey();
+        $wrongToken = 'Bearer gk_live_0123456789abcdef.wrongsecretwrongsecret';
+
+        for ($i = 0; $i < 5; ++$i) {
+            $result = $this->authenticator->authenticate($wrongToken, $this->meta());
+            self::assertFalse($result->ok);
+            self::assertSame(AuthFailureReason::InvalidSecret, $this->attempts->lastReason());
+        }
+
+        // 6th attempt, even with the CORRECT secret, is locked out.
+        $result = $this->authenticator->authenticate('Bearer ' . self::TOKEN, $this->meta());
+
+        self::assertFalse($result->ok);
+        self::assertSame(429, $result->failureStatus);
+        self::assertSame('rate_limited', $result->failureCode);
+        self::assertSame(900, $result->retryAfterSeconds);
+        self::assertSame(AuthFailureReason::TooManyAttempts, $this->attempts->lastReason());
+        self::assertSame(self::KEY_ID, $this->attempts->last()->keyId);
+    }
+
+    #[Test]
+    public function lockoutClearsOnceTheWindowPasses(): void
+    {
+        $this->seedActiveClientWithKey();
+        $wrongToken = 'Bearer gk_live_0123456789abcdef.wrongsecretwrongsecret';
+
+        for ($i = 0; $i < 5; ++$i) {
+            $this->authenticator->authenticate($wrongToken, $this->meta());
+        }
+        self::assertSame(429, $this->authenticator->authenticate('Bearer ' . self::TOKEN, $this->meta())->failureStatus);
+
+        $this->clock->advanceSeconds(16 * 60); // past the 15-minute window
+
+        $result = $this->authenticator->authenticate('Bearer ' . self::TOKEN, $this->meta());
+
+        self::assertTrue($result->ok, 'a correct credential authenticates again once the window has passed');
+    }
+
+    #[Test]
+    public function lockoutAppliesPerKeyIdNotGlobally(): void
+    {
+        $this->seedActiveClientWithKey();
+        $this->clients->add(new ClientSnapshot(8, 'other-client', 'Other Client', ClientStatus::Active, 'EUR', 'DE', 'UTC'));
+        $otherKeyId = 'fedcba9876543210';
+        $otherToken = 'gk_live_' . $otherKeyId . '.othersecretothersecret';
+        $this->keys->save(ClientApiKey::issue(8, $otherKeyId, hash('sha256', 'othersecretothersecret'), ApiKeyPrefix::Live, 't456', null, $this->clock->now()));
+
+        $wrongToken = 'Bearer gk_live_0123456789abcdef.wrongsecretwrongsecret';
+        for ($i = 0; $i < 5; ++$i) {
+            $this->authenticator->authenticate($wrongToken, $this->meta());
+        }
+        self::assertSame(429, $this->authenticator->authenticate('Bearer ' . self::TOKEN, $this->meta())->failureStatus);
+
+        $result = $this->authenticator->authenticate('Bearer ' . $otherToken, $this->meta());
+
+        self::assertTrue($result->ok, 'a different key_id is unaffected by another key_id\'s lockout');
+    }
+
+    #[Test]
+    public function beingHitWhileLockedOutKeepsTheLockoutFromExpiring(): void
+    {
+        $this->seedActiveClientWithKey();
+        $wrongToken = 'Bearer gk_live_0123456789abcdef.wrongsecretwrongsecret';
+
+        for ($i = 0; $i < 5; ++$i) {
+            $this->authenticator->authenticate($wrongToken, $this->meta());
+        }
+
+        // Attacker keeps hitting the locked-out key_id every minute, each
+        // attempt itself recorded as a failure — same self-perpetuating
+        // behavior AuthenticateAdminHandler already relies on.
+        for ($i = 0; $i < 10; ++$i) {
+            $this->clock->advanceSeconds(60);
+            $this->authenticator->authenticate('Bearer ' . self::TOKEN, $this->meta());
+        }
+
+        $result = $this->authenticator->authenticate('Bearer ' . self::TOKEN, $this->meta());
+
+        self::assertFalse($result->ok, 'continuing to hit the endpoint keeps refreshing the lockout window');
+        self::assertSame(429, $result->failureStatus);
+    }
+
     private function seedActiveClientWithKey(ApiKeyPrefix $prefix = ApiKeyPrefix::Live): ClientApiKey
     {
         $this->clients->add(new ClientSnapshot(7, 'televika', 'Televika', ClientStatus::Active, 'EUR', 'DE', 'UTC'));

@@ -37,4 +37,18 @@ final readonly class PdoAuthAttemptLog implements AuthAttemptLog
             'created_at' => $at->format('Y-m-d H:i:s'),
         ]);
     }
+
+    public function countFailedSince(string $keyId, DateTimeImmutable $since): int
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM client_auth_attempts WHERE key_id = :key_id AND outcome = :outcome AND created_at >= :since',
+        );
+        $statement->execute([
+            'key_id' => $keyId,
+            'outcome' => AuthAttempt::OUTCOME_FAILURE,
+            'since' => $since->format('Y-m-d H:i:s'),
+        ]);
+
+        return (int) $statement->fetchColumn();
+    }
 }

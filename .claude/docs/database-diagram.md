@@ -1059,6 +1059,54 @@ a `subscription_payment_links` row tying it to their subscription, a `subscripti
 touching `checkout_attempts` at all, since no new checkout ever happened. Full detail:
 `.claude/docs/database-design.md` → "Subscriptions (Phase 26)".
 
+## Admin panel — roles & sessions (Phase 27)
+
+**Backfilled 2026-09-18 (Phase 30B)** — real migrations existed since Phase 27; this ER diagram
+did not (the module map above already named these three tables, but no dedicated diagram/table
+section existed until now). Written from the live schema.
+
+```mermaid
+erDiagram
+    admin_users {
+        int id PK
+        varchar name
+        varchar email UK
+        varchar password_hash "secure hash, never plaintext"
+        enum role "admin | support_agent"
+        enum status "active | disabled | locked"
+        datetime created_at
+        datetime updated_at
+    }
+    admin_sessions {
+        int id PK
+        int admin_user_id FK "-> admin_users.id (CASCADE)"
+        char token_hash UK "session token, stored hashed"
+        varchar ip
+        varchar user_agent
+        datetime expires_at
+        datetime revoked_at
+        datetime created_at
+        datetime last_used_at
+    }
+    admin_login_attempts {
+        int id PK
+        varchar email "attempted login email, even if unmatched"
+        int admin_user_id FK "-> admin_users.id (SET NULL)"
+        varchar ip
+        tinyint succeeded
+        datetime created_at
+    }
+
+    admin_users ||--o{ admin_sessions : "sessions"
+    admin_users ||--o{ admin_login_attempts : "attempts"
+```
+
+Two fixed roles only (CLAUDE.md's Admin Panel Role-Based Permission Requirement) — enforced via
+the `role` enum, not a separate roles/permissions table (that table design was deliberately never
+crossed in Phase 27). `admin_login_attempts` backs a 5-attempts/15-minute lockout
+(`AuthenticateAdminHandler`) — the exact pattern Phase 30A Q1's client-API-key lockout mirrors.
+Full detail: `.claude/docs/database-design.md` → "Admin panel — roles & sessions (Phase 27)".
+
 ## Client notifications (Phase 28)
 
 ```mermaid

@@ -47,8 +47,17 @@ Filled in as phases run (see *How each phase runs* → step 6). Blank fields are
 | 27 | **Admin Module Views and Panels** | ☑ | 2026-09-14 15:00 | 2026-09-16 00:40 | 12–20h | N/A (spans multiple sessions) | N/A |
 | 28 | Client callbacks / outbound notifications | ☑ | 2026-09-17 16:00 | 2026-09-17 17:01 | 4–6h | ~1h 01m | N/A |
 | 29 | Background jobs, reconciliation & observability | ☑ | 2026-09-17 17:34 | 2026-09-18 00:08 | 6–9h | 6h34m (includes a Q4/Q5 revision reopening the phase after initial completion) | N/A |
-| 30 | Hardening, docs & first-client go-live | ☐ | — | — | 6–10h | — | — |
+| 30A | Production hardening | ☑ | 2026-09-18 13:05 | 2026-09-18 14:03 | 3–5h | 58m | N/A |
+| 30B | Documentation and Televika go-live | ☑¹ | 2026-09-18 14:21 | 2026-09-18 22:16 | 3–5h | N/A² | N/A |
 | | **Total** | | | | **~130–210h** | **—** | **—** |
+
+¹ Done **within 30B's own scope as narrowed by Q1/Q4** (documentation + prep only — see the
+Phase 30B section's "Scope narrowed by Q1/Q4" note below). Phase 30 overall is **not** complete —
+the real Televika production go-live is still open.
+
+² End Datetime is real (captured via `date`), but this phase's work spanned a context-compaction
+gap of unknown real-world length mid-session; the raw End − Start difference would overstate
+hands-on time (this column's own definition, above), so it is left `N/A` rather than guessed.
 
 ---
 
@@ -58,6 +67,15 @@ This is the **30-phase plan** referenced by `CLAUDE.md`. It was derived from `CL
 The phase count and the meaning of **Phase 27 — Admin Module Views and Panels** are fixed by
 `CLAUDE.md`'s *Visual and Output Verification Rule*. Adding a brand-new phase, or materially
 changing an existing phase's scope, requires explicit confirmation from the user first.
+
+**Phase 30 is split into two sub-phases, 30A and 30B** (user-confirmed 2026-09-18, recorded as
+Phase 30 Q1 in `.claude/PhaseResults/PhaseDecisions.md`) — the phase count itself stays fixed at
+30; this is an internal division of Phase 30's own scope, not a new phase. Both sub-phases stay
+under the overall Phase 30 umbrella and its original exit criterion (*"Televika transacting
+successfully in production behind a documented go-live checklist"*); Phase 30 as a whole is not
+considered complete until both 30A and 30B are. **30A must be fully validated before 30B begins**,
+and the real Televika production go-live must not start until 30A is confirmed complete. See
+*Phase 30A* / *Phase 30B* below for the split scope.
 
 ## How each phase runs
 
@@ -1081,17 +1099,68 @@ captured evidence.
 
 **Goal:** production-ready, documented, with Televika (the first client) onboarded.
 
+**Split into two sub-phases** (user-confirmed 2026-09-18 — see Phase 30 Q1 in
+`.claude/PhaseResults/PhaseDecisions.md`): **30A — Production hardening** must be fully validated
+before **30B — Documentation and Televika go-live** begins; the real Televika production go-live
+must not start until 30A is confirmed complete. Phase 30 overall is not complete until both are.
+
+**DB (both sub-phases):** none new (final reconciliation of docs vs schema).
+
+**Exit (Phase 30 overall, unchanged):** full test suite green; screenshots of every admin screen;
+Televika transacting successfully in production behind a documented go-live checklist.
+
+### Phase 30A — Production hardening
+
+**Goal:** every production-blocking technical gap closed and verified before any real client
+onboarding begins.
+
 **Scope:**
-- Security pass: webhook signatures, replay protection, price / package manipulation attempts,
-  multi-client isolation, secret storage, idempotency under concurrency. Load / soak the payment
-  and webhook paths.
-- Final docs: `database-design.md` / `database-diagram.md` (+ `.html`) / `db_explain.md` in
-  sync; `mkdocs` build clean; API reference; an operations runbook.
-- First-client onboarding: Televika client + provider accounts + packages + pricing configured,
-  integration tested end to end in test mode, then a staged go-live checklist with rollback
-  steps (disable the client, revoke keys) if anything misbehaves.
+- Security hardening: webhook signatures, replay protection, price/package manipulation attempts,
+  multi-client isolation, secret storage, idempotency under concurrency.
+- Rate limiting / failed-auth lockout.
+- Secret/config review.
+- Production-safe environment checks.
+- Queue worker/supervisor configuration (the process supervisor for `bin/Worker.php` —
+  systemd/supervisord/equivalent — carried over from Phase 29's Q5 revision, which explicitly
+  deferred this here).
+- Load testing and soak testing of the payment and webhook paths.
+- Reconciliation/load failure testing.
+- Deployment/runtime readiness.
+- Verifying local/dev-only helpers (seeders, dev-only routes or scripts, debug tooling) cannot
+  leak into a production environment.
+- Any other remaining production-blocking technical gap found during this pass.
 
-**DB:** none new (final reconciliation of docs vs schema).
+**Exit (30A):** the technical/security/load surface is production-ready and verified with
+captured evidence; 30B may begin.
 
-**Exit:** full test suite green; screenshots of every admin screen; Televika transacting
-successfully in production behind a documented go-live checklist.
+### Phase 30B — Documentation and Televika go-live
+
+**Goal:** Televika fully onboarded and transacting successfully in production, behind complete
+operational documentation.
+
+**Scope:**
+- Final operational documentation: deployment/runbook, rollback procedures, monitoring/alerting
+  checklist.
+- Final schema docs reconciliation: `database-design.md` / `database-diagram.md` (+ `.html`) /
+  `db_explain.md` in sync; `mkdocs` build clean; API reference.
+- Televika client configuration: provider accounts, callback/notification endpoints, production
+  API credentials.
+- Staged go-live checklist with rollback steps (disable the client, revoke keys) if anything
+  misbehaves.
+- Controlled production transaction tests; verify Televika can transact successfully end to end.
+- Final post-go-live validation.
+
+**Exit (30B, = Phase 30's overall exit):** full test suite green; screenshots of every admin
+screen; Televika transacting successfully in production behind a documented go-live checklist.
+
+**Scope narrowed by Q1/Q4 (`PhaseDecisions.md`):** Q1 selected "prep everything, stop before real
+go-live" and Q4 selected "skip validation now, leave it entirely to the go-live checklist" — both
+explicitly rejecting the alternative of actually executing a real/test-mode transaction this
+phase. As executed, 30B delivers every *documentation* deliverable (runbook, API reference,
+go-live checklist, monitoring checklist, schema-docs reconciliation) plus a green full test suite
+— but **does not** create a real Televika client record, run a controlled transaction, or achieve
+"Televika transacting successfully in production." That remains open, to be executed later by
+working through `.claude/docs/GoLiveChecklist.md` against real infrastructure and credentials
+that don't exist yet. Screenshots of admin screens are not re-captured in 30B — no admin-panel UI
+changed this phase; Phase 27's captured evidence stands. See `Phase30BResult.md`'s Final Result
+for the precise "done vs. still open" split.

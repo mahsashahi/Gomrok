@@ -18,4 +18,5 @@ enum AuthFailureReason: string
     case KeyExpired = 'key_expired';
     case KeyRevoked = 'key_revoked';
     case ClientDisabled = 'client_disabled';
+    case TooManyAttempts = 'too_many_attempts';
 }

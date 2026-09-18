@@ -872,6 +872,42 @@ erDiagram
     payments ||--o| subscription_payment_links : "linked by"
 </pre>
 
+<h2>Admin panel — roles &amp; sessions (Phase 27)</h2>
+<pre class="mermaid">
+erDiagram
+    admin_users {
+        int id PK
+        varchar name
+        varchar email UK
+        varchar password_hash
+        enum role
+        enum status
+        datetime created_at
+        datetime updated_at
+    }
+    admin_sessions {
+        int id PK
+        int admin_user_id FK
+        char token_hash UK
+        varchar ip
+        varchar user_agent
+        datetime expires_at
+        datetime revoked_at
+        datetime created_at
+        datetime last_used_at
+    }
+    admin_login_attempts {
+        int id PK
+        varchar email
+        int admin_user_id FK
+        varchar ip
+        tinyint succeeded
+        datetime created_at
+    }
+    admin_users ||--o{ admin_sessions : "sessions"
+    admin_users ||--o{ admin_login_attempts : "attempts"
+</pre>
+
 <h2>Client notifications (Phase 28)</h2>
 <pre class="mermaid">
 erDiagram

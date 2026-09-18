@@ -969,6 +969,49 @@ system Phase 25 already flagged.
 
 ---
 
+## Admin panel — roles & sessions (Phase 27)
+
+**Backfilled 2026-09-18 (Phase 30B).** Three real tables have existed since Phase 27
+(`admin_users`, `admin_sessions`, `admin_login_attempts`) but were never written up in any of the
+three schema docs — a pre-existing violation of the Database Diagram Maintenance Rule, flagged
+but left unfixed during the Phase 28 write-up, closed here as part of Phase 30B's documentation
+reconciliation pass. Written from the actual live schema.
+
+### `admin_users`
+
+- Two roles only (`role ENUM('admin','support_agent')`), per CLAUDE.md's Admin Panel Role-Based
+  Permission Requirement — no separate roles/permissions tables were ever designed or built; the
+  requirement explicitly says that schema needs its own later confirmation, and Phase 27 never
+  crossed that line.
+- `password_hash` — a secure hash, never plaintext, per CLAUDE.md's Admin security requirements.
+- `status ENUM('active','disabled','locked')` — the third state (`locked`) exists distinctly from
+  `disabled`: `locked` is what a repeated-failed-login lockout should reasonably drive toward,
+  `disabled` is an administrative deactivation. (Confirm against `AuthenticateAdminHandler`'s
+  actual behavior before assuming both are wired identically — this note describes the schema, not
+  a verified runtime guarantee for `locked` specifically.)
+
+### `admin_sessions`
+
+- `token_hash CHAR(64)` — the session token is stored **hashed**, never plaintext (CLAUDE.md:
+  "Store session tokens hashed if stored in database"), matching the same precedent
+  `client_api_keys` set for API secrets.
+- `revoked_at` — nullable; non-null once an admin logs out or a session is otherwise revoked,
+  rather than deleting the row (keeps a durable trail of when a session existed and when it ended).
+- `ON DELETE CASCADE` from `admin_users` — deleting an admin user (if that ever becomes a real
+  operation, as opposed to `status = disabled`) cleans up their sessions automatically.
+
+### `admin_login_attempts`
+
+- Append-only, mirrors `client_auth_attempts`'s (Phase 7) shape closely — this is in fact the
+  **precedent** Phase 30A Q1 explicitly mirrored when adding client-API-key rate limiting:
+  `AuthenticateAdminHandler` already enforced a 5-attempts/15-minute fixed-window lockout here.
+- `email` is stored even when it matches no real `admin_users` row (`admin_user_id` nullable,
+  `ON DELETE SET NULL`) — an attempt against a nonexistent email is still a real event worth
+  logging (e.g. for detecting enumeration attempts), the same reasoning `client_auth_attempts`
+  applies to an unknown `key_id`.
+
+---
+
 ## Client notifications (Phase 28)
 
 Two tables: `provider_account_notification_overrides` and `client_notification_logs`.

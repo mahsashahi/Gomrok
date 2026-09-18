@@ -193,6 +193,16 @@ final class RecordSubscriptionPaymentHandlerTest extends TestCase
     }
 
     #[Test]
+    public function aRealSubscriptionOwnedByAnotherClientIsNotFound(): void
+    {
+        $result = $this->handler->handle(new RecordSubscriptionPaymentCommand(self::CLIENT + 1, $this->subscriptionId, 'sub_charge_7', 'paid', 'paid'));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('subscription.not_found', $result->error()->code);
+        self::assertCount(0, $this->payments->forClient(self::CLIENT + 1));
+    }
+
+    #[Test]
     public function anUnknownMappedStatusIsRejected(): void
     {
         $result = $this->handler->handle(new RecordSubscriptionPaymentCommand(self::CLIENT, $this->subscriptionId, 'sub_charge_7', 'weird', 'not_a_status'));

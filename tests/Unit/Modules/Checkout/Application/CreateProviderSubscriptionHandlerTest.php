@@ -124,6 +124,18 @@ final class CreateProviderSubscriptionHandlerTest extends TestCase
     }
 
     #[Test]
+    public function aRealAttemptOwnedByAnotherClientIsNotFound(): void
+    {
+        $attemptId = $this->providerSelectedSubscriptionAttempt();
+
+        $result = $this->handler->handle(new CreateProviderSubscriptionCommand(self::CLIENT + 1, $attemptId));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('checkout_attempt.not_found', $result->error()->code);
+        self::assertSame([], $this->gatewayReferences->forCheckoutAttempt($attemptId));
+    }
+
+    #[Test]
     public function rejectsAnAttemptThatHasNoProviderSelected(): void
     {
         $attempt = CheckoutAttempt::start(self::CLIENT, 'user-1', 'order-1', self::PACKAGE, 'DE', 'EUR', PurchaseType::Subscription, null, SubscriptionInterval::Monthly, $this->now);

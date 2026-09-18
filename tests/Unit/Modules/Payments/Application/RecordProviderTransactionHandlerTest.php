@@ -134,4 +134,14 @@ final class RecordProviderTransactionHandlerTest extends TestCase
         self::assertTrue($result->isErr());
         self::assertSame('payment.unknown_status', $result->error()->code);
     }
+
+    #[Test]
+    public function aRealPaymentOwnedByAnotherClientIsNotFound(): void
+    {
+        $result = $this->handler->handle(new RecordProviderTransactionCommand(self::CLIENT + 1, $this->paymentId, 1, 'authorize', 'requires_action', 'pending'));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('payment.not_found', $result->error()->code);
+        self::assertSame([], $this->attempts->forPayment($this->paymentId));
+    }
 }

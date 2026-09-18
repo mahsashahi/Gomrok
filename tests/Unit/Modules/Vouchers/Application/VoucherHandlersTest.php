@@ -108,6 +108,7 @@ final class VoucherHandlersTest extends TestCase
             new SynchronousTransactions(),
         );
 
+        self::assertSame('voucher.not_found', $handler->handle(new SetVoucherEligibilityCommand(self::CLIENT + 1, $payload->voucherId, [['dimension' => 'country', 'value' => 'de']]))->error()->code, 'a real voucher owned by another client must not be reachable');
         self::assertSame('voucher_eligibility.unknown_dimension', $handler->handle(new SetVoucherEligibilityCommand(self::CLIENT, $payload->voucherId, [['dimension' => 'bogus', 'value' => 'x']]))->error()->code);
         self::assertSame('voucher_eligibility.unknown_country', $handler->handle(new SetVoucherEligibilityCommand(self::CLIENT, $payload->voucherId, [['dimension' => 'country', 'value' => 'ZZ']]))->error()->code);
         self::assertSame('voucher_eligibility.unknown_package', $handler->handle(new SetVoucherEligibilityCommand(self::CLIENT, $payload->voucherId, [['dimension' => 'package', 'value' => '999']]))->error()->code);
@@ -136,6 +137,9 @@ final class VoucherHandlersTest extends TestCase
 
         $set = new SetVoucherCurrencyDiscountHandler($this->vouchers, $this->discounts, new InMemoryReferenceCatalog(), $this->audit, new SynchronousTransactions());
         $remove = new RemoveVoucherCurrencyDiscountHandler($this->vouchers, $this->discounts, $this->audit, new SynchronousTransactions());
+
+        self::assertSame('voucher.not_found', $set->handle(new SetVoucherCurrencyDiscountCommand(self::CLIENT + 1, $payload->voucherId, 'EUR', 'fixed', amountMinor: 500))->error()->code, 'a real voucher owned by another client must not be reachable');
+        self::assertSame('voucher.not_found', $remove->handle($payload->voucherId, 'EUR', self::CLIENT + 1)->error()->code, 'a real voucher owned by another client must not be reachable');
 
         self::assertSame(
             'voucher_currency_discount.amount_required',
@@ -167,6 +171,7 @@ final class VoucherHandlersTest extends TestCase
 
         $handler = new SetVoucherUsageLimitsHandler($this->vouchers, $this->audit, new SynchronousTransactions(), $this->clock);
 
+        self::assertSame('voucher.not_found', $handler->handle(new SetVoucherUsageLimitsCommand(self::CLIENT + 1, $payload->voucherId, maxPerUser: 1))->error()->code, 'a real voucher owned by another client must not be reachable');
         self::assertSame('voucher.invalid_limit', $handler->handle(new SetVoucherUsageLimitsCommand(self::CLIENT, $payload->voucherId, maxPerUser: 0))->error()->code);
 
         $ok = $handler->handle(new SetVoucherUsageLimitsCommand(self::CLIENT, $payload->voucherId, maxTotalRedemptions: null, maxPerUser: 1, maxPerClient: null));
@@ -186,6 +191,9 @@ final class VoucherHandlersTest extends TestCase
         self::assertInstanceOf(CreateVoucherResult::class, $payload);
 
         $handler = new ChangeVoucherStatusHandler($this->vouchers, $this->audit, new SynchronousTransactions(), $this->clock);
+
+        self::assertSame('voucher.not_found', $handler->disable($payload->voucherId, self::CLIENT + 1)->error()->code, 'a real voucher owned by another client must not be reachable');
+        self::assertTrue($this->vouchers->findById($payload->voucherId)?->isActive(), 'the cross-client attempt must not have changed the voucher');
 
         self::assertTrue($handler->disable($payload->voucherId, self::CLIENT)->isOk());
         self::assertFalse($this->vouchers->findById($payload->voucherId)?->isActive());

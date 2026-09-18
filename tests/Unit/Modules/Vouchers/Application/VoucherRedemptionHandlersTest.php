@@ -51,6 +51,8 @@ final class VoucherRedemptionHandlersTest extends TestCase
         $voucherId = $this->voucher(DefaultDiscountType::Percentage, 1000);
         $handler = $this->reserveHandler();
 
+        self::assertSame('voucher.not_found', $handler->handle(new ReserveVoucherRedemptionCommand(self::CLIENT + 1, $voucherId, 'order-1', 'EUR', 2900))->error()->code, 'a real voucher owned by another client must not be reachable');
+
         $first = $handler->handle(new ReserveVoucherRedemptionCommand(self::CLIENT, $voucherId, 'order-1', 'EUR', 2900));
         self::assertTrue($first->isOk());
         $firstPayload = $first->value();
@@ -107,6 +109,7 @@ final class VoucherRedemptionHandlersTest extends TestCase
         $this->reserveHandler()->handle(new ReserveVoucherRedemptionCommand(self::CLIENT, $voucherId, 'order-1', 'EUR', 2900));
 
         $confirm = $this->confirmHandler();
+        self::assertSame('voucher.not_found', $confirm->handle($voucherId, 'order-1', self::CLIENT + 1)->error()->code, 'a real voucher owned by another client must not be reachable');
         self::assertTrue($confirm->handle($voucherId, 'order-1', self::CLIENT)->isOk());
         $voucher = $this->vouchers->findById($voucherId);
         self::assertSame(1, $voucher?->redeemedCount());
@@ -129,6 +132,7 @@ final class VoucherRedemptionHandlersTest extends TestCase
         $this->reserveHandler()->handle(new ReserveVoucherRedemptionCommand(self::CLIENT, $voucherId, 'order-1', 'EUR', 2900));
 
         $release = $this->releaseHandler();
+        self::assertSame('voucher.not_found', $release->handle($voucherId, 'order-1', self::CLIENT + 1)->error()->code, 'a real voucher owned by another client must not be reachable');
         self::assertTrue($release->handle($voucherId, 'order-1', self::CLIENT)->isOk());
         $redemption = $this->redemptions->findByAttemptReference($voucherId, 'order-1');
         self::assertSame(RedemptionStatus::Released, $redemption?->status());

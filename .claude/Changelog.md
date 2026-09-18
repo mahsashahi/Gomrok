@@ -7,6 +7,122 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-18 — Phase 30B complete (within its narrowed scope): Documentation and go-live prep
+
+**Summary.** Phase 30B — the documentation half of the Phase 30 split — is complete for what it
+was actually scoped to do: Q1 ("prep everything, stop before real go-live") and Q4 ("skip
+validation now, leave it to the checklist") both explicitly deferred the real Televika go-live
+itself. **Phase 30 overall remains open** — see `Phase30BResult.md`'s Final Result.
+
+**New documentation.** `.claude/knowledge/DeploymentRunbook.md` — a full step-by-step illustrative
+single-host Linux deployment runbook (nginx/php-fpm/MySQL/systemd), explicitly labeled a
+reference example with a portability section for Docker/other targets (Q3). `.claude/docs/
+ApiReference.md` — hand-written Markdown reference for every client-facing `/api/v1/*` endpoint,
+written directly from the real route table and action classes (Q2). `.claude/docs/
+GoLiveChecklist.md` — a 10-stage staged checklist for taking Televika from ready-code to real
+production, prepared but not executed. `.claude/docs/MonitoringChecklist.md` — a tool-agnostic
+"check this / alert when" checklist across 9 categories (Q5).
+
+**Schema docs reconciliation — closed a real, pre-existing gap.** While doing 30B's "final schema
+docs reconciliation" scope item, confirmed via `SHOW CREATE TABLE` against the real live schema
+that Phase 27's `admin_users` / `admin_sessions` / `admin_login_attempts` tables — real since that
+phase — were never documented in `database-design.md`, `database-diagram.md` (+ `.html`), or
+`db_explain.md`, a violation `database-design.md` itself had already flagged as an unfixed known
+gap. Backfilled all three docs; table count corrected from 60 to **63**.
+
+**Cross-references updated.** `Rule.md`, `FileIndex.md`, `Deployment.md`, `DeploymentSkill.md` now
+point at the populated documents instead of "placeholder — not yet written."
+
+**No application code changed.** Full suite re-run to confirm: `composer test` (876 tests),
+`composer test:integration` (45 tests, 3 expected self-skips) — 921 total, matching Phase 30A's
+count exactly; `composer stan` clean. `mkdocs build` could not be run (not installed in this
+environment) — stated explicitly rather than assumed clean.
+
+**Files:** created `DeploymentRunbook.md`, `ApiReference.md`, `GoLiveChecklist.md`,
+`MonitoringChecklist.md`; modified `Deployment.md`, `DeploymentSkill.md`, `Rule.md`,
+`FileIndex.md`, `database-design.md`, `database-diagram.md` (+ `.html`), `db_explain.md`,
+`Phases.md`. Full detail: `.claude/PhaseResults/Phase30BResult.md`.
+
+## 2026-09-18 — Phase 30A complete: Production hardening
+
+**Summary.** Phase 30 was split into 30A (production hardening) and 30B (docs + Televika go-live)
+at the user's explicit request, documented before any implementation. This entry covers 30A:
+client API lockout, an automated production-safety boot guard, a manual security pass with
+targeted tests, and real concurrent-load testing that found and fixed a genuine concurrency bug.
+
+**Client API lockout (Q1).** `ApiKeyAuthenticator` now enforces the same fixed-window lockout
+admin login already had (5 failed attempts / 15 min) — keyed by `key_id`, checked before the
+secret comparison. A locked-out key gets `429 Too Many Requests` + `Retry-After: 900`, never `401`
+(so the response can't be used to distinguish "wrong secret" from "rate limited"). No migration —
+`client_auth_attempts` already had everything needed. New `AuthFailureReason::TooManyAttempts`,
+`AuthResult::tooManyAttempts()`, `AuthAttemptLog::countFailedSince()`.
+
+**Automated production-safety guard (Q5).** New `ProductionSafetyGuard::check()`, called once
+from `ContainerFactory::create()` (the one bootstrap path the web app, `bin/Worker.php`, and
+every CLI script share). Refuses to boot outside `local`/`testing` if `APP_DEBUG` is on, the
+checkout-return-token secret is still the hardcoded `'gomrokimo'` default, or
+`APP_ENCRYPTION_KEY` is unset — collecting every violation, not just the first.
+
+**Security pass (Q4).** Manual review + targeted tests across CLAUDE.md's six named areas.
+Webhook signatures and webhook replay/dedup were already covered end-to-end — verified, not
+duplicated. Added: 2 tests proving a client-supplied price field on `POST /api/v1/payments` is
+structurally ignored and a real package owned by another client is not-found even by numeric id;
+4 new `SecretRedactor` tests (merged alongside 3 pre-existing ones — see below); 15 new
+multi-client isolation tests closing a real gap across 11 files (a real resource owned by a
+*different* client, not just a nonexistent id, proven inaccessible) — delegated to a subagent,
+zero production-code bugs found, every ownership check was already correct, just undertested.
+
+**Load/soak testing (Q2) — found a real bug.** New `tools/loadtest/` scripts (lightweight PHP,
+`proc_open`-spawned real concurrent processes against the real local MySQL, no new tooling
+dependency): `ConcurrentIdempotencyClaim.php` and `ConcurrentVoucherRedemption.php`. The
+idempotency one immediately crashed 5 of 20 real concurrent processes with an uncaught
+`PDOException: SQLSTATE[40001]: Deadlock found` — `PdoIdempotencyStore::claim()`'s race-recovery
+catch only handled MySQL error 1062 (clean duplicate-key violation), not 1213 (deadlock) or 1205
+(lock-wait-timeout), both of which InnoDB can also produce under genuine concurrent unique-index
+inserts. Fixed (`isUniqueViolation()` → `isLostInsertRace()`, now recognizing all three); re-run
+4× at 20–30 concurrent processes, 0 errors every time after the fix. The voucher-reservation
+script found no bug (its `FOR UPDATE` lock on an existing row doesn't hit the insert-deadlock
+failure mode).
+
+**Deployment docs (Q3).** `bin/Worker.php`'s process-supervisor requirement is now documented
+generically in `Deployment.md` (auto-restart, environment parity, safe with multiple instances,
+stdout/stderr logging) — deliberately without committing to systemd/Docker/anything else, since
+no real deployment target is chosen yet.
+
+**Verified with real, captured evidence:** a real API key was issued, hit with 5 wrong-secret
+attempts (`401` each) then the correct secret (`429` + `Retry-After: 900`), and
+`client_auth_attempts` rows confirmed the exact sequence — evidence key revoked and rows deleted
+afterward. `APP_ENV=production APP_DEBUG=true php -r '...ContainerFactory::create()...'` really
+threw `ProductionSafetyViolation` listing the real violations found (the encryption-key check
+correctly did *not* fire, since the real local `.env` has one set) — the running dev server
+(`local`) was confirmed unaffected. Both load-test scripts were run for real multiple times, with
+before/after output captured for the deadlock fix.
+
+**Known process note:** `tests/Unit/Shared/Infrastructure/SecretRedactorTest.php` was
+accidentally overwritten mid-phase (an existing file, `Write`d without reading first) — caught via
+`git diff`, repaired by merging the 3 original tests back in alongside the 4 new ones (7 total, all
+passing). Product feedback filed about the tool not enforcing its own read-before-overwrite
+contract.
+
+**Files changed:** see `.claude/PhaseResults/Phase30AResult.md` for the complete list. Notably:
+`ApiKeyAuthenticator.php`, `AuthResult.php`, `AuthenticationMiddleware.php`, new
+`ProductionSafetyGuard.php`/`ProductionSafetyViolation.php`, `ContainerFactory.php`,
+`PdoIdempotencyStore.php` (the deadlock fix), new `tools/loadtest/` (3 scripts), plus the
+documentation-split files listed in the prior Phase 30 split entry (`Phases.md`, `Rule.md`,
+`FileIndex.md`, `Deployment.md`, `DeploymentRunbook.md`, `DeploymentSkill.md`,
+`PhaseResults/Readme.md`, `PhaseDecisions.md`).
+
+**Database changes.** None. **API changes.** A locked-out `key_id` on any `/api/v1` route now
+returns `429`/`Retry-After` instead of an indefinite `401`. **Migration notes.** None.
+**Breaking changes.** None — the lockout only changes behavior for a credential already failing
+repeatedly; every other call site's behavior is unchanged.
+
+**Tests:** 921 total (16 net new this phase — 8 `ProductionSafetyGuardTest` + 4
+`ApiKeyAuthenticatorTest` + 2 `PaymentsCreateActionTest` + 4 new `SecretRedactorTest` + 15
+isolation tests, minus overlap from the repair). 0 errors, 0 failures, phpstan clean. Run:
+`composer test` / `composer test:all`; load scripts: `php tools/loadtest/ConcurrentIdempotencyClaim.php
+[concurrency]`, `php tools/loadtest/ConcurrentVoucherRedemption.php --run=<voucherId> [concurrency]`.
+
 ## 2026-09-18 — Phase 29 revision: Q4/Q5 reopened — renewal-payment actions + persistent daemon worker
 
 **Summary.** After Phase 29 was marked complete, the user revised its two remaining decisions

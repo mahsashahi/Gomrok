@@ -21,14 +21,27 @@ use Throwable;
 
 /**
  * The Clients-module implementation of {@see ClientAuthenticator}: parse the
- * bearer token, look the key up by `key_id`, constant-time compare the secret,
- * check key status/expiry and client status, throttle `last_used_at`, and record
- * the attempt.
+ * bearer token, check the `key_id` isn't locked out from too many recent
+ * failed attempts (Phase 30A Q1), look the key up by `key_id`, constant-time
+ * compare the secret, check key status/expiry and client status, throttle
+ * `last_used_at`, and record the attempt.
  */
 final readonly class ApiKeyAuthenticator implements ClientAuthenticator
 {
     /** Skip the `last_used_at` write unless the stored value is older than this (Phase 7 Q3). */
     private const LAST_USED_THROTTLE_SECONDS = 300;
+
+    /**
+     * Lockout policy (Phase 30A Q1) — matches `AuthenticateAdminHandler`'s
+     * admin-login policy exactly, for consistency: 5 failed attempts within
+     * 15 minutes locks the `key_id` out, even with a subsequently-correct
+     * secret, until the window clears. A request made while locked out is
+     * itself recorded as a failure, so an attacker who keeps hitting the
+     * endpoint stays locked out rather than the window quietly expiring
+     * underneath them — same behavior the admin flow already relies on.
+     */
+    private const MAX_FAILED_ATTEMPTS = 5;
+    private const LOCKOUT_WINDOW_MINUTES = 15;
 
     public function __construct(
         private ClientApiKeyRepository $apiKeys,
@@ -51,6 +64,13 @@ final readonly class ApiKeyAuthenticator implements ClientAuthenticator
         $parsed = ApiKeyToken::parse($token);
         if ($parsed === null) {
             return $this->deny(AuthFailureReason::MalformedToken, null, null, $meta, $now);
+        }
+
+        $since = $now->modify('-' . self::LOCKOUT_WINDOW_MINUTES . ' minutes');
+        if ($this->attempts->countFailedSince($parsed->keyId, $since) >= self::MAX_FAILED_ATTEMPTS) {
+            $this->safeRecord(AuthAttempt::failure(AuthFailureReason::TooManyAttempts, $parsed->keyId, null, $meta), $now);
+
+            return AuthResult::tooManyAttempts(self::LOCKOUT_WINDOW_MINUTES * 60);
         }
 
         $key = $this->apiKeys->findByKeyId($parsed->keyId);

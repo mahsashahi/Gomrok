@@ -15,9 +15,25 @@ final class RecordingAuthAttemptLog implements AuthAttemptLog
     /** @var list<AuthAttempt> */
     public array $attempts = [];
 
+    /** @var list<DateTimeImmutable> parallel to $attempts */
+    private array $recordedAt = [];
+
     public function record(AuthAttempt $attempt, DateTimeImmutable $at): void
     {
         $this->attempts[] = $attempt;
+        $this->recordedAt[] = $at;
+    }
+
+    public function countFailedSince(string $keyId, DateTimeImmutable $since): int
+    {
+        $count = 0;
+        foreach ($this->attempts as $i => $attempt) {
+            if ($attempt->outcome === AuthAttempt::OUTCOME_FAILURE && $attempt->keyId === $keyId && $this->recordedAt[$i] >= $since) {
+                ++$count;
+            }
+        }
+
+        return $count;
     }
 
     public function last(): AuthAttempt

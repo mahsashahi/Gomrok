@@ -148,6 +148,19 @@ final class CreatePaymentHandlerTest extends TestCase
         self::assertSame('checkout_attempt.not_found', $result->error()->code);
     }
 
+    #[Test]
+    public function aRealAttemptOwnedByAnotherClientIsNotFound(): void
+    {
+        $attemptId = $this->confirmedAttempt();
+        $this->seedPricing($attemptId, 2900);
+
+        $result = $this->handler->handle(new CreatePaymentCommand(self::CLIENT + 1, $attemptId));
+
+        self::assertTrue($result->isErr());
+        self::assertSame('checkout_attempt.not_found', $result->error()->code);
+        self::assertCount(0, $this->payments->forClient(self::CLIENT + 1));
+    }
+
     private function confirmedAttempt(): int
     {
         $attempt = CheckoutAttempt::start(self::CLIENT, 'user-1', 'order-1', self::PACKAGE, 'DE', 'EUR', PurchaseType::OneTimePayment, null, null, $this->now);

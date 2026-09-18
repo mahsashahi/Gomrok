@@ -50,18 +50,12 @@ grows as phases land. See `.claude/docs/Phases.md` → *Database strategy*.
 | Payment creation flow (Phase 24) | `price_list_assignments` — **1** (Q6/Q7); `gateway_references` gained a nullable `checkout_attempt_id` column (Q1) and `checkout_attempts` gained `hash_return_token` (Q4) |
 | Webhooks module (Phase 25) | `webhook_events` — **1** |
 | Subscriptions module (Phase 26) | `subscriptions`, `subscription_events`, `subscription_payment_links` — **3**; `payments.checkout_attempt_id` made nullable (Q2) and `gateway_references` gained a nullable `subscription_id` column |
+| Admin panel — roles & sessions (Phase 27) | `admin_users`, `admin_sessions`, `admin_login_attempts` — **3** (backfilled here 2026-09-18, Phase 30B — see the section's own note) |
 | Client callbacks / notifications (Phase 28) | `provider_account_notification_overrides`, `client_notification_logs` — **2** |
 | Background jobs, reconciliation & observability (Phase 29) | `jobs`, `reconciliation_findings` — **2** |
 
-**Total: 60 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
+**Total: 63 tables.** Phase 6 also added the `client_id` foreign keys on the three Phase 5
 cross-cutting tables (deferred from Phase 5).
-
-**Known gap (not this phase's to fix, flagged for visibility):** Phase 27's `admin_users`,
-`admin_sessions`, `admin_login_attempts` tables were never added to this file, the diagram, or
-`db_explain.md` — a pre-existing violation of the Database Diagram Maintenance Rule from that
-phase, discovered while updating this file for Phase 28. Left as-is here rather than silently
-backfilled outside the phase that should own that write-up; call it out if you want it done as a
-follow-up.
 
 ---
 
@@ -1480,6 +1474,74 @@ provisional case, Q3).
 
 ---
 
+## Admin panel — roles & sessions (Phase 27)
+
+**Backfilled 2026-09-18 (Phase 30B)** — these three tables were created by real migrations in
+Phase 27 but never written up here, in `database-diagram.md`, or in `db_explain.md`, a
+pre-existing violation of the Database Diagram Maintenance Rule flagged (but left unfixed) during
+the Phase 28 write-up. Written from the actual live schema (`SHOW CREATE TABLE`), not from memory
+or the migration source, so it reflects what is really deployed.
+
+Two roles only, per CLAUDE.md's Admin Panel Role-Based Permission Requirement: `admin` and
+`support_agent` — enforced app-side (`role ENUM`), not via a separate roles/permissions table (the
+requirement gate for that table design was intentionally left for a later confirmation and never
+crossed — Phase 27 shipped the two fixed roles only).
+
+### `admin_users`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `INT UNSIGNED` | no | PK, auto-increment |
+| `name` | `VARCHAR(120)` | no | |
+| `email` | `VARCHAR(255)` | no | login identifier |
+| `password_hash` | `VARCHAR(255)` | no | a secure hash (never plaintext — CLAUDE.md "Admin security requirements") |
+| `role` | `ENUM('admin','support_agent')` | no | the two fixed roles |
+| `status` | `ENUM('active','disabled','locked')` | no | default `active` |
+| `created_at` | `DATETIME` | no | |
+| `updated_at` | `DATETIME` | yes | |
+
+Unique: `uq_admin_users_email (email)`.
+
+### `admin_sessions`
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `INT UNSIGNED` | no | PK, auto-increment |
+| `admin_user_id` | `INT UNSIGNED` | no | FK → `admin_users(id)` |
+| `token_hash` | `CHAR(64)` | no | the session token stored **hashed**, never plaintext (CLAUDE.md: "Store session tokens hashed if stored in database") |
+| `ip` | `VARCHAR(45)` | yes | |
+| `user_agent` | `VARCHAR(255)` | yes | |
+| `expires_at` | `DATETIME` | no | |
+| `revoked_at` | `DATETIME` | yes | non-null once logged out / revoked |
+| `created_at` | `DATETIME` | no | |
+| `last_used_at` | `DATETIME` | yes | |
+
+Unique: `uq_admin_sessions_token_hash (token_hash)`. Index: `idx_admin_sessions_admin_user
+(admin_user_id)`. FK: `fk_admin_sessions_admin_user → admin_users(id)` **ON DELETE CASCADE**.
+
+### `admin_login_attempts`
+
+One append-only row per admin login attempt — backs the 5-attempts/15-minute lockout
+(`AuthenticateAdminHandler`), the pattern Phase 30A Q1's client-API lockout was deliberately
+modeled on.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `INT UNSIGNED` | no | PK, auto-increment |
+| `email` | `VARCHAR(255)` | no | the attempted login email, even if it matches no real account |
+| `admin_user_id` | `INT UNSIGNED` | yes | resolved admin user; null if the email matched no account |
+| `ip` | `VARCHAR(45)` | no | |
+| `succeeded` | `TINYINT(1)` | no | |
+| `created_at` | `DATETIME` | no | append-only |
+
+Index: `idx_admin_login_attempts_email_created (email, created_at)`. FK:
+`fk_admin_login_attempts_admin_user → admin_users(id)` **ON DELETE SET NULL**.
+
+Migrations: `src/Database/Migrations/20260914150001_create_admin_users_table.php`,
+`20260914150002_create_admin_sessions_table.php`, `20260914150003_create_admin_login_attempts_table.php`.
+
+---
+
 ## Client notifications (Phase 28)
 
 Server-to-server callbacks from Gomrok to a client when a payment/subscription reaches a
@@ -1680,6 +1742,9 @@ change still comes from an actual webhook or an explicit admin action.
 | `src/Database/Migrations/20260914120001_create_subscriptions_tables.php` | `Gomrok\Database\Migrations\CreateSubscriptionsTables` |
 | `src/Database/Migrations/20260914120002_make_payments_checkout_attempt_id_nullable.php` | `Gomrok\Database\Migrations\MakePaymentsCheckoutAttemptIdNullable` |
 | `src/Database/Migrations/20260914120003_add_subscription_id_to_gateway_references.php` | `Gomrok\Database\Migrations\AddSubscriptionIdToGatewayReferences` |
+| `src/Database/Migrations/20260914150001_create_admin_users_table.php` | `Gomrok\Database\Migrations\CreateAdminUsersTable` |
+| `src/Database/Migrations/20260914150002_create_admin_sessions_table.php` | `Gomrok\Database\Migrations\CreateAdminSessionsTable` |
+| `src/Database/Migrations/20260914150003_create_admin_login_attempts_table.php` | `Gomrok\Database\Migrations\CreateAdminLoginAttemptsTable` |
 | `src/Database/Migrations/20260917150001_create_provider_account_notification_overrides_table.php` | `Gomrok\Database\Migrations\CreateProviderAccountNotificationOverridesTable` |
 | `src/Database/Migrations/20260917150002_create_client_notification_logs_table.php` | `Gomrok\Database\Migrations\CreateClientNotificationLogsTable` |
 | `src/Database/Migrations/20260917180001_create_jobs_table.php` | `Gomrok\Database\Migrations\CreateJobsTable` |
