@@ -7,6 +7,18 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-18 — Bootstrap CLI for the first admin user
+
+**Summary.** There was no way to create the very first admin panel account — `/admin/admin-users`
+(Phase 27) needs an existing session to reach it, and no CLI/seeder existed for account #1. Added
+`bin/CreateAdminUser.php` (`composer admin-user:create -- --name --email --password --role`),
+mirroring `bin/CreateClient.php`'s shape: parses flags, calls the existing
+`CreateAdminUserHandler` (unchanged), prints the created id/email/role (never the password — it's
+typed by the caller, not generated). Used it to create a real, permanent `admin`-role account for
+the project owner; verified with a real `POST /admin/login` → `302` to `/admin` → `GET /admin` →
+`200` against the local dev server. Files: `bin/CreateAdminUser.php` (new), `composer.json`
+(`admin-user:create` script + description), `.claude/docs/Commands.md`.
+
 ## 2026-09-18 — Phase 30B complete (within its narrowed scope): Documentation and go-live prep
 
 **Summary.** Phase 30B — the documentation half of the Phase 30 split — is complete for what it

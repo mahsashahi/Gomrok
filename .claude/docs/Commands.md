@@ -81,6 +81,18 @@ Phinx reads `phinx.php` (DB settings from the environment / `.env`).
 Reference data: `currencies` (full ISO, from `brick/money`), `countries` (18 curated markets,
 from `src/Database/Seeds/data/countries.json`), `provider_types` (4).
 
+## Admin panel — first admin user (bootstrap only)
+
+```bash
+composer admin-user:create -- --name="Jane Doe" --email=jane@example.com --password=<min 10 chars> --role=admin
+```
+
+The `/admin/admin-users` screen (Phase 27) can create every admin user *after* the first one, but
+needs an existing session to reach it — this CLI command is the bootstrap for account #1 (or any
+account created outside the UI). `role` is `admin` or `support_agent` (CLAUDE.md's two fixed
+roles). Password is typed by the caller (min 10 chars), hashed with PHP's `PASSWORD_DEFAULT`
+before storage — never logged or displayed again. Log in at `/admin/login`.
+
 ## Clients & provider accounts (no admin UI yet)
 
 ```bash
