@@ -1061,6 +1061,24 @@ database this session (Docker daemon unavailable locally).
 **Exit:** RBAC matrix, backend permission enforcement, secret masking, and rendered-view smoke
 tests pass — with screenshots of every implemented screen attached.
 
+**Post-completion note (2026-09-19, outside the phase structure — a UI-consistency fix, not a
+new phase):** every currency input across the admin UI (client create/edit, package pricing,
+pricing groups, provider/routing groups, voucher min-purchase and per-currency overrides, voucher
+eligibility) was converted from free text to a controlled combo/select sourced from
+`ReferenceCatalog::listCurrencies()` (the `currencies` reference table). See the new standing
+rule in `CLAUDE.md` → *Frontend Stack* / `.claude/Rule.md` §9 and `.claude/Changelog.md`'s
+2026-09-19 entry for the full file list.
+
+**Post-completion note (2026-09-20, outside the phase structure — the same UI-consistency fix
+extended to country fields):** every country input across the admin UI (client default country,
+pricing-group countries, provider account/routing-group countries, voucher eligibility
+countries) was converted from free text to a controlled combo/select or multi-select sourced
+from `ReferenceCatalog::listCountries()` (the `countries` reference table, already the source
+every affected field's backend validation checked against via `countryExists()`). Rule renamed
+in `CLAUDE.md` → *Frontend Stack* from *Currency Input Rule* to *Country and Currency Input
+Rule*; see `.claude/Rule.md` §9 and `.claude/Changelog.md`'s 2026-09-20 entry for the full file
+list.
+
 ## Phase 28 — Client callbacks / outbound notifications
 
 **Goal:** tell the client what happened, reliably.

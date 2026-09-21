@@ -10,6 +10,7 @@ use Gomrok\Modules\Admin\Application\Packaging\PackagesTabHandler;
 use Gomrok\Modules\Admin\Domain\AdminRole;
 use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Providers\Application\ProviderAccountDirectory;
+use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
 use Gomrok\Shared\Http\ViewRenderer;
 use Psr\Http\Message\ResponseInterface;
@@ -29,6 +30,7 @@ final readonly class AdminPackagingAction
         private ProviderAccountDirectory $providerAccounts,
         private PackagesTabHandler $packagesTab,
         private GroupsTabHandler $groupsTab,
+        private ReferenceCatalog $currencies,
         private ViewRenderer $view,
     ) {
     }
@@ -55,6 +57,8 @@ final readonly class AdminPackagingAction
                 'success' => $success,
                 'permissions' => $permissions,
                 'provider_accounts' => [],
+                'currencies' => $this->currencies->listCurrencies(),
+                'countries' => $this->currencies->listCountries(),
             ]);
         }
 
@@ -80,6 +84,8 @@ final readonly class AdminPackagingAction
             'success' => $success,
             'permissions' => $permissions,
             'provider_accounts' => $this->providerAccounts->forClient($activeClient->id),
+            'currencies' => $this->currencies->listCurrencies(),
+            'countries' => $this->currencies->listCountries(),
         ]);
     }
 

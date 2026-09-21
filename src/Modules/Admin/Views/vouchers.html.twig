@@ -1,4 +1,6 @@
 {% extends 'layouts/shell.html.twig' %}
+{% import 'partials/currency-select.html.twig' as currency %}
+{% import 'partials/country-select.html.twig' as country %}
 
 {% block title %}Vouchers — Gomrok Admin{% endblock %}
 
@@ -192,7 +194,7 @@
           </div>
           <div class="form-field" x-show="form.default_discount_type === 'percentage'"><label>Percent</label><input type="text" name="default_percent" x-model="form.default_percent" placeholder="10"></div>
           <div class="form-field"><label>Min purchase amount</label><input type="text" name="min_purchase_amount" x-model="form.min_purchase_amount" placeholder="20.00"></div>
-          <div class="form-field"><label>Min purchase currency</label><input type="text" name="min_purchase_currency" x-model="form.min_purchase_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Min purchase currency</label>{{ currency.select('min_purchase_currency', 'form.min_purchase_currency', currencies) }}</div>
           <div class="form-field span-2"><label class="checkbox-row"><input type="checkbox" name="first_purchase_only" x-model="form.first_purchase_only"> First purchase only</label></div>
         </div>
         <div class="form-field-hint">A fixed-amount discount is inherently currency-bound — add it as a per-currency override after creating the voucher.</div>
@@ -226,7 +228,7 @@
           </div>
           <div class="form-field" x-show="form.default_discount_type === 'percentage'"><label>Percent</label><input type="text" name="default_percent" x-model="form.default_percent"></div>
           <div class="form-field"><label>Min purchase amount</label><input type="text" name="min_purchase_amount" x-model="form.min_purchase_amount"></div>
-          <div class="form-field"><label>Min purchase currency</label><input type="text" name="min_purchase_currency" x-model="form.min_purchase_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Min purchase currency</label>{{ currency.select('min_purchase_currency', 'form.min_purchase_currency', currencies) }}</div>
           <div class="form-field span-2"><label class="checkbox-row"><input type="checkbox" name="first_purchase_only" x-model="form.first_purchase_only"> First purchase only</label></div>
         </div>
         <div class="modal-footer">
@@ -244,7 +246,7 @@
       <form method="post" :action="'/admin/vouchers/' + form.id + '/currency-discounts'">
         <input type="hidden" name="code" :value="form.code">
         <div class="form-grid">
-          <div class="form-field"><label>Currency</label><input type="text" name="currency" x-model="form.currency" maxlength="3" required style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Currency</label>{{ currency.select('currency', 'form.currency', currencies, true, 'Select currency…') }}</div>
           <div class="form-field">
             <label>Type</label>
             <select name="discount_type" x-model="form.discount_type">
@@ -273,8 +275,8 @@
       <form method="post" :action="'/admin/vouchers/' + form.id + '/eligibility'">
         <input type="hidden" name="code" :value="form.code">
         <div class="form-grid">
-          <div class="form-field"><label>Countries</label><input type="text" name="country" x-model="form.country" placeholder="DE, NL"></div>
-          <div class="form-field"><label>Currencies</label><input type="text" name="currency" x-model="form.currency" placeholder="EUR"></div>
+          <div class="form-field"><label>Countries</label>{{ country.multiselect('country', 'form.country', countries) }}</div>
+          <div class="form-field"><label>Currencies</label>{{ currency.multiselect('currency', 'form.currency', currencies) }}</div>
           <div class="form-field"><label>Package IDs</label><input type="text" name="package" x-model="form.package" placeholder="1, 2"></div>
           <div class="form-field"><label>Provider account IDs</label><input type="text" name="provider_account" x-model="form.provider_account" placeholder="1"></div>
           <div class="form-field"><label>Payment methods</label><input type="text" name="payment_method" x-model="form.payment_method" placeholder="card, paypal"></div>

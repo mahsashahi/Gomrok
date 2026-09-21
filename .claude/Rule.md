@@ -439,3 +439,23 @@ Applies automatically to all current and future phases.
   frontend framework unless explicitly requested. *(CLAUDE.md → Frontend Stack)*
 - Build the panel to the design's sidebar and screens; undesigned screens render a neutral
   titled placeholder, never a broken page. *(CLAUDE.md → Admin Panel Requirement)*
+- **Currency fields are never free text.** Every admin currency input — client create/edit,
+  package pricing, pricing groups, price lists, voucher currency overrides, provider/account
+  currency, currency filters/search — is a controlled combo/select of ISO 4217 codes, sourced
+  from one shared option source (`ReferenceCatalog::listCurrencies()`, the `currencies` reference
+  table), never a per-screen hardcoded list. The backend still validates the submitted code
+  independently (`Currency::of()` / `ReferenceCatalog::currencyExists()`) — the select is a UX
+  guard, not the only defense. Shared Twig partial:
+  `src/Modules/Admin/Views/partials/currency-select.html.twig` (`select` for a single value,
+  `multiselect` for a comma-joined multi-value field like voucher eligibility).
+  *(CLAUDE.md → Frontend Stack → Country and Currency Input Rule; added 2026-09-19, applied
+  retroactively to every Phase 27 currency field — see `.claude/Changelog.md`.)*
+- **Country fields are never free text.** Same rule as currency, for every admin country
+  input — client default country, provider account/routing-group country scoping, pricing-group
+  countries, voucher eligibility countries: a controlled combo/select (or, for a comma-joined
+  multi-value field, a controlled multi-select) of ISO 3166-1 alpha-2 codes, sourced from
+  `ReferenceCatalog::listCountries()` (the `countries` reference table). The backend still
+  validates independently (`CountryCode::of()` / `ReferenceCatalog::countryExists()`). Shared
+  Twig partial: `src/Modules/Admin/Views/partials/country-select.html.twig` (`select` /
+  `multiselect`, mirroring the currency partial). *(CLAUDE.md → Frontend Stack → Country and
+  Currency Input Rule; added 2026-09-20 — see `.claude/Changelog.md`.)*

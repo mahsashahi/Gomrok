@@ -1,57 +1,113 @@
-# Q: Phase 30B complete (within its narrowed scope) — Documentation and Televika go-live prep
+# Q: Convert all admin-UI country fields to controlled combo/select, mirroring the currency rule
 
-Phase 30B is complete for what it was actually scoped to do. **Important:** Q1 ("prep everything,
-stop before real go-live") and Q4 ("skip validation now, leave it to the go-live checklist") both
-explicitly deferred the real Televika go-live itself — so **Phase 30 overall is not yet
-complete**, even though both of its sub-phases now are within their own scopes.
+## What was done
 
-**Four new documents, all written from the real codebase, not invented:**
+Extended the existing "currency is never free text" admin-UI pattern (built 2026-09-19) to
+country fields, exactly mirroring its architecture — no new database tables, no schema change,
+since the `countries` reference table (19 rows, Phase 4) and `CountryCode`/`countryExists()`
+backend validation already existed for every affected field.
 
-- `.claude/knowledge/DeploymentRunbook.md` — a full step-by-step illustrative single-host Linux
-  deployment runbook (nginx + php-fpm + MySQL + systemd + `bin/Worker.php`), covering every
-  section your Q3 spec asked for (host prep through post-deployment checks), clearly labeled a
-  reference example, not a commitment, with a portability section for Docker/managed-platform/
-  multi-host targets.
-- `.claude/docs/ApiReference.md` — hand-written Markdown reference for every client-facing
-  `/api/v1/*` endpoint (auth, idempotency, error shape, every request/response body, a worked
-  end-to-end example), written directly from `src/Config/routes.php` and every real action class.
-- `.claude/docs/GoLiveChecklist.md` — a 10-stage staged checklist taking Televika from ready-code
-  to real production: client/provider/callback configuration, a controlled test-mode transaction,
-  real cutover, first real transaction, post-go-live validation, plus a client-specific rollback
-  section (disable client, revoke keys). **Prepared, not executed** — no real client, credentials,
-  or transaction exists.
-- `.claude/docs/MonitoringChecklist.md` — a tool-agnostic "check this / alert when" checklist
-  across 9 categories (app/DB health, error_logs, jobs, webhooks, notifications, HTTP error rates,
-  reconciliation, security signals) — no monitoring product chosen or assumed.
+### Backend (reused the existing `ReferenceCatalog` interface, no new services)
 
-**Closed a real, pre-existing documentation gap.** While doing 30B's "final schema docs
-reconciliation" scope item, I queried the real live database directly (`SHOW CREATE TABLE`) and
-confirmed Phase 27's `admin_users` / `admin_sessions` / `admin_login_attempts` tables — real since
-that phase — had never been written up in `database-design.md`, `database-diagram.md` (+
-`.html`), or `db_explain.md`. `database-design.md` itself already flagged this as a known, unfixed
-gap. Backfilled all three docs from the real schema; table count corrected from 60 to **63**.
+- `src/Shared/Application/ReferenceCatalog.php` — added `listCountries(): list<array{code, name}>`.
+- `src/Shared/Infrastructure/Persistence/PdoReferenceCatalog.php` — implemented via
+  `SELECT code, name FROM countries ORDER BY code`.
+- `tests/Support/InMemoryReferenceCatalog.php` — matching test-double implementation.
+- `tests/Integration/ReferenceTablesTest.php` — new test
+  `listCountriesReturnsTheFullSortedReferenceListForTheAdminCountrySelect` (sorted, upper-case,
+  19 rows, `TR` → `Türkiye`).
 
-**Cross-references updated** (`Rule.md`, `FileIndex.md`, `Deployment.md`, `DeploymentSkill.md`)
-to point at the now-populated documents instead of "placeholder — not yet written."
+### Frontend
 
-**No application code changed this phase.** Re-ran everything anyway to confirm nothing broke:
-`composer test` → 876 tests green; `composer test:integration` → 45 tests green, 3 expected
-self-skips (live-provider tests without real credentials); 921 total, exactly matching Phase 30A's
-count. `composer stan` → clean. **`mkdocs build` could not be run** — `mkdocs` isn't installed in
-this environment — stated explicitly rather than assumed clean, per the Visual and Output
-Verification Rule; installing it (`pip install mkdocs-material pymdown-extensions`) or adding a CI
-step are the two options if you want that verified for real.
+- New `src/Modules/Admin/Views/partials/country-select.html.twig` — `select()` and
+  `multiselect()` macros, structurally identical to `currency-select.html.twig`. The multiselect
+  emits a comma-joined hidden input, so every backend `preg_split('/[,\s]+/', ...)` parser needed
+  zero changes.
+- Wired `'countries' => ...->listCountries()` into the render context of
+  `BuildsClientsScreenContext` (shared by 3 client actions), `AdminPackagingAction`,
+  `AdminProvidersAction`, `AdminVouchersAction` — reusing the already-injected `ReferenceCatalog`
+  instance in each (no constructor changes needed).
+- **8 fields converted across 4 screens:**
+  - `clients.html.twig`: New/Edit client `default_country` (2, single select, blank="None").
+  - `packaging.html.twig`: Create/Edit pricing group `countries` (2, multiselect).
+  - `providers.html.twig`: Connect/Edit provider account `countries` (2), Edit routing group
+    `countries` (1) — 3, multiselect.
+  - `vouchers.html.twig`: eligibility modal `country` (1, multiselect).
 
-**One cleanup note:** a `docker compose up -d mysql` attempt failed on a port conflict and left an
-orphaned, never-started container behind (`gomrok-mysql-1`) — removed it (`docker compose rm -f
-mysql`) once I found the real dev database was already reachable on a different port from `.env`.
+### Verification (real, not described)
 
-Full detail: `.claude/PhaseResults/Phase30BResult.md`. `.claude/Changelog.md` and
-`.claude/docs/Phases.md` (Phase 30B row, plus a "Scope narrowed by Q1/Q4" note explaining exactly
-what remains open) are both updated.
+- `composer test` — 876 unit tests, all green (before and after).
+- `vendor/bin/phpstan analyse --memory-limit=1G` — no errors (repo's default 128M limit is
+  insufficient for the full 1189-file run regardless of this change; pre-existing).
+- `composer cs` — the only 7 flagged files are pre-existing import-order issues untouched by this
+  change.
+- `vendor/bin/phpunit --testsuite integration --filter ReferenceTablesTest` — 5 tests green.
+  Deliberately did *not* run the full integration suite: `MigrationRoundTripTest` resets the
+  shared local dev database including `admin_users`, which would have wiped the real admin login
+  (a gotcha already documented in the 2026-09-19 changelog entry).
+- 6 Playwright screenshots (`tools/screenshots/out/country-*.png`), captured against the running
+  local dev server (`http://127.0.0.1:8099`) using a throwaway QA admin account (created via
+  `composer admin-user:create`, deleted again afterward — the real `mahsa@televika.com` login was
+  never touched).
+- Two fields were exercised end-to-end through real HTTP `POST`s, not just static rendering:
+  - `POST /admin/clients/1` with `default_country=DE` → confirmed in `clients.default_country`,
+    screenshotted with `DE — Germany` pre-selected, then reverted to `NULL`.
+  - `POST /admin/vouchers/2/eligibility` with `country=DE,NL` (alongside the existing `package=2`
+    rule) → confirmed as two new `voucher_eligibility_rules` rows, screenshotted with `DE`/`NL`
+    pre-selected and visible as pills on the voucher card, then reverted to the original
+    `package=2`-only state.
+  - Backend validation was also proven directly: `POST /admin/clients/1` with
+    `default_country=ZZ` (an unsupported code, simulating a request that bypasses the `<select>`)
+    was rejected with `Country ZZ is not a configured market.` and left the database unchanged.
+  - The other four screenshots (new-client, pricing-group edit, provider-account edit,
+    routing-group edit) used real pre-existing seeded country data, so no mutation was needed.
 
-**What's left before Phase 30 — and the whole 30-phase plan — is truly done:** working through
-`.claude/docs/GoLiveChecklist.md` for real, against a real production host (following
-`DeploymentRunbook.md`) and real Stripe/Mollie/PayPal/Ziraat credentials for Televika — none of
-which exist yet and none of which I can generate. That's a business/infrastructure decision, not
-an engineering one.
+### Documentation updated
+
+- `CLAUDE.md` → *Frontend Stack*: renamed *Currency Input Rule* to *Country and Currency Input
+  Rule*, extended to cover both fields explicitly, with the ISO 3166-1 alpha-2 / ISO 4217
+  internal-code rule stated for both.
+- `.claude/Rule.md` §9: added a country-fields-are-never-free-text bullet mirroring the existing
+  currency bullet.
+- `.claude/docs/Ui.md`: added a "Country input (added 2026-09-20)" section mirroring "Currency
+  input", plus the converted-fields list.
+- `.claude/docs/Phases.md`: added a 2026-09-20 post-completion note under Phase 27, next to the
+  2026-09-19 currency note.
+- `.claude/Changelog.md`: full dated entry (2026-09-20) mirroring the currency entry's structure
+  and detail level, including the verification commands actually run.
+- `.claude/Voucher.md` was deliberately **not** touched — this is a UI-only change (no new
+  eligibility behavior, no schema change, no validation-rule change to the voucher module
+  itself), consistent with the currency work's own precedent of leaving that file alone for the
+  equivalent currency-field conversion.
+
+## Screens and files touched (exact list)
+
+**Screens changed:** Clients (New/Edit client), Packaging & Pricing (pricing groups),
+Providers (provider accounts, routing groups), Vouchers (eligibility).
+
+**Code files:** `src/Shared/Application/ReferenceCatalog.php`,
+`src/Shared/Infrastructure/Persistence/PdoReferenceCatalog.php`,
+`tests/Support/InMemoryReferenceCatalog.php`, `tests/Integration/ReferenceTablesTest.php`,
+`src/Http/Admin/BuildsClientsScreenContext.php`, `src/Http/Admin/AdminPackagingAction.php`,
+`src/Http/Admin/AdminProvidersAction.php`, `src/Http/Admin/AdminVouchersAction.php`,
+`src/Modules/Admin/Views/partials/country-select.html.twig` (new),
+`src/Modules/Admin/Views/clients.html.twig`, `src/Modules/Admin/Views/packaging.html.twig`,
+`src/Modules/Admin/Views/providers.html.twig`, `src/Modules/Admin/Views/vouchers.html.twig`.
+
+**Docs:** `CLAUDE.md`, `.claude/Rule.md`, `.claude/docs/Ui.md`, `.claude/docs/Phases.md`,
+`.claude/Changelog.md`.
+
+## Known limitations
+
+- No admin UI currently exposes the per-country package purchase-capability overrides
+  (`SetPackageCountryPurchaseCapabilitiesHandler`) as a form, so there was no free-text country
+  field there to convert — nothing to do until that screen is built.
+- This was treated as a standing UI-consistency fix (like the 2026-09-19 currency work), not a
+  new phase — no new interactive decision questions were asked, since it introduces no new
+  architecture or schema, only reuses the already-decided currency pattern and the already-built
+  `countries` reference table.
+
+## Next recommended step
+
+None required — this closes out the user's request. The next natural phase per
+`.claude/docs/Phases.md` remains Phase 28 (client callbacks / outbound notifications).

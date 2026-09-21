@@ -27,4 +27,14 @@ final class InMemoryReferenceCatalog implements ReferenceCatalog
     {
         return \in_array(strtoupper($code), $this->countries, true);
     }
+
+    public function listCurrencies(): array
+    {
+        return array_map(static fn (string $code): array => ['code' => $code, 'name' => $code], $this->currencies);
+    }
+
+    public function listCountries(): array
+    {
+        return array_map(static fn (string $code): array => ['code' => $code, 'name' => $code], $this->countries);
+    }
 }

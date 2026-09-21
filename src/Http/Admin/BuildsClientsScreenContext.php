@@ -7,6 +7,7 @@ namespace Gomrok\Http\Admin;
 use Gomrok\Modules\Admin\Application\AdminPermissions;
 use Gomrok\Modules\Admin\Application\Clients\ClientsScreenHandler;
 use Gomrok\Modules\Admin\Domain\AdminRole;
+use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
 
 /**
@@ -25,6 +26,7 @@ trait BuildsClientsScreenContext
     private function clientsScreenContext(
         AdminContext $context,
         ClientsScreenHandler $screen,
+        ReferenceCatalog $currencies,
         string $filter,
         ?int $selectedId,
         string $currentPath,
@@ -47,6 +49,11 @@ trait BuildsClientsScreenContext
             'success' => $success,
             'permissions' => array_map(static fn ($p) => $p->value, AdminPermissions::for($role)),
             'new_api_key' => $newApiKey,
+            // Controlled currency/country combo/select sources (neither is ever
+            // free text in the admin UI) — see partials/currency-select.html.twig
+            // and partials/country-select.html.twig.
+            'currencies' => $currencies->listCurrencies(),
+            'countries' => $currencies->listCountries(),
         ];
     }
 }

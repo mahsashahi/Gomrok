@@ -8,6 +8,7 @@ use Gomrok\Modules\Admin\Application\AdminPermissions;
 use Gomrok\Modules\Admin\Application\Vouchers\VouchersScreenHandler;
 use Gomrok\Modules\Admin\Domain\AdminRole;
 use Gomrok\Modules\Clients\Application\ClientDirectory;
+use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
 use Gomrok\Shared\Http\ViewRenderer;
 use Psr\Http\Message\ResponseInterface;
@@ -24,6 +25,7 @@ final readonly class AdminVouchersAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private VouchersScreenHandler $screen,
+        private ReferenceCatalog $currencies,
         private ViewRenderer $view,
     ) {
     }
@@ -48,6 +50,8 @@ final readonly class AdminVouchersAction
                 'error' => $error,
                 'success' => $success,
                 'permissions' => $permissions,
+                'currencies' => $this->currencies->listCurrencies(),
+                'countries' => $this->currencies->listCountries(),
             ]);
         }
 
@@ -63,6 +67,8 @@ final readonly class AdminVouchersAction
             'error' => $error,
             'success' => $success,
             'permissions' => $permissions,
+            'currencies' => $this->currencies->listCurrencies(),
+            'countries' => $this->currencies->listCountries(),
         ]);
     }
 

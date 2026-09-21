@@ -253,6 +253,24 @@ Do not use heavy frontend frameworks unless explicitly requested.
 
 The frontend should only be used where needed, especially for the admin panel.
 
+### Country and Currency Input Rule (Admin UI)
+
+All country and currency fields in the Gomrok admin UI must use controlled combo/select inputs.
+Country and currency values must not be entered manually as free text.
+
+This applies to every current and future admin form where a country or currency value is
+entered, including but not limited to: client create/edit, package pricing, pricing groups,
+price lists, voucher currency overrides, voucher eligibility rules, provider/account
+configuration where country or currency is selected, routing configuration, and any
+filter/search form involving country or currency.
+
+* Countries use ISO 3166-1 alpha-2 codes internally.
+* Currencies use ISO 4217 codes internally.
+* The backend must still validate the submitted country and currency codes and must not rely
+  only on frontend validation; unsupported or invalid codes are rejected.
+* Reuse one shared country-option source/component and one shared currency-option
+  source/component across screens rather than maintaining separate hardcoded lists per form.
+
 ## Admin Panel Requirement
 
 Gomrok must include an admin panel.

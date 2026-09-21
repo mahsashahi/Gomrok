@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gomrok\Tests\Integration;
 
 use Gomrok\Config\Settings;
+use Gomrok\Shared\Infrastructure\Persistence\PdoReferenceCatalog;
 use PDO;
 use PDOException;
 use PHPUnit\Framework\Attributes\Test;
@@ -75,6 +76,48 @@ final class ReferenceTablesTest extends TestCase
         $ziraat = $this->fetchAssoc("SELECT requires_registration, api_capable FROM provider_types WHERE code = 'ziraat'");
         self::assertEquals(0, $ziraat['requires_registration']);
         self::assertEquals(0, $ziraat['api_capable']);
+    }
+
+    #[Test]
+    public function listCurrenciesReturnsTheFullSortedReferenceListForTheAdminCurrencySelect(): void
+    {
+        $catalog = new PdoReferenceCatalog($this->pdo);
+
+        $currencies = $catalog->listCurrencies();
+
+        self::assertGreaterThan(150, \count($currencies));
+        self::assertSame(\count($currencies), $this->scalar('SELECT COUNT(*) FROM currencies'));
+
+        $codes = array_column($currencies, 'code');
+        self::assertSame($codes, array_map('strtoupper', $codes), 'every code must already be upper-case');
+        $sorted = $codes;
+        sort($sorted, \SORT_STRING);
+        self::assertSame($sorted, $codes, 'must be ordered by code, matching every <select> using it');
+
+        $usd = current(array_filter($currencies, static fn (array $c): bool => $c['code'] === 'USD'));
+        self::assertNotFalse($usd);
+        self::assertSame('US Dollar', $usd['name']);
+    }
+
+    #[Test]
+    public function listCountriesReturnsTheFullSortedReferenceListForTheAdminCountrySelect(): void
+    {
+        $catalog = new PdoReferenceCatalog($this->pdo);
+
+        $countries = $catalog->listCountries();
+
+        self::assertCount(19, $countries);
+        self::assertCount($this->scalar('SELECT COUNT(*) FROM countries'), $countries);
+
+        $codes = array_column($countries, 'code');
+        self::assertSame($codes, array_map('strtoupper', $codes), 'every code must already be upper-case');
+        $sorted = $codes;
+        sort($sorted, \SORT_STRING);
+        self::assertSame($sorted, $codes, 'must be ordered by code, matching every <select> using it');
+
+        $tr = current(array_filter($countries, static fn (array $c): bool => $c['code'] === 'TR'));
+        self::assertNotFalse($tr);
+        self::assertSame('Türkiye', $tr['name']);
     }
 
     private function scalar(string $sql): int

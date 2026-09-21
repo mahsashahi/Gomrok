@@ -1,0 +1,30 @@
+{# Shared country input controls (rule: country is never free text in the admin
+   UI — every screen imports this instead of maintaining its own <option> list).
+   `countries` is a list of {code, name} — see ReferenceCatalog::listCountries(),
+   sourced from the `countries` reference table (ISO 3166-1 alpha-2, the same
+   list the backend validates every country field against). #}
+
+{% macro select(field_name, model, countries, required = false, blank_label = null) %}
+<select name="{{ field_name }}" x-model="{{ model }}"{% if required %} required{% endif %}>
+  {% if blank_label is not null %}<option value=""{% if required %} disabled{% endif %}>{{ blank_label }}</option>{% endif %}
+  {% for c in countries %}
+  <option value="{{ c.code }}">{{ c.code }} — {{ c.name }}</option>
+  {% endfor %}
+</select>
+{% endmacro %}
+
+{# A controlled multi-value equivalent of a comma-separated free-text field.
+   `field_name` is a plain string field server-side (unchanged, still parsed as
+   a comma/whitespace-separated list) — the <select multiple> never submits
+   itself; a hidden input carries the joined value so no backend change is
+   needed. #}
+{% macro multiselect(field_name, model, countries) %}
+<select multiple size="6"
+        @change="{{ model }} = Array.from($event.target.selectedOptions).map(o => o.value).join(',')"
+        x-init="Array.from($el.options).forEach(o => o.selected = (({{ model }} || '')).split(',').map(s => s.trim()).filter(Boolean).includes(o.value))">
+  {% for c in countries %}
+  <option value="{{ c.code }}">{{ c.code }} — {{ c.name }}</option>
+  {% endfor %}
+</select>
+<input type="hidden" name="{{ field_name }}" :value="{{ model }}">
+{% endmacro %}

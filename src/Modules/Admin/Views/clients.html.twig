@@ -1,4 +1,6 @@
 {% extends 'layouts/shell.html.twig' %}
+{% import 'partials/currency-select.html.twig' as currency %}
+{% import 'partials/country-select.html.twig' as country %}
 
 {% block title %}Clients — Gomrok Admin{% endblock %}
 
@@ -150,7 +152,7 @@
         <div class="form-grid">
           <div class="form-field"><label>Client name</label><input type="text" name="name" x-model="form.name" required placeholder="Acme Inc"></div>
           <div class="form-field"><label>Client ID (slug)</label><input type="text" name="slug" x-model="form.slug" required placeholder="acme-inc"></div>
-          <div class="form-field"><label>Default currency</label><input type="text" name="default_currency" x-model="form.default_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Default currency</label>{{ currency.select('default_currency', 'form.default_currency', currencies, true) }}</div>
           <div class="form-field">
             <label>Environment</label>
             <select name="environment" x-model="form.environment">
@@ -158,7 +160,7 @@
               <option value="live">Live</option>
             </select>
           </div>
-          <div class="form-field"><label>Default country (optional)</label><input type="text" name="default_country" x-model="form.default_country" maxlength="2" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Default country (optional)</label>{{ country.select('default_country', 'form.default_country', countries, false, 'None') }}</div>
           <div class="form-field"><label>Timezone</label><input type="text" name="timezone" x-model="form.timezone"></div>
         </div>
         <div class="form-field-hint">The first API key is issued automatically in this environment — you'll get one chance to copy it.</div>
@@ -176,8 +178,8 @@
       <form method="post" :action="'/admin/clients/' + form.id">
         <div class="form-grid">
           <div class="form-field span-2"><label>Client name</label><input type="text" name="name" x-model="form.name" required></div>
-          <div class="form-field"><label>Default currency</label><input type="text" name="default_currency" x-model="form.default_currency" maxlength="3" style="text-transform:uppercase"></div>
-          <div class="form-field"><label>Default country (blank = none)</label><input type="text" name="default_country" x-model="form.default_country" maxlength="2" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Default currency</label>{{ currency.select('default_currency', 'form.default_currency', currencies, true) }}</div>
+          <div class="form-field"><label>Default country (blank = none)</label>{{ country.select('default_country', 'form.default_country', countries, false, 'None') }}</div>
           <div class="form-field span-2"><label>Timezone</label><input type="text" name="timezone" x-model="form.timezone"></div>
         </div>
         <div class="modal-footer">

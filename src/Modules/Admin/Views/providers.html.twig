@@ -1,4 +1,6 @@
 {% extends 'layouts/shell.html.twig' %}
+{% import 'partials/currency-select.html.twig' as currency %}
+{% import 'partials/country-select.html.twig' as country %}
 
 {% block title %}Providers — Gomrok Admin{% endblock %}
 
@@ -248,7 +250,7 @@
           <div class="form-field"><label>Slug (optional)</label><input type="text" name="slug" x-model="form.slug" placeholder="auto from type + mode"></div>
           <div class="form-field span-2"><label>Secret key</label><input type="text" name="secret_key" x-model="form.secret_key" required autocomplete="off"></div>
           <div class="form-field span-2"><label>Public key (optional)</label><input type="text" name="public_key" x-model="form.public_key" autocomplete="off"></div>
-          <div class="form-field span-2"><label>Countries (ISO codes, comma or space separated — blank = everywhere)</label><textarea name="countries" x-model="form.countries" rows="2" placeholder="DE, AT, CH"></textarea></div>
+          <div class="form-field span-2"><label>Countries (blank = everywhere)</label>{{ country.multiselect('countries', 'form.countries', countries) }}</div>
           <div class="form-field span-2">
             <label>Payment methods (blank = any)</label>
             <div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -278,7 +280,7 @@
         <div class="form-grid">
           <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
           <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
-          <div class="form-field span-2"><label>Countries (blank = everywhere)</label><textarea name="countries" x-model="form.countries" rows="2"></textarea></div>
+          <div class="form-field span-2"><label>Countries (blank = everywhere)</label>{{ country.multiselect('countries', 'form.countries', countries) }}</div>
           <div class="form-field span-2">
             <label>Payment methods (blank = any)</label>
             <div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -336,7 +338,7 @@
               <option value="android">Android</option>
             </select>
           </div>
-          <div class="form-field"><label>Currency (optional)</label><input type="text" name="currency_code" x-model="form.currency_code" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Currency (optional)</label>{{ currency.select('currency_code', 'form.currency_code', currencies, false, 'Any') }}</div>
           <div class="form-field span-2"><label class="checkbox-row"><input type="checkbox" name="is_default" x-model="form.is_default"> This is the default (fallback) group</label></div>
         </div>
         <div class="modal-footer">
@@ -354,8 +356,8 @@
       <form method="post" :action="'/admin/providers/groups/' + form.id">
         <div class="form-grid">
           <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
-          <div class="form-field"><label>Currency (blank = any)</label><input type="text" name="currency_code" x-model="form.currency_code" maxlength="3" style="text-transform:uppercase"></div>
-          <div class="form-field span-2"><label>Countries (blank = default group's fallback scope)</label><textarea name="countries" x-model="form.countries" rows="2"></textarea></div>
+          <div class="form-field"><label>Currency (blank = any)</label>{{ currency.select('currency_code', 'form.currency_code', currencies, false, 'Any') }}</div>
+          <div class="form-field span-2"><label>Countries (blank = default group's fallback scope)</label>{{ country.multiselect('countries', 'form.countries', countries) }}</div>
           <div class="form-field span-2">
             <label>Purchase types sold here</label>
             <div style="display:flex;gap:12px;flex-wrap:wrap">

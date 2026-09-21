@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gomrok\Http\Admin;
 
 use Gomrok\Modules\Admin\Application\Clients\ClientsScreenHandler;
+use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
 use Gomrok\Shared\Http\ViewRenderer;
 use Psr\Http\Message\ResponseInterface;
@@ -24,6 +25,7 @@ final readonly class AdminClientsAction
     public function __construct(
         private AdminContext $context,
         private ClientsScreenHandler $screen,
+        private ReferenceCatalog $currencies,
         private ViewRenderer $view,
     ) {
     }
@@ -41,6 +43,7 @@ final readonly class AdminClientsAction
         return $this->view->render($response, 'clients.html.twig', $this->clientsScreenContext(
             $this->context,
             $this->screen,
+            $this->currencies,
             $filter,
             $selectedId,
             $currentPath,

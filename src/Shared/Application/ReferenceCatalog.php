@@ -18,4 +18,20 @@ interface ReferenceCatalog
      * not merely a well-formed ISO code.
      */
     public function countryExists(string $code): bool;
+
+    /**
+     * The full supported currency list, for populating a controlled combo/select
+     * in the admin UI — currency must never be entered as free text there.
+     *
+     * @return list<array{code: string, name: string}>
+     */
+    public function listCurrencies(): array;
+
+    /**
+     * The full supported country list, for populating a controlled combo/select
+     * in the admin UI — country must never be entered as free text there.
+     *
+     * @return list<array{code: string, name: string}>
+     */
+    public function listCountries(): array;
 }

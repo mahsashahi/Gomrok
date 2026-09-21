@@ -10,6 +10,7 @@ use Gomrok\Modules\Clients\Application\CreateClient\CreateClientCommand;
 use Gomrok\Modules\Clients\Application\CreateClient\CreateClientHandler;
 use Gomrok\Modules\Clients\Application\CreateClient\CreateClientResult;
 use Gomrok\Modules\Clients\Domain\ApiKeyPrefix;
+use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Gomrok\Shared\Http\ViewRenderer;
@@ -39,6 +40,7 @@ final readonly class AdminClientsCreateAction
         private AdminContext $context,
         private ClientsScreenHandler $screen,
         private CreateClientHandler $handler,
+        private ReferenceCatalog $currencies,
         private ViewRenderer $view,
     ) {
     }
@@ -74,6 +76,7 @@ final readonly class AdminClientsCreateAction
         return $this->view->render($response, 'clients.html.twig', $this->clientsScreenContext(
             $this->context,
             $this->screen,
+            $this->currencies,
             'all',
             $value->clientId,
             $currentPath,

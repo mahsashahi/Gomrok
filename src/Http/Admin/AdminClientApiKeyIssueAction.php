@@ -10,6 +10,7 @@ use Gomrok\Modules\Clients\Application\IssueApiKey\IssueApiKeyCommand;
 use Gomrok\Modules\Clients\Application\IssueApiKey\IssueApiKeyHandler;
 use Gomrok\Modules\Clients\Application\IssueApiKey\IssueApiKeyResult;
 use Gomrok\Modules\Clients\Domain\ApiKeyPrefix;
+use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Gomrok\Shared\Http\ViewRenderer;
@@ -32,6 +33,7 @@ final readonly class AdminClientApiKeyIssueAction
         private AdminContext $context,
         private ClientsScreenHandler $screen,
         private IssueApiKeyHandler $handler,
+        private ReferenceCatalog $currencies,
         private ViewRenderer $view,
     ) {
     }
@@ -67,6 +69,7 @@ final readonly class AdminClientApiKeyIssueAction
         return $this->view->render($response, 'clients.html.twig', $this->clientsScreenContext(
             $this->context,
             $this->screen,
+            $this->currencies,
             'all',
             $clientId,
             $currentPath,

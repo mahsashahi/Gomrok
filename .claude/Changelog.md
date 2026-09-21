@@ -7,6 +7,131 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-20 — Admin UI: country fields are now a controlled combo/select everywhere
+
+**Summary.** Same standing UI-consistency rule as 2026-09-19, extended to country. `CLAUDE.md` →
+*Frontend Stack* → *Currency Input Rule* renamed to *Country and Currency Input Rule*; `.claude/Rule.md`
+§9 gained a matching bullet. **Country must never be entered as free text in the admin UI; every
+country field is a controlled combo/select (or, for a comma-joined multi-value field, a
+controlled multi-select) of ISO 3166-1 alpha-2 codes from one shared source.**
+
+**Backend — reused the existing source, no new tables.** `ReferenceCatalog` (already the
+interface every country-accepting handler validates against via `countryExists()`) gained
+`listCountries(): list<array{code, name}>`, reading the existing 19-row `countries` reference
+table (Phase 4 — unchanged schema, no migration). Implemented in `PdoReferenceCatalog`; the
+`InMemoryReferenceCatalog` test double gained a matching implementation. New integration test:
+`ReferenceTablesTest::listCountriesReturnsTheFullSortedReferenceListForTheAdminCountrySelect`.
+
+**Frontend — one shared Twig macro, mirroring the currency partial.** New
+`src/Modules/Admin/Views/partials/country-select.html.twig`: macro `select(field_name, model,
+countries, required, blank_label)` for a single-value field, `multiselect(field_name, model,
+countries)` for a comma-joined multi-value field — identical shape to
+`currency-select.html.twig`, so no backend parsing changes were needed anywhere (every affected
+field already split its raw string on `[,\s]+`). Every screen that shows a country field now
+imports this partial and receives `countries` in its render context (`AdminPackagingAction`,
+`AdminProvidersAction`, `AdminVouchersAction`, and `BuildsClientsScreenContext`).
+
+**8 fields converted, across 4 screens:**
+- `clients.html.twig` — New client / Edit client: `default_country`, optional/blank="None" (2,
+  single select).
+- `packaging.html.twig` — Create/Edit pricing group: `countries` (2, multi-select).
+- `providers.html.twig` — Connect/Edit provider account: `countries` (2); Edit routing group:
+  `countries` (1) (3, multi-select).
+- `vouchers.html.twig` — eligibility modal: `country`, converted to the multi-select variant (1).
+
+**Validated for real**, not just rendered: 6 Playwright screenshots
+(`tools/screenshots/out/country-*.png`). Two fields were driven end-to-end through a real HTTP
+`POST` against the running dev server (not just static rendering) and confirmed directly in the
+database, then reverted:
+- Client 1's `default_country` was set to `DE` via `POST /admin/clients/1`, confirmed in
+  `clients.default_country`, screenshotted with `DE — Germany` pre-selected in the edit modal,
+  then reverted to `NULL`.
+- Voucher `EU5`'s eligibility was set to `country=DE,NL` (alongside its existing `package=2`
+  rule) via `POST /admin/vouchers/2/eligibility`, confirmed as two new rows in
+  `voucher_eligibility_rules`, screenshotted with `DE`/`NL` pre-selected and the resulting pills
+  visible on the voucher detail card, then reverted to the original `package=2`-only rule set.
+- Backend validation was also exercised directly: `POST /admin/clients/1` with
+  `default_country=ZZ` (an unsupported code, simulating a request that bypasses the `<select>`)
+  was rejected with `Country ZZ is not a configured market.` and left the database unchanged —
+  confirming the select is a UX guard, not the only defense.
+- The other four screens (pricing-group edit, provider-account edit, routing-group edit,
+  new-client) already had real seeded country data, so those were screenshotted directly without
+  needing a mutation.
+
+**Files:** new `src/Modules/Admin/Views/partials/country-select.html.twig`; modified
+`src/Shared/Application/ReferenceCatalog.php`,
+`src/Shared/Infrastructure/Persistence/PdoReferenceCatalog.php`,
+`tests/Support/InMemoryReferenceCatalog.php`, `tests/Integration/ReferenceTablesTest.php`,
+`src/Http/Admin/{BuildsClientsScreenContext,AdminPackagingAction,AdminProvidersAction,
+AdminVouchersAction}.php`,
+`src/Modules/Admin/Views/{clients,packaging,providers,vouchers}.html.twig`; docs: `CLAUDE.md`,
+`.claude/Rule.md`, `.claude/docs/Ui.md`, `.claude/docs/Phases.md` (Phase 27 post-completion
+note).
+
+**Verified:** `composer test` (876 tests, unit suite, all green), `vendor/bin/phpstan analyse
+--memory-limit=1G` (no errors — the repo's default 128M limit isn't enough for the full
+1189-file analysis regardless of this change), `vendor/bin/phpunit --testsuite integration
+--filter ReferenceTablesTest` (5 tests green — the integration suite's `MigrationRoundTripTest`
+was deliberately excluded from this run since it resets the shared local dev database, including
+`admin_users`, per the 2026-09-19 entry's gotcha below).
+
+## 2026-09-19 — Admin UI: currency fields are now a controlled combo/select everywhere
+
+**Summary.** Outside the 30-phase structure — a standing UI-consistency rule, applied
+retroactively to every currency field Phase 27 built as free text. New rule added to `CLAUDE.md`
+→ *Frontend Stack* → *Currency Input Rule* and `.claude/Rule.md` §9: **currency must never be
+entered as free text in the admin UI; every currency field is a controlled combo/select of ISO
+4217 codes from one shared source.**
+
+**Backend — one shared source, reused everywhere.** `ReferenceCatalog` (already the interface
+every currency-accepting handler validates against via `currencyExists()`) gained
+`listCurrencies(): list<array{code, name}>`, reading the `currencies` reference table (the same
+166-row, full-ISO-4217 table — sourced from brick/money — every handler already validates
+against). Implemented in `PdoReferenceCatalog`; the `InMemoryReferenceCatalog` test double gained
+a matching implementation. New integration test:
+`ReferenceTablesTest::listCurrenciesReturnsTheFullSortedReferenceListForTheAdminCurrencySelect`.
+
+**Frontend — one shared Twig macro, no per-screen hardcoded lists.** New
+`src/Modules/Admin/Views/partials/currency-select.html.twig`: macro `select(field_name, model,
+currencies, required, blank_label)` for a single-value field, `multiselect(field_name, model,
+currencies)` for a comma-joined multi-value field (native `<select multiple>` + a hidden input,
+so the backend's existing comma/whitespace-split parsing needed zero changes). Every screen that
+shows a currency field now imports this partial and receives `currencies` in its render context
+(`AdminPackagingAction`, `AdminProvidersAction`, `AdminVouchersAction`, and
+`BuildsClientsScreenContext` — the trait shared by `AdminClientsAction`,
+`AdminClientsCreateAction`, `AdminClientApiKeyIssueAction`).
+
+**11 fields converted, across 4 screens:**
+- `clients.html.twig` — New client / Edit client: `default_currency` (2).
+- `packaging.html.twig` — Create/Edit package: `default_price_currency` (2); Create pricing group:
+  `currency`, required (1).
+- `providers.html.twig` — Create/Edit routing group: `currency_code`, optional/blank="Any" (2).
+- `vouchers.html.twig` — Create/Edit voucher: `min_purchase_currency` (2); per-currency override
+  modal: `currency`, required with a "Select currency…" placeholder (1); eligibility modal:
+  `currency`, converted to the multi-select variant (1).
+
+**Validated for real**, not just rendered: 8 Playwright screenshots
+(`tools/screenshots/out/currency-*.png`) of every converted field showing the real `<select>`
+with the correct value pre-selected (including edit-client's existing `EUR` pre-selecting
+correctly). The trickiest field — the eligibility multi-select — was driven end-to-end with
+`page.selectOption(['EUR', 'TRY'])`, submitted, and its two rows confirmed directly in
+`voucher_eligibility_rules` (then cleaned up).
+
+**Files:** new `src/Modules/Admin/Views/partials/currency-select.html.twig`; modified
+`src/Shared/Application/ReferenceCatalog.php`,
+`src/Shared/Infrastructure/Persistence/PdoReferenceCatalog.php`,
+`tests/Support/InMemoryReferenceCatalog.php`, `tests/Integration/ReferenceTablesTest.php`,
+`src/Http/Admin/{BuildsClientsScreenContext,AdminClientsAction,AdminClientsCreateAction,
+AdminClientApiKeyIssueAction,AdminPackagingAction,AdminProvidersAction,AdminVouchersAction}.php`,
+`src/Modules/Admin/Views/{clients,packaging,providers,vouchers}.html.twig`; docs: `CLAUDE.md`,
+`.claude/Rule.md`, `.claude/docs/Ui.md`, `.claude/docs/Phases.md` (Phase 27 post-completion note).
+
+**Known gotcha, not caused by this change but hit twice while validating it:**
+`composer test:integration` truncates/resets the shared local dev database, including
+`admin_users` — it wiped the real admin login created earlier in this session twice. Recreated
+both times via `composer admin-user:create`. Anyone using a real local admin login for manual
+testing should recreate it after running the integration suite.
+
 ## 2026-09-18 — Bootstrap CLI for the first admin user
 
 **Summary.** There was no way to create the very first admin panel account — `/admin/admin-users`

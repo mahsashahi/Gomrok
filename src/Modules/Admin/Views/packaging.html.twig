@@ -1,4 +1,6 @@
 {% extends 'layouts/shell.html.twig' %}
+{% import 'partials/currency-select.html.twig' as currency %}
+{% import 'partials/country-select.html.twig' as country %}
 
 {% block title %}Packaging & Pricing — Gomrok Admin{% endblock %}
 
@@ -298,7 +300,7 @@
           <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="has_trial" x-model="form.has_trial"> Has trial</label></div>
           <div class="form-field" x-show="form.has_trial"><label>Trial days</label><input type="number" min="1" name="trial_days" x-model="form.trial_days"></div>
           <div class="form-field"><label>Default price amount</label><input type="text" name="default_price_amount" x-model="form.default_price_amount" placeholder="29.00"></div>
-          <div class="form-field"><label>Currency</label><input type="text" name="default_price_currency" x-model="form.default_price_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Currency</label>{{ currency.select('default_price_currency', 'form.default_price_currency', currencies) }}</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
@@ -326,7 +328,7 @@
           <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="has_trial" x-model="form.has_trial"> Has trial</label></div>
           <div class="form-field" x-show="form.has_trial"><label>Trial days</label><input type="number" min="1" name="trial_days" x-model="form.trial_days"></div>
           <div class="form-field"><label>Default price amount</label><input type="text" name="default_price_amount" x-model="form.default_price_amount"></div>
-          <div class="form-field"><label>Currency</label><input type="text" name="default_price_currency" x-model="form.default_price_currency" maxlength="3" style="text-transform:uppercase"></div>
+          <div class="form-field"><label>Currency</label>{{ currency.select('default_price_currency', 'form.default_price_currency', currencies) }}</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
@@ -344,7 +346,7 @@
         <div class="form-grid">
           <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
           <div class="form-field"><label>Slug (optional)</label><input type="text" name="slug" x-model="form.slug" placeholder="auto from name"></div>
-          <div class="form-field"><label>Currency</label><input type="text" name="currency" x-model="form.currency" maxlength="3" style="text-transform:uppercase" required></div>
+          <div class="form-field"><label>Currency</label>{{ currency.select('currency', 'form.currency', currencies, true) }}</div>
           <div class="form-field"><label>Priority</label><input type="number" min="0" name="priority" x-model="form.priority" :disabled="form.is_default"></div>
           <div class="form-field"><label>Device type (optional)</label>
             <select name="device_type" x-model="form.device_type">
@@ -356,8 +358,8 @@
           </div>
           <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="is_default" x-model="form.is_default"> This is the default (fallback) group</label></div>
           <div class="form-field span-2" x-show="!form.is_default">
-            <label>Countries (ISO codes, comma or space separated)</label>
-            <textarea name="countries" x-model="form.countries" rows="2" placeholder="DE, AT, CH"></textarea>
+            <label>Countries</label>
+            {{ country.multiselect('countries', 'form.countries', countries) }}
           </div>
         </div>
         <div class="modal-footer">
@@ -375,8 +377,8 @@
       <form method="post" :action="'/admin/packaging/groups/' + form.id">
         <div class="form-grid">
           <div class="form-field span-2">
-            <label>Countries (ISO codes, comma or space separated)</label>
-            <textarea name="countries" x-model="form.countries" rows="2"></textarea>
+            <label>Countries</label>
+            {{ country.multiselect('countries', 'form.countries', countries) }}
           </div>
           <div class="form-field"><label class="checkbox-row"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
         </div>
