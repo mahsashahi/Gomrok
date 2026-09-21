@@ -107,27 +107,44 @@ Use a dedicated database user scoped to only the `gomrok` schema — never the M
 in `.env`. If the database runs on a separate host from the app, use its address for `DB_HOST`
 and restrict inbound MySQL (3306) to only the app host's IP at the firewall/security-group level.
 
-## 6. Running migrations
+## 6. Running migrations and seeding reference data
 
 ```bash
 cd /var/www/gomrok/app
-sudo -u gomrok vendor/bin/phinx migrate   # = `composer migrate`, but composer scripts need --no-dev's excluded phinx binary directly
+sudo -u gomrok vendor/bin/phinx migrate   # = `composer migrate` (phinx is a regular `require`
+                                           # dependency, not `require-dev` — --no-dev never drops it)
 sudo -u gomrok vendor/bin/phinx status    # confirm every migration shows "up"
+sudo -u gomrok vendor/bin/phinx seed:run  # = `composer seed` — see below for why this is safe here
 ```
 
-Do **not** run `composer seed` / `composer db:setup`'s seed step in production — the seeders that
-create demo data (`ClientsSeeder`'s `local-dev` client, `ProviderAccountsSeeder`'s test account,
-etc.) are explicitly `APP_ENV`-gated to be a no-op outside `local`/`testing`, but the reference
-seeders (`CurrenciesSeeder`, `CountriesSeeder`, `ProviderTypesSeeder`) **do** need to run once —
-they are the base/lookup data every environment needs (Phase 4):
+**Corrected 2026-09-21 — the previous version of this section was wrong and does not work.** It
+told operators to skip the full seed step and instead run three individually-named seeders with
+`phinx seed:run -s CurrenciesSeeder` (etc.). That exact command **fails** —
+`The seed class "CurrenciesSeeder" does not exist` — because Phinx's `-s` filter needs the fully
+qualified class name (`-s 'Gomrok\Database\Seeds\CurrenciesSeeder'`), not the short name. It also
+assumed `phinx` is a `require-dev`-only binary excluded by `--no-dev`, which is false —
+`robmorgan/phinx` is a plain `require` dependency (`composer.json`), present in every install. If
+this section was followed literally on a real deploy, the three commands above errored out and
+`currencies`/`countries`/`provider_types` were silently left empty — which is exactly what makes
+the admin UI's currency/country dropdowns (client create/edit, provider accounts, pricing groups,
+routing groups, voucher eligibility) render with no options. This was the root cause of a real
+bug — see `.claude/Changelog.md`'s 2026-09-21 entry.
 
-```bash
-sudo -u gomrok vendor/bin/phinx seed:run -s CurrenciesSeeder
-sudo -u gomrok vendor/bin/phinx seed:run -s CountriesSeeder
-sudo -u gomrok vendor/bin/phinx seed:run -s ProviderTypesSeeder
-```
+The fix is simpler than the old advice: **run the plain, unfiltered `phinx seed:run` /
+`composer seed` in every environment, including production.** This is safe because every seeder
+that creates demo/test data (`ClientsSeeder`, `PackagesSeeder`, `PricingSeeder`,
+`ProviderAccountsSeeder`, `ProviderGroupsSeeder`, `VouchersSeeder`) is individually gated to a
+no-op unless `APP_ENV` is `local`/`testing` — confirmed by reading every seeder in
+`src/Database/Seeds/`. Only the reference/lookup seeders actually run in production
+(`CurrenciesSeeder`, `CountriesSeeder`, `ProviderTypesSeeder`, `ProviderCapabilitiesSeeder`,
+`ProviderTypeDeclarationsSeeder`), and all of them are idempotent
+(`INSERT ... ON DUPLICATE KEY UPDATE` on a natural key) — safe to re-run on every deploy, and
+verified (`tests/Integration/ProductionSeedSafetyTest.php`) to leave `clients` and `admin_users`
+row counts unchanged.
 
-All three are idempotent (`INSERT ... ON DUPLICATE KEY UPDATE`) — safe to re-run on every deploy.
+Run `phinx seed:run` right after every `phinx migrate` — on the very first deploy and on every
+subsequent one — the same way `composer db:setup` already chains `migrate` + `seed` for local
+dev. There is no separate "production seed" command to remember.
 
 ## 7. Filesystem permissions
 

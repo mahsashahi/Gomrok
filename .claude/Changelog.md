@@ -7,6 +7,80 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-21 — Fix: empty currency/country dropdowns on the New Client form (deployment docs bug)
+
+**Reported.** The "Default Currency" and "Default Country" dropdowns in the New Client form were
+empty.
+
+**Root cause — not a code bug.** `ReferenceCatalog`, the seeders, and the Twig `<select>`
+partials (2026-09-19/20 work) all function correctly once the `currencies`/`countries` reference
+tables have rows. The actual defect is in `.claude/knowledge/DeploymentRunbook.md` §6 (and
+duplicated in `.claude/docs/Commands.md` and `.claude/docs/GoLiveChecklist.md`): the documented
+production seeding command,
+
+```bash
+vendor/bin/phinx seed:run -s CurrenciesSeeder
+```
+
+**fails outright** — `The seed class "CurrenciesSeeder" does not exist` — because Phinx's `-s`
+filter requires the fully qualified class name (`Gomrok\Database\Seeds\CurrenciesSeeder`), not
+the short name. The runbook's stated reason for avoiding the plain `composer seed` in production
+("composer scripts need --no-dev's excluded phinx binary directly") was also factually wrong:
+`robmorgan/phinx` is a plain `require` dependency in `composer.json`, never excluded by
+`--no-dev`. On any environment where `phinx migrate` was run without a working seed step
+following it, `currencies`/`countries`/`provider_types` are left at zero rows — which is exactly
+what renders the admin UI's currency/country `<select>` elements with no options.
+
+**Reproduced end-to-end**, without touching the real database: created a throwaway MySQL schema
+(`gomrok_freshtest`, dropped afterward), ran `phinx migrate` alone → `currencies`/`countries`/
+`provider_types` = 0 rows, confirming the reported symptom exactly. Confirmed the documented
+`-s CurrenciesSeeder` command fails with the exact error above, and that the fully qualified form
+works. Confirmed the plain, unfiltered `phinx seed:run` under `APP_ENV=production` correctly
+populates all three reference tables (166/19/4 rows) while explicitly skipping every seeder that
+creates client/demo/test data (visible in its own output: `ClientsSeeder skipped: APP_ENV is
+"production"`, and five others). Ran it a second time — identical row counts, no duplicates, no
+errors.
+
+**Fix — documentation only, no schema or application code change.** Corrected the three affected
+docs to stop recommending per-seeder invocation and instead document the plain `phinx seed:run` /
+`composer seed` as the standard command for every environment, including production — safe
+because every one of the six seeders that create non-reference data (`ClientsSeeder`,
+`PackagesSeeder`, `PricingSeeder`, `ProviderAccountsSeeder`, `ProviderGroupsSeeder`,
+`VouchersSeeder`) is independently `APP_ENV`-gated to a no-op outside `local`/`testing`
+(re-verified by reading every seeder in `src/Database/Seeds/` — this was already true; the
+runbook just never relied on it). Also corrected a stale "18 curated markets" count in
+`Commands.md` to the actual 19.
+
+**New regression test** — `tests/Integration/ProductionSeedSafetyTest.php`. Unlike
+`MigrationRoundTripTest`, it never rolls back or re-migrates the schema (which would wipe
+`admin_users`, per the 2026-09-19 entry's own gotcha) — it calls Phinx's `Manager::seed()`
+directly against the already-migrated shared dev database with `APP_ENV` forced to `production`
+for the call, then restores it. Two tests: (1) a production-mode seed run populates
+`currencies`/`countries`/`provider_types` (>150 / 19 / 4) and leaves `clients`/`admin_users` row
+counts unchanged; (2) running it twice in a row is idempotent (identical row counts). Verified
+against the real shared dev database — `admin_users` stayed at 1 row, `clients` at 2, throughout.
+
+**Files:** new `tests/Integration/ProductionSeedSafetyTest.php`; docs:
+`.claude/knowledge/DeploymentRunbook.md` §6 (rewritten), `.claude/docs/Commands.md` (corrected
+command + stale count), `.claude/docs/GoLiveChecklist.md` (corrected command).
+
+**No migration, no seeder logic change.** `CurrenciesSeeder`, `CountriesSeeder`, and their data
+(full ISO 4217 currencies via `brick/money`, 19 curated countries in
+`src/Database/Seeds/data/countries.json`) were already correct, complete, and idempotent —
+confirmed by this investigation, not changed by it.
+
+**Exact commands to fix any currently-affected environment** (idempotent — safe to run even if
+some rows already exist; does not touch `clients` or `admin_users`):
+
+```bash
+# Local dev
+composer seed
+
+# Any server (production or otherwise)
+cd /var/www/gomrok/app   # or wherever the app is deployed
+sudo -u gomrok vendor/bin/phinx seed:run
+```
+
 ## 2026-09-20 — Admin UI: country fields are now a controlled combo/select everywhere
 
 **Summary.** Same standing UI-consistency rule as 2026-09-19, extended to country. `CLAUDE.md` →

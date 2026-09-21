@@ -32,8 +32,9 @@ input (a real hosting target, real provider credentials — none of which exist 
       `APP_ENCRYPTION_KEY`, and a real non-default checkout-return-token secret — confirmed
       indirectly by the app actually booting (`ProductionSafetyGuard`, Phase 30A Q5, refuses to
       start otherwise).
-- [ ] Real base reference data is seeded (`vendor/bin/phinx seed:run -s CurrenciesSeeder` /
-      `CountriesSeeder` / `ProviderTypesSeeder` — `.claude/knowledge/DeploymentRunbook.md` §6).
+- [ ] Real base reference data is seeded (`vendor/bin/phinx seed:run` — the plain, unfiltered
+      form; safe in production since every demo-data seeder is `APP_ENV`-gated to a no-op —
+      `.claude/knowledge/DeploymentRunbook.md` §6).
 - [ ] The specific countries/currencies Televika needs are present in `countries`/`currencies` —
       check against the curated list in `src/Database/Seeds/data/countries.json`; add any missing
       market before continuing (a new country requires its own confirmed schema/seed change,

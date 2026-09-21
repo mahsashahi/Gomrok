@@ -68,17 +68,29 @@ composer db:fresh             # rollback everything → migrate (no seed)
 composer migrate              # apply pending migrations only
 composer rollback             # roll back the last migration
 composer rollback:all         # roll back every migration (empty schema)
-composer seed                 # (re-)run all seeders (idempotent)
+composer seed                 # (re-)run all seeders (idempotent) — safe in every environment,
+                               # including production: every demo-data seeder (ClientsSeeder,
+                               # PackagesSeeder, PricingSeeder, ProviderAccountsSeeder,
+                               # ProviderGroupsSeeder, VouchersSeeder) is APP_ENV-gated to a
+                               # no-op outside local/testing; only the reference-data seeders
+                               # (Currencies, Countries, ProviderTypes, ProviderCapabilities,
+                               # ProviderTypeDeclarations) actually run elsewhere
 vendor/bin/phinx status       # what's applied
-vendor/bin/phinx seed:run -s CurrenciesSeeder   # one seeder
 ```
+
+`vendor/bin/phinx seed:run -s CurrenciesSeeder` (a short class name) does **not** work — Phinx's
+`-s` filter needs the fully qualified name, `-s 'Gomrok\Database\Seeds\CurrenciesSeeder'`. Don't
+bother: just run the plain `composer seed` / `phinx seed:run` above, which is safe everywhere per
+the note on that line (this was the root cause of a real bug — empty currency/country dropdowns
+in the admin UI on any environment where only `migrate` was run — see `.claude/Changelog.md`'s
+2026-09-21 entry and `.claude/knowledge/DeploymentRunbook.md` §6).
 
 Migrations are namespaced (`Gomrok\Database\Migrations\`), files
 `src/Database/Migrations/YYYYMMDDHHMMSS_*.php`, `up()`/`down()`. Seeders in
 `src/Database/Seeds/` (`CurrenciesSeeder` → `CountriesSeeder` → `ProviderTypesSeeder`).
 Phinx reads `phinx.php` (DB settings from the environment / `.env`).
 
-Reference data: `currencies` (full ISO, from `brick/money`), `countries` (18 curated markets,
+Reference data: `currencies` (full ISO, from `brick/money`), `countries` (19 curated markets,
 from `src/Database/Seeds/data/countries.json`), `provider_types` (4).
 
 ## Admin panel — first admin user (bootstrap only)

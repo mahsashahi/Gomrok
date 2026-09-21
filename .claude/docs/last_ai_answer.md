@@ -1,113 +1,120 @@
-# Q: Convert all admin-UI country fields to controlled combo/select, mirroring the currency rule
+# Q: New Client form's currency/country dropdowns are empty — investigate and fix
 
-## What was done
+## Root cause
 
-Extended the existing "currency is never free text" admin-UI pattern (built 2026-09-19) to
-country fields, exactly mirroring its architecture — no new database tables, no schema change,
-since the `countries` reference table (19 rows, Phase 4) and `CountryCode`/`countryExists()`
-backend validation already existed for every affected field.
+**Not a code bug.** `ReferenceCatalog::listCurrencies()`/`listCountries()`, the seeders
+(`CurrenciesSeeder`, `CountriesSeeder`), and the Twig `<select>` partials all work correctly once
+the `currencies`/`countries` reference tables have rows — verified by fetching the live New
+Client form's raw HTML and counting 166 `<option>`s for currency and 20 for country (19 markets +
+blank).
 
-### Backend (reused the existing `ReferenceCatalog` interface, no new services)
+The actual defect is in the **deployment documentation**:
+`.claude/knowledge/DeploymentRunbook.md` §6 (duplicated in `.claude/docs/Commands.md` and
+`.claude/docs/GoLiveChecklist.md`) told operators to skip the full seed step in production and
+instead run:
 
-- `src/Shared/Application/ReferenceCatalog.php` — added `listCountries(): list<array{code, name}>`.
-- `src/Shared/Infrastructure/Persistence/PdoReferenceCatalog.php` — implemented via
-  `SELECT code, name FROM countries ORDER BY code`.
-- `tests/Support/InMemoryReferenceCatalog.php` — matching test-double implementation.
-- `tests/Integration/ReferenceTablesTest.php` — new test
-  `listCountriesReturnsTheFullSortedReferenceListForTheAdminCountrySelect` (sorted, upper-case,
-  19 rows, `TR` → `Türkiye`).
+```bash
+vendor/bin/phinx seed:run -s CurrenciesSeeder
+```
 
-### Frontend
+This command **fails** — `The seed class "CurrenciesSeeder" does not exist` — because Phinx's
+`-s` filter needs the fully qualified class name
+(`-s 'Gomrok\Database\Seeds\CurrenciesSeeder'`), not the short name. The runbook's stated reason
+for avoiding `composer seed` in production ("phinx is excluded by --no-dev") was also wrong:
+`robmorgan/phinx` is a plain `require` dependency, never a dev-only one. On any environment where
+`phinx migrate` ran without a working follow-up seed step, `currencies`/`countries`/
+`provider_types` are left at zero rows — which is exactly what renders the dropdowns empty.
 
-- New `src/Modules/Admin/Views/partials/country-select.html.twig` — `select()` and
-  `multiselect()` macros, structurally identical to `currency-select.html.twig`. The multiselect
-  emits a comma-joined hidden input, so every backend `preg_split('/[,\s]+/', ...)` parser needed
-  zero changes.
-- Wired `'countries' => ...->listCountries()` into the render context of
-  `BuildsClientsScreenContext` (shared by 3 client actions), `AdminPackagingAction`,
-  `AdminProvidersAction`, `AdminVouchersAction` — reusing the already-injected `ReferenceCatalog`
-  instance in each (no constructor changes needed).
-- **8 fields converted across 4 screens:**
-  - `clients.html.twig`: New/Edit client `default_country` (2, single select, blank="None").
-  - `packaging.html.twig`: Create/Edit pricing group `countries` (2, multiselect).
-  - `providers.html.twig`: Connect/Edit provider account `countries` (2), Edit routing group
-    `countries` (1) — 3, multiselect.
-  - `vouchers.html.twig`: eligibility modal `country` (1, multiselect).
+## Reproduction (isolated, no risk to real data)
 
-### Verification (real, not described)
+Created a throwaway MySQL schema (`gomrok_freshtest`, dropped after), never touching the real
+`gomrok` schema:
 
-- `composer test` — 876 unit tests, all green (before and after).
-- `vendor/bin/phpstan analyse --memory-limit=1G` — no errors (repo's default 128M limit is
-  insufficient for the full 1189-file run regardless of this change; pre-existing).
-- `composer cs` — the only 7 flagged files are pre-existing import-order issues untouched by this
-  change.
-- `vendor/bin/phpunit --testsuite integration --filter ReferenceTablesTest` — 5 tests green.
-  Deliberately did *not* run the full integration suite: `MigrationRoundTripTest` resets the
-  shared local dev database including `admin_users`, which would have wiped the real admin login
-  (a gotcha already documented in the 2026-09-19 changelog entry).
-- 6 Playwright screenshots (`tools/screenshots/out/country-*.png`), captured against the running
-  local dev server (`http://127.0.0.1:8099`) using a throwaway QA admin account (created via
-  `composer admin-user:create`, deleted again afterward — the real `mahsa@televika.com` login was
-  never touched).
-- Two fields were exercised end-to-end through real HTTP `POST`s, not just static rendering:
-  - `POST /admin/clients/1` with `default_country=DE` → confirmed in `clients.default_country`,
-    screenshotted with `DE — Germany` pre-selected, then reverted to `NULL`.
-  - `POST /admin/vouchers/2/eligibility` with `country=DE,NL` (alongside the existing `package=2`
-    rule) → confirmed as two new `voucher_eligibility_rules` rows, screenshotted with `DE`/`NL`
-    pre-selected and visible as pills on the voucher card, then reverted to the original
-    `package=2`-only state.
-  - Backend validation was also proven directly: `POST /admin/clients/1` with
-    `default_country=ZZ` (an unsupported code, simulating a request that bypasses the `<select>`)
-    was rejected with `Country ZZ is not a configured market.` and left the database unchanged.
-  - The other four screenshots (new-client, pricing-group edit, provider-account edit,
-    routing-group edit) used real pre-existing seeded country data, so no mutation was needed.
+1. `phinx migrate` alone → `currencies`/`countries`/`provider_types` = 0 rows. **Reproduces the
+   reported bug exactly.**
+2. `phinx seed:run -s CurrenciesSeeder` → fails with the exact documented-command error above.
+3. `phinx seed:run -s 'Gomrok\Database\Seeds\CurrenciesSeeder'` → works.
+4. Plain `phinx seed:run` (no filter) under `APP_ENV=production` → correctly populates all three
+   reference tables (166/19/4 rows) while explicitly skipping every seeder that creates
+   client/demo/test data (`ClientsSeeder skipped: APP_ENV is "production"`, and five others — all
+   individually gated, confirmed by reading every file in `src/Database/Seeds/`).
+5. Ran step 4 again → identical counts, no duplicates, no errors (idempotent).
 
-### Documentation updated
+## Fix
 
-- `CLAUDE.md` → *Frontend Stack*: renamed *Currency Input Rule* to *Country and Currency Input
-  Rule*, extended to cover both fields explicitly, with the ISO 3166-1 alpha-2 / ISO 4217
-  internal-code rule stated for both.
-- `.claude/Rule.md` §9: added a country-fields-are-never-free-text bullet mirroring the existing
-  currency bullet.
-- `.claude/docs/Ui.md`: added a "Country input (added 2026-09-20)" section mirroring "Currency
-  input", plus the converted-fields list.
-- `.claude/docs/Phases.md`: added a 2026-09-20 post-completion note under Phase 27, next to the
-  2026-09-19 currency note.
-- `.claude/Changelog.md`: full dated entry (2026-09-20) mirroring the currency entry's structure
-  and detail level, including the verification commands actually run.
-- `.claude/Voucher.md` was deliberately **not** touched — this is a UI-only change (no new
-  eligibility behavior, no schema change, no validation-rule change to the voucher module
-  itself), consistent with the currency work's own precedent of leaving that file alone for the
-  equivalent currency-field conversion.
+Documentation-only — no schema change, no seeder logic change (both were already correct,
+complete, and idempotent). Corrected three docs to recommend the plain, unfiltered
+`phinx seed:run` / `composer seed` as the standard command for every environment including
+production:
 
-## Screens and files touched (exact list)
+- `.claude/knowledge/DeploymentRunbook.md` §6 — rewritten with the corrected command and a full
+  explanation of why the plain form is safe (every demo-data seeder is `APP_ENV`-gated).
+- `.claude/docs/Commands.md` — corrected the same broken example command; also fixed a stale
+  "18 curated markets" count to the actual 19.
+- `.claude/docs/GoLiveChecklist.md` — corrected its own copy of the broken command.
 
-**Screens changed:** Clients (New/Edit client), Packaging & Pricing (pricing groups),
-Providers (provider accounts, routing groups), Vouchers (eligibility).
+## New test
 
-**Code files:** `src/Shared/Application/ReferenceCatalog.php`,
-`src/Shared/Infrastructure/Persistence/PdoReferenceCatalog.php`,
-`tests/Support/InMemoryReferenceCatalog.php`, `tests/Integration/ReferenceTablesTest.php`,
-`src/Http/Admin/BuildsClientsScreenContext.php`, `src/Http/Admin/AdminPackagingAction.php`,
-`src/Http/Admin/AdminProvidersAction.php`, `src/Http/Admin/AdminVouchersAction.php`,
-`src/Modules/Admin/Views/partials/country-select.html.twig` (new),
-`src/Modules/Admin/Views/clients.html.twig`, `src/Modules/Admin/Views/packaging.html.twig`,
-`src/Modules/Admin/Views/providers.html.twig`, `src/Modules/Admin/Views/vouchers.html.twig`.
+`tests/Integration/ProductionSeedSafetyTest.php` — two tests, safe to run against the real shared
+dev database (unlike `MigrationRoundTripTest`, it never rolls back/re-migrates, so `admin_users`
+is never touched):
 
-**Docs:** `CLAUDE.md`, `.claude/Rule.md`, `.claude/docs/Ui.md`, `.claude/docs/Phases.md`,
-`.claude/Changelog.md`.
+1. `seedingUnderProductionPopulatesReferenceDataWithoutTouchingClientOrAdminData` — forces
+   `APP_ENV=production` for one `Manager::seed()` call, asserts `currencies`/`countries`/
+   `provider_types` end up populated (>150 / 19 / 4) and `clients`/`admin_users` row counts are
+   unchanged.
+2. `seedingUnderProductionTwiceInARowIsIdempotent` — runs it twice, asserts identical row counts.
 
-## Known limitations
+Verified against the real dev DB: `admin_users` stayed at 1, `clients` at 2, throughout.
 
-- No admin UI currently exposes the per-country package purchase-capability overrides
-  (`SetPackageCountryPurchaseCapabilitiesHandler`) as a form, so there was no free-text country
-  field there to convert — nothing to do until that screen is built.
-- This was treated as a standing UI-consistency fix (like the 2026-09-19 currency work), not a
-  new phase — no new interactive decision questions were asked, since it introduces no new
-  architecture or schema, only reuses the already-decided currency pattern and the already-built
-  `countries` reference table.
+## Verification run
+
+- `composer test` — 876 unit tests, green.
+- `vendor/bin/phpstan analyse --memory-limit=1G` — no errors.
+- `vendor/bin/php-cs-fixer fix --dry-run` on the new test file — clean.
+- `vendor/bin/phpunit --testsuite integration --filter "ReferenceTablesTest|ProductionSeedSafetyTest"`
+  — 7 tests, green. (Full integration suite deliberately not run — `MigrationRoundTripTest` wipes
+  `admin_users`.)
+- Live HTML check on the running local dev server: New Client form's `default_currency` select
+  has 166 `<option>`s, `default_country` has 20 — confirming the form works correctly once
+  reference data exists.
+
+## Exact commands to fix any currently-affected environment
+
+Idempotent — safe to run repeatedly, does not touch `clients` or `admin_users`:
+
+```bash
+# Local dev
+composer seed
+
+# Any server (production or otherwise)
+cd /var/www/gomrok/app   # wherever the app is deployed
+sudo -u gomrok vendor/bin/phinx seed:run
+```
+
+## Requirement-by-requirement
+
+1. Dropdown options come from `currencies`/`countries` DB tables via `ReferenceCatalog`, not
+   hardcoded — already true, unchanged, reconfirmed.
+2. `CountriesSeeder.php`/`CurrenciesSeeder.php` checked — both already correct and idempotent
+   (`ON DUPLICATE KEY UPDATE` on `code`, a unique-indexed column).
+3/4. Reference data is inserted automatically (via `phinx seed:run`, now correctly documented)
+   and idempotently — verified with a real double-run against a fresh schema and against the
+   real dev schema.
+5. Currencies: full ISO 4217 (166, via `brick/money`). Countries: the 19 markets Gomrok currently
+   operates in (`src/Database/Seeds/data/countries.json`) — deliberately curated, not the full
+   ISO 3166 list, per the `countries` table's own migration docblock; unchanged by this fix since
+   it was already complete and correct.
+6. Verified — see "Verification run" above.
+7/8. No database reset, no client/admin-user data touched at any point — verified by row-count
+   snapshots before/after every operation, both on the throwaway schema and the real one.
+9. Tests run and added — see above.
+10. Exact commands given — see above.
+11. Deployment documentation updated so a fresh installation (and every subsequent deploy)
+   populates reference data with one correct, safe command right after migrations —
+   `.claude/knowledge/DeploymentRunbook.md` §6.
 
 ## Next recommended step
 
-None required — this closes out the user's request. The next natural phase per
-`.claude/docs/Phases.md` remains Phase 28 (client callbacks / outbound notifications).
+None required — this closes out the report. `.claude/docs/Phases.md`'s next open phase remains
+Phase 28 (client callbacks / outbound notifications).
