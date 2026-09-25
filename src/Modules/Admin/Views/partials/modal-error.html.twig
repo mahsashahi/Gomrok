@@ -1,0 +1,13 @@
+{# Shared "validation failed" banner for a create/edit modal (rule:
+   .claude/docs/Ui.md's validation-preserving forms — every modal's own
+   `error` state comes from the shared adminModalState() factory in
+   admin-modal-state.js). Dismissing it only clears `error`; it never closes
+   or resets the modal/form itself. Call right under the modal's title/
+   subtitle, before the <form>. #}
+
+{% macro banner() %}
+<div class="modal-error-banner" x-show="error" x-cloak>
+  <span x-text="error"></span>
+  <button type="button" class="modal-error-dismiss" @click="dismissError()" aria-label="Dismiss error">&times;</button>
+</div>
+{% endmacro %}
