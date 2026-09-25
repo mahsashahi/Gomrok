@@ -6,6 +6,7 @@ namespace Gomrok\Modules\Admin\Application\Packaging;
 
 use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Packages\Application\PackageDirectory;
+use Gomrok\Modules\Packages\Application\PackagePurchaseCapabilityResolver;
 use Gomrok\Modules\Packages\Application\PackageSummary;
 use Gomrok\Modules\Pricing\Application\PriceListDirectory;
 use Gomrok\Modules\Pricing\Application\PriceListResolver;
@@ -18,6 +19,7 @@ use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupPackageRepository;
 use Gomrok\Modules\Pricing\Domain\PricingGroupRepository;
 use Gomrok\Modules\Providers\Application\ProviderAccountDirectory;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Shared\Domain\Currency;
 use Gomrok\Shared\Domain\Money;
 use Psr\Clock\ClockInterface;
@@ -36,6 +38,7 @@ final readonly class GroupsTabHandler
     public function __construct(
         private ClientDirectory $clients,
         private PackageDirectory $packages,
+        private PackagePurchaseCapabilityResolver $capabilities,
         private PricingGroupRepository $pricingGroups,
         private PriceListDirectory $priceLists,
         private PriceResolver $priceResolver,
@@ -205,6 +208,7 @@ final readonly class GroupsTabHandler
         $price = Money::fromMinor($resolved->amountMinor, Currency::of($resolved->currencyCode));
         $defaultCurrencyPrice = $this->convert($price, $defaultCurrency, $package->clientId);
         $defaultCurrencyPriceLabel = $defaultCurrencyPrice !== null ? $defaultCurrencyPrice->format('en_US') : null;
+        $months = $this->durationMonths($package);
 
         $override = $this->groupPackages->find($groupId, $package->id);
 
@@ -214,7 +218,9 @@ final readonly class GroupsTabHandler
             $package->name,
             $this->defaultPriceLabel($package),
             $price->format('en_US'),
+            $this->monthlyPriceLabel($price, $months),
             $defaultCurrencyPriceLabel,
+            $defaultCurrencyPrice !== null ? $this->monthlyPriceLabel($defaultCurrencyPrice, $months) : null,
             $package->status,
             $package->highlighted,
             $package->badge,
@@ -231,6 +237,35 @@ final readonly class GroupsTabHandler
         }
 
         return Money::fromMinor($default->amountMinor, Currency::of($default->currencyCode))->format('en_US');
+    }
+
+    private function durationMonths(PackageSummary $package): ?int
+    {
+        $set = $this->capabilities->forId($package->id);
+        foreach ($set->types() as $type) {
+            $capability = $set->for(PurchaseType::from($type));
+            if ($capability?->durationMonths !== null) {
+                return $capability->durationMonths;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The effective monthly-equivalent label shown under a multi-month
+     * package's total price (e.g. "€7.33/mo"), or `null` for a 1-month
+     * package / a package with no fixed duration — always derived from the
+     * live resolved price, never stored (Packaging & Pricing UI rule, see
+     * `.claude/docs/Ui.md`).
+     */
+    private function monthlyPriceLabel(Money $price, ?int $durationMonths): ?string
+    {
+        if ($durationMonths === null || $durationMonths <= 1) {
+            return null;
+        }
+
+        return $price->perMonth($durationMonths)->format('en_US') . '/mo';
     }
 
     private function convert(Money $amount, string $targetCurrencyCode, int $clientId): ?Money

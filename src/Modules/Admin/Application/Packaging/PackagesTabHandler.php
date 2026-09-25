@@ -157,6 +157,7 @@ final readonly class PackagesTabHandler
 
         $price = Money::fromMinor($resolved->amountMinor, Currency::of($resolved->currencyCode));
         $defaultCurrencyPrice = $this->convert($price, $defaultCurrency, $package->clientId);
+        $months = $this->durationMonths($package);
 
         $countryLabel = $group->isDefault() ? 'All other countries' : implode(', ', $group->countryCodes());
         $providersLabel = $this->providersServing($group);
@@ -166,7 +167,9 @@ final readonly class PackagesTabHandler
             $group->name(),
             $countryLabel,
             $price->format('en_US'),
+            $this->monthlyPriceLabel($price, $months),
             $defaultCurrencyPrice?->format('en_US'),
+            $defaultCurrencyPrice !== null ? $this->monthlyPriceLabel($defaultCurrencyPrice, $months) : null,
             $group->isActive() ? 'Active' : 'Disabled',
             $providersLabel,
         );
@@ -229,15 +232,43 @@ final readonly class PackagesTabHandler
 
     private function durationLabel(PackageSummary $package): string
     {
+        $months = $this->durationMonths($package);
+        if ($months !== null) {
+            return $months === 1 ? '1 month' : "{$months} months";
+        }
+
+        $set = $this->capabilities->forId($package->id);
+
+        return \in_array(PurchaseType::Subscription->value, $set->types(), true) ? 'Recurring' : '—';
+    }
+
+    private function durationMonths(PackageSummary $package): ?int
+    {
         $set = $this->capabilities->forId($package->id);
         foreach ($set->types() as $type) {
             $capability = $set->for(PurchaseType::from($type));
             if ($capability?->durationMonths !== null) {
-                return $capability->durationMonths === 1 ? '1 month' : "{$capability->durationMonths} months";
+                return $capability->durationMonths;
             }
         }
 
-        return \in_array(PurchaseType::Subscription->value, $set->types(), true) ? 'Recurring' : '—';
+        return null;
+    }
+
+    /**
+     * The effective monthly-equivalent label shown under a multi-month
+     * package's total price (e.g. "€7.33/mo"), or `null` for a 1-month
+     * package / a package with no fixed duration — always derived from the
+     * live resolved price, never stored (Packaging & Pricing UI rule, see
+     * `.claude/docs/Ui.md`).
+     */
+    private function monthlyPriceLabel(Money $price, ?int $durationMonths): ?string
+    {
+        if ($durationMonths === null || $durationMonths <= 1) {
+            return null;
+        }
+
+        return $price->perMonth($durationMonths)->format('en_US') . '/mo';
     }
 
     private function trialLabel(PackageSummary $package): ?string

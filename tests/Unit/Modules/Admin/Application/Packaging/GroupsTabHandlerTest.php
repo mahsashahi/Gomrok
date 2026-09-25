@@ -8,6 +8,10 @@ use DateTimeImmutable;
 use Gomrok\Modules\Admin\Application\Packaging\GroupsTabHandler;
 use Gomrok\Modules\Clients\Application\ClientSnapshot;
 use Gomrok\Modules\Clients\Domain\ClientStatus;
+use Gomrok\Modules\Packages\Application\PackagePurchaseCapabilityResolver;
+use Gomrok\Modules\Packages\Domain\Package;
+use Gomrok\Modules\Packages\Domain\PackageCode;
+use Gomrok\Modules\Packages\Domain\PackagePurchaseCapability;
 use Gomrok\Modules\Pricing\Application\PriceListResolver;
 use Gomrok\Modules\Pricing\Application\PriceResolver;
 use Gomrok\Modules\Pricing\Application\PriceRuleResolver;
@@ -16,10 +20,12 @@ use Gomrok\Modules\Pricing\Domain\DefaultPackagePrice;
 use Gomrok\Modules\Pricing\Domain\PriceList;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupSlug;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryClientDirectory;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
 use Gomrok\Tests\Support\InMemoryDefaultPackagePriceRepository;
+use Gomrok\Tests\Support\InMemoryPackageRepository;
 use Gomrok\Tests\Support\InMemoryPriceListAssignmentRepository;
 use Gomrok\Tests\Support\InMemoryPriceListDirectory;
 use Gomrok\Tests\Support\InMemoryPriceListPackageRepository;
@@ -50,6 +56,14 @@ final class GroupsTabHandlerTest extends TestCase
 
         $packages = (new StubPackageDirectory())->add(self::PACKAGE, self::CLIENT, 'pro', 'Pro package');
 
+        $capabilityPackages = new InMemoryPackageRepository();
+        $domainPackage = Package::create(self::CLIENT, PackageCode::of('pro'), 'Pro package', null, null, $this->now);
+        $domainPackage->assignId(self::PACKAGE);
+        $domainPackage->setPurchaseCapabilities([
+            PackagePurchaseCapability::of(PurchaseType::OneTimePayment, false, null, 6),
+        ], $this->now);
+        $capabilityPackages->save($domainPackage);
+
         $this->groups = new InMemoryPricingGroupRepository();
         $defaults = new InMemoryDefaultPackagePriceRepository();
         $defaults->save(new DefaultPackagePrice(self::PACKAGE, 2900, 'EUR'));
@@ -74,6 +88,7 @@ final class GroupsTabHandlerTest extends TestCase
         $this->handler = new GroupsTabHandler(
             $clients,
             $packages,
+            new PackagePurchaseCapabilityResolver($capabilityPackages),
             $this->groups,
             new InMemoryPriceListDirectory($this->priceLists, $listPackages),
             $priceResolver,
@@ -105,6 +120,8 @@ final class GroupsTabHandlerTest extends TestCase
         self::assertNotNull($result->selected);
         self::assertCount(1, $result->selected->packageRows);
         self::assertSame('€29.00', $result->selected->packageRows[0]->groupPrice);
+        // €29.00 over a 6-month package duration -> €4.83/mo (29 / 6 = 4.8333...).
+        self::assertSame('€4.83/mo', $result->selected->packageRows[0]->groupPriceMonthly);
         self::assertSame('Control', $result->selected->activePriceListName);
     }
 
@@ -125,6 +142,8 @@ final class GroupsTabHandlerTest extends TestCase
         self::assertNotNull($result->selected);
         self::assertSame('List B', $result->selected->activePriceListName);
         self::assertSame('€26.10', $result->selected->packageRows[0]->groupPrice);
+        // €26.10 over 6 months = €4.35/mo exactly.
+        self::assertSame('€4.35/mo', $result->selected->packageRows[0]->groupPriceMonthly);
     }
 
     #[Test]

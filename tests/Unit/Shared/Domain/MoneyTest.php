@@ -63,6 +63,19 @@ final class MoneyTest extends TestCase
     }
 
     #[Test]
+    public function perMonthDividesEvenlyWithBankersRounding(): void
+    {
+        // €22.00 / 3 = €7.33 (7.333...)
+        self::assertSame(733, Money::fromMinor(2200, $this->eur)->perMonth(3)->toMinor());
+        // €38.00 / 6 = €6.33 (6.333...)
+        self::assertSame(633, Money::fromMinor(3800, $this->eur)->perMonth(6)->toMinor());
+        // €72.00 / 12 = €6.00 exactly
+        self::assertSame(600, Money::fromMinor(7200, $this->eur)->perMonth(12)->toMinor());
+        // €89.00 / 12 = €7.42 (7.41666...)
+        self::assertSame(742, Money::fromMinor(8900, $this->eur)->perMonth(12)->toMinor());
+    }
+
+    #[Test]
     public function ratioOfAnotherAmount(): void
     {
         self::assertSame(

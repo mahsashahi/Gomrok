@@ -9,6 +9,9 @@ use Gomrok\Modules\Admin\Application\Packaging\PackagesTabHandler;
 use Gomrok\Modules\Clients\Application\ClientSnapshot;
 use Gomrok\Modules\Clients\Domain\ClientStatus;
 use Gomrok\Modules\Packages\Application\PackagePurchaseCapabilityResolver;
+use Gomrok\Modules\Packages\Domain\Package;
+use Gomrok\Modules\Packages\Domain\PackageCode;
+use Gomrok\Modules\Packages\Domain\PackagePurchaseCapability;
 use Gomrok\Modules\Pricing\Application\PriceListResolver;
 use Gomrok\Modules\Pricing\Application\PriceResolver;
 use Gomrok\Modules\Pricing\Application\PriceRuleResolver;
@@ -16,6 +19,7 @@ use Gomrok\Modules\Pricing\Application\ResolveVisitorPriceListAssignment;
 use Gomrok\Modules\Pricing\Domain\DefaultPackagePrice;
 use Gomrok\Modules\Pricing\Domain\PricingGroup;
 use Gomrok\Modules\Pricing\Domain\PricingGroupSlug;
+use Gomrok\Modules\Providers\Domain\PurchaseType;
 use Gomrok\Tests\Support\FrozenClock;
 use Gomrok\Tests\Support\InMemoryClientDirectory;
 use Gomrok\Tests\Support\InMemoryClientExchangeRateRepository;
@@ -53,6 +57,14 @@ final class PackagesTabHandlerTest extends TestCase
 
         $this->packages = (new StubPackageDirectory())->add(self::PACKAGE, self::CLIENT, 'pro', 'Pro package');
 
+        $capabilityPackages = new InMemoryPackageRepository();
+        $domainPackage = Package::create(self::CLIENT, PackageCode::of('pro'), 'Pro package', null, null, $this->now);
+        $domainPackage->assignId(self::PACKAGE);
+        $domainPackage->setPurchaseCapabilities([
+            PackagePurchaseCapability::of(PurchaseType::OneTimePayment, false, null, 3),
+        ], $this->now);
+        $capabilityPackages->save($domainPackage);
+
         $this->groups = new InMemoryPricingGroupRepository();
         $defaults = new InMemoryDefaultPackagePriceRepository();
         $defaults->save(new DefaultPackagePrice(self::PACKAGE, 2900, 'EUR'));
@@ -77,7 +89,7 @@ final class PackagesTabHandlerTest extends TestCase
         $this->handler = new PackagesTabHandler(
             $this->clients,
             $this->packages,
-            new PackagePurchaseCapabilityResolver(new InMemoryPackageRepository()),
+            new PackagePurchaseCapabilityResolver($capabilityPackages),
             new InMemoryPackageProviderDefinitionDirectory(new InMemoryPackageProviderDefinitionRepository()),
             new StubProviderAccountDirectory(),
             $this->groups,
@@ -123,6 +135,57 @@ final class PackagesTabHandlerTest extends TestCase
         self::assertCount(2, $result->selected->byGroupRows);
         foreach ($result->selected->byGroupRows as $row) {
             self::assertSame('€29.00', $row->price);
+            // €29.00 over a 3-month package duration -> €9.67/mo (29 / 3 = 9.666...).
+            self::assertSame('€9.67/mo', $row->priceMonthly);
+        }
+    }
+
+    #[Test]
+    public function aOneMonthPackageShowsNoRedundantMonthlyLine(): void
+    {
+        $oneMonthPackages = new InMemoryPackageRepository();
+        $oneMonth = Package::create(self::CLIENT, PackageCode::of('pro'), 'Pro package', null, null, $this->now);
+        $oneMonth->assignId(self::PACKAGE);
+        $oneMonth->setPurchaseCapabilities([
+            PackagePurchaseCapability::of(PurchaseType::OneTimePayment, false, null, 1),
+        ], $this->now);
+        $oneMonthPackages->save($oneMonth);
+
+        $oneMonthDefaults = new InMemoryDefaultPackagePriceRepository();
+        $oneMonthDefaults->save(new DefaultPackagePrice(self::PACKAGE, 900, 'EUR'));
+
+        $handler = new PackagesTabHandler(
+            $this->clients,
+            $this->packages,
+            new PackagePurchaseCapabilityResolver($oneMonthPackages),
+            new InMemoryPackageProviderDefinitionDirectory(new InMemoryPackageProviderDefinitionRepository()),
+            new StubProviderAccountDirectory(),
+            $this->groups,
+            new PriceResolver(
+                $this->groups,
+                new InMemoryPricingGroupPackageRepository(),
+                $oneMonthDefaults,
+                new InMemoryClientExchangeRateRepository(),
+                $this->packages,
+                new PriceListResolver(new InMemoryPriceListRepository(), new InMemoryPriceListPackageRepository()),
+                new PriceRuleResolver(new InMemoryPriceRuleRepository()),
+                new ResolveVisitorPriceListAssignment(new InMemoryPriceListAssignmentRepository(), new InMemoryPriceListRepository(), new FrozenClock('2026-09-16T12:00:00+00:00')),
+                new FrozenClock('2026-09-16T12:00:00+00:00'),
+            ),
+            new PriceListResolver(new InMemoryPriceListRepository(), new InMemoryPriceListPackageRepository()),
+            new InMemoryClientExchangeRateRepository(),
+            $oneMonthDefaults,
+            new FrozenClock('2026-09-16T12:00:00+00:00'),
+        );
+
+        $this->groups->save(PricingGroup::define(self::CLIENT, PricingGroupSlug::of('default'), 'Default', 0, null, 'EUR', true, $this->now));
+
+        $result = $handler->forClient(self::CLIENT, 'pro');
+
+        self::assertNotNull($result->selected);
+        self::assertNotEmpty($result->selected->byGroupRows);
+        foreach ($result->selected->byGroupRows as $row) {
+            self::assertNull($row->priceMonthly);
         }
     }
 

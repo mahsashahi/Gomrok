@@ -7,6 +7,54 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-24 — Restore effective monthly-price display on Packaging & Pricing
+
+**Reported.** The approved admin-panel design (`.claude/docs/Design/GomrokAdminPanelV4.dc.html`)
+shows every multi-month package's total price with its effective monthly-equivalent price
+underneath (e.g. `€22.00` / `€7.33/mo`), but the built `packaging.html.twig` screen never carried
+that over — package prices only ever showed the total.
+
+**Fix.** Added `Money::perMonth(int $months): self` (`src/Shared/Domain/Money.php`) — divides the
+amount by the duration with the same `HALF_EVEN` rounding as `multipliedBy()`/`percentage()`; new
+`MoneyTest::perMonthDividesEvenlyWithBankersRounding()` covers the request's own worked examples
+(€22/3, €38/6, €72/12, €89/12).
+
+Both admin Packaging & Pricing handlers now derive a monthly label (`"{$money->format($locale)}/mo"`,
+or `null` when the package's duration is 1 month or unset) from the *live resolved* price — never
+stored:
+
+- `PackagesTabHandler` (`src/Modules/Admin/Application/Packaging/PackagesTabHandler.php`) —
+  extracted a `durationMonths()` helper (reused by the existing `durationLabel()`) and a
+  `monthlyPriceLabel()` helper; `rowForGroup()` now also fills `PackagingByGroupRow::$priceMonthly`
+  / `$defaultCurrencyPriceMonthly`.
+- `GroupsTabHandler` (`src/Modules/Admin/Application/Packaging/GroupsTabHandler.php`) — gained a
+  new constructor dependency on `PackagePurchaseCapabilityResolver` (autowired, no DI config
+  change needed) plus the same two helpers; `rowForPackage()` now also fills
+  `GroupPackageRow::$groupPriceMonthly` / `$defaultCurrencyPriceMonthly`.
+
+`packaging.html.twig` renders the new field under both tables' price columns — Packages tab's
+*Pricing by group* table and Pricing groups tab's *Package prices* table — matching the design
+exactly; the Packages tab's master-row price, its "Default price" info-card, and the group
+table's small "default {{ price }}" sub-line stay plain totals (the design shows monthly on
+neither, and the request explicitly says not to add a redundant `/mo` line for a 1-month
+package).
+
+**Files:** `src/Shared/Domain/Money.php`; `src/Modules/Admin/Application/Packaging/{PackagesTabHandler,GroupsTabHandler,PackagingByGroupRow,GroupPackageRow}.php`;
+`src/Modules/Admin/Views/packaging.html.twig`; tests: `tests/Unit/Shared/Domain/MoneyTest.php`,
+`tests/Unit/Modules/Admin/Application/Packaging/{PackagesTabHandlerTest,GroupsTabHandlerTest}.php`
+(both updated to wire a real `PackagePurchaseCapabilityResolver` with duration-bearing packages,
+plus new assertions/a dedicated 1-month test); docs: `.claude/docs/Ui.md` (new rule section).
+
+**No database changes** — the monthly amount is derived at render time, never persisted, per the
+request.
+
+**Verified in the running app** (local dev, `php -S 127.0.0.1:8080 -t src/Public`; a `quarterly`
+package added to the `local-dev` client's catalogue — 3-month duration, €22.00 default price,
+matching the request's own example) — screenshots confirmed `€22.00` / `€7.33/mo` on both the
+Packages tab's *Pricing by group* table (DACH and Default groups; US group's currency-converted
+`$23.76` / `$7.92/mo`) and the Pricing groups tab's *Package prices* table, with the existing
+1-month `Pro` / `Starter` packages correctly showing no `/mo` line.
+
 ## 2026-09-21 — Fix: empty currency/country dropdowns on the New Client form (deployment docs bug)
 
 **Reported.** The "Default Currency" and "Default Country" dropdowns in the New Client form were

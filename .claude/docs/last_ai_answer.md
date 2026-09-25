@@ -1,120 +1,113 @@
-# Q: New Client form's currency/country dropdowns are empty — investigate and fix
+# Q: Restore the per-month price display on the Packaging & Pricing admin UI
 
-## Root cause
+Implemented the effective monthly-price display for multi-month packages, matching the approved
+design (`.claude/docs/Design/GomrokAdminPanelV4.dc.html`'s `monthlyEquivalent()` helper).
 
-**Not a code bug.** `ReferenceCatalog::listCurrencies()`/`listCountries()`, the seeders
-(`CurrenciesSeeder`, `CountriesSeeder`), and the Twig `<select>` partials all work correctly once
-the `currencies`/`countries` reference tables have rows — verified by fetching the live New
-Client form's raw HTML and counting 166 `<option>`s for currency and 20 for country (19 markets +
-blank).
+## What the design actually specifies (checked against the `.dc.html` source, not assumed)
 
-The actual defect is in the **deployment documentation**:
-`.claude/knowledge/DeploymentRunbook.md` §6 (duplicated in `.claude/docs/Commands.md` and
-`.claude/docs/GoLiveChecklist.md`) told operators to skip the full seed step in production and
-instead run:
+The design only shows the `/mo` line in two places:
 
-```bash
-vendor/bin/phinx seed:run -s CurrenciesSeeder
-```
+1. Packages tab detail → "Pricing by country" table (Gomrok's equivalent: *Pricing by group*) —
+   under both the main price column and the "In {defaultCurrency}" column.
+2. Pricing groups tab detail → "Package prices" table — same two columns.
 
-This command **fails** — `The seed class "CurrenciesSeeder" does not exist` — because Phinx's
-`-s` filter needs the fully qualified class name
-(`-s 'Gomrok\Database\Seeds\CurrenciesSeeder'`), not the short name. The runbook's stated reason
-for avoiding `composer seed` in production ("phinx is excluded by --no-dev") was also wrong:
-`robmorgan/phinx` is a plain `require` dependency, never a dev-only one. On any environment where
-`phinx migrate` ran without a working follow-up seed step, `currencies`/`countries`/
-`provider_types` are left at zero rows — which is exactly what renders the dropdowns empty.
+It does **not** show a monthly line under the Packages tab's master-row list price, the "Default
+price" info-card tile, or the small "default {{ price }}" sub-line in the group table. I matched
+that exactly rather than adding it everywhere a price appears, to avoid scope creep beyond the
+approved design.
 
-## Reproduction (isolated, no risk to real data)
+The design's own `monthlyEquivalent()` JS quirk (returning the *same* price string unsuffixed for
+a 1-month package, rather than nothing) looked like an unintentional mock artifact, not a
+deliberate requirement, and conflicted with the request's explicit "no redundant `/mo` line for a
+1-month package" instruction — so I hid the line entirely (`null`) for `durationMonths <= 1`,
+per the explicit instruction, and noted the deviation in `.claude/docs/Ui.md`.
 
-Created a throwaway MySQL schema (`gomrok_freshtest`, dropped after), never touching the real
-`gomrok` schema:
+## Implementation
 
-1. `phinx migrate` alone → `currencies`/`countries`/`provider_types` = 0 rows. **Reproduces the
-   reported bug exactly.**
-2. `phinx seed:run -s CurrenciesSeeder` → fails with the exact documented-command error above.
-3. `phinx seed:run -s 'Gomrok\Database\Seeds\CurrenciesSeeder'` → works.
-4. Plain `phinx seed:run` (no filter) under `APP_ENV=production` → correctly populates all three
-   reference tables (166/19/4 rows) while explicitly skipping every seeder that creates
-   client/demo/test data (`ClientsSeeder skipped: APP_ENV is "production"`, and five others — all
-   individually gated, confirmed by reading every file in `src/Database/Seeds/`).
-5. Ran step 4 again → identical counts, no duplicates, no errors (idempotent).
+- **`Money::perMonth(int $months): self`** (`src/Shared/Domain/Money.php`) — divides by the
+  duration using the same `HALF_EVEN` rounding as the existing `multipliedBy()`/`percentage()`.
+  New test `MoneyTest::perMonthDividesEvenlyWithBankersRounding()` covers the request's own worked
+  examples (€22/3 → €7.33, €38/6 → €6.33, €72/12 → €6.00, €89/12 → €7.42).
+- **`PackagesTabHandler`** — extracted `durationMonths()` (reused by the existing
+  `durationLabel()`) and added `monthlyPriceLabel()`; `rowForGroup()` fills two new fields on
+  `PackagingByGroupRow`: `priceMonthly`, `defaultCurrencyPriceMonthly`.
+- **`GroupsTabHandler`** — gained a new constructor dependency on
+  `PackagePurchaseCapabilityResolver` (pure autowiring in `src/Config/container.php`, no DI
+  registration needed) and the same two helper methods (duplicated rather than shared, matching
+  this file pair's existing convention of duplicating `convert()`/`providersServing()`/
+  `defaultPriceLabel()`); `rowForPackage()` fills `GroupPackageRow::groupPriceMonthly` /
+  `defaultCurrencyPriceMonthly`.
+- **`packaging.html.twig`** — renders the new fields under both tables' price cells with
+  `{% if row.xMonthly %}` guards, in the design's subtle/secondary style
+  (`font-size:10.5px;color:var(--text-faint)`).
+- The monthly amount is **never persisted** — always recomputed from the live resolved price and
+  the package's duration, per the request.
 
-## Fix
+## Tests
 
-Documentation-only — no schema change, no seeder logic change (both were already correct,
-complete, and idempotent). Corrected three docs to recommend the plain, unfiltered
-`phinx seed:run` / `composer seed` as the standard command for every environment including
-production:
+Updated `PackagesTabHandlerTest` and `GroupsTabHandlerTest` to wire a real
+`PackagePurchaseCapabilityResolver` (backed by an `InMemoryPackageRepository` holding a `Package`
+domain object with real purchase capabilities) instead of an empty one, since the monthly
+calculation needs an actual duration:
 
-- `.claude/knowledge/DeploymentRunbook.md` §6 — rewritten with the corrected command and a full
-  explanation of why the plain form is safe (every demo-data seeder is `APP_ENV`-gated).
-- `.claude/docs/Commands.md` — corrected the same broken example command; also fixed a stale
-  "18 curated markets" count to the actual 19.
-- `.claude/docs/GoLiveChecklist.md` — corrected its own copy of the broken command.
+- `PackagesTabHandlerTest`: existing group-row test now also asserts `€9.67/mo` (29/3); new test
+  `aOneMonthPackageShowsNoRedundantMonthlyLine()` builds a separate 1-month handler instance and
+  asserts every row's `priceMonthly` is `null`.
+- `GroupsTabHandlerTest`: added `groupPriceMonthly` assertions to the control-list test (€4.83/mo
+  = 29/6) and the variant-list test (€4.35/mo = 26.10/6 exactly).
 
-## New test
+Full suite: `vendor/bin/phpunit` → 927 tests, 3514 assertions, OK (3 pre-existing unrelated
+skips). `vendor/bin/phpstan analyse` → no errors. `composer cs` → no new violations (the 7
+pre-existing style findings are all in unrelated files).
 
-`tests/Integration/ProductionSeedSafetyTest.php` — two tests, safe to run against the real shared
-dev database (unlike `MigrationRoundTripTest`, it never rolls back/re-migrates, so `admin_users`
-is never touched):
+## Documentation
 
-1. `seedingUnderProductionPopulatesReferenceDataWithoutTouchingClientOrAdminData` — forces
-   `APP_ENV=production` for one `Manager::seed()` call, asserts `currencies`/`countries`/
-   `provider_types` end up populated (>150 / 19 / 4) and `clients`/`admin_users` row counts are
-   unchanged.
-2. `seedingUnderProductionTwiceInARowIsIdempotent` — runs it twice, asserts identical row counts.
+- **`.claude/docs/Ui.md`** — new "Package price monthly-equivalent display" section: the rule
+  text the request asked for, where it applies today (with exact field/class names), where it
+  deliberately does *not* apply, and the implementation pattern for future price displays to
+  follow.
+- **`.claude/Changelog.md`** — new 2026-09-24 entry with full file list, reasoning, and the
+  screenshot verification summary.
+- **`CLAUDE.md`** — reviewed; no change made. Per the project's own Documentation Directory rule,
+  detailed frontend/UI conventions belong in `.claude/docs/Ui.md`, not the root spec file.
+- No change needed to `.claude/docs/database-design.md`, `.claude/Voucher.md`, or any
+  `PhaseResults/` file — no database change, no voucher behaviour, and this isn't a numbered
+  phase (Phase 27, which built this screen, is closed history and per the Phase Completion Rule
+  its result file is never rewritten for a later change; this fix follows the same
+  ad-hoc-frontend-maintenance pattern as the 2026-09-20/21 "change front" commits, which updated
+  `Changelog.md` without touching any Phase result file).
 
-Verified against the real dev DB: `admin_users` stayed at 1, `clients` at 2, throughout.
+## Real evidence captured (Visual and Output Verification Rule)
 
-## Verification run
+Started the app locally (`php -S 127.0.0.1:8080 -t src/Public` against the existing local dev
+MySQL database), created a throwaway local admin user (`qa-verify@example.test`, dev-only,
+discard-safe) since none existed, and added a `quarterly` package to the `local-dev` client
+(3-month duration, €22.00 default price — the request's own example numbers) since every existing
+seeded package was 1-month. Logged in and screenshotted both affected screens with Claude in
+Chrome:
 
-- `composer test` — 876 unit tests, green.
-- `vendor/bin/phpstan analyse --memory-limit=1G` — no errors.
-- `vendor/bin/php-cs-fixer fix --dry-run` on the new test file — clean.
-- `vendor/bin/phpunit --testsuite integration --filter "ReferenceTablesTest|ProductionSeedSafetyTest"`
-  — 7 tests, green. (Full integration suite deliberately not run — `MigrationRoundTripTest` wipes
-  `admin_users`.)
-- Live HTML check on the running local dev server: New Client form's `default_currency` select
-  has 166 `<option>`s, `default_country` has 20 — confirming the form works correctly once
-  reference data exists.
+- **Packages tab → Quarterly package detail, *Pricing by group* table**: DACH `€22.00` /
+  `€7.33/mo`, United States `$23.76` / `$7.92/mo` (currency-converted, monthly derived from the
+  converted amount), Default `€22.00` / `€7.33/mo`.
+- **Pricing groups tab → DACH group, *Package prices* table**: `Quarterly` row shows `€22.00` /
+  `€7.33/mo`; the existing 1-month `Pro` and `Starter` rows correctly show no `/mo` line.
 
-## Exact commands to fix any currently-affected environment
+Both match the requested example (`€22.00` / `€7.33/mo`) exactly. While exploring the pricing
+groups tab I accidentally clicked "Enable" on price list B (a real state-changing action) —
+noticed immediately and clicked "Disable" to restore it, confirmed back to "Disabled — no new
+visitors assigned" before finishing. Left the `quarterly` test package and the throwaway admin
+user in the local dev database as they don't affect any existing data and mirror the existing
+`Pro`/`Starter` seed pattern; happy to remove either if you'd rather they weren't there.
 
-Idempotent — safe to run repeatedly, does not touch `clients` or `admin_users`:
+## Files changed
 
-```bash
-# Local dev
-composer seed
-
-# Any server (production or otherwise)
-cd /var/www/gomrok/app   # wherever the app is deployed
-sudo -u gomrok vendor/bin/phinx seed:run
-```
-
-## Requirement-by-requirement
-
-1. Dropdown options come from `currencies`/`countries` DB tables via `ReferenceCatalog`, not
-   hardcoded — already true, unchanged, reconfirmed.
-2. `CountriesSeeder.php`/`CurrenciesSeeder.php` checked — both already correct and idempotent
-   (`ON DUPLICATE KEY UPDATE` on `code`, a unique-indexed column).
-3/4. Reference data is inserted automatically (via `phinx seed:run`, now correctly documented)
-   and idempotently — verified with a real double-run against a fresh schema and against the
-   real dev schema.
-5. Currencies: full ISO 4217 (166, via `brick/money`). Countries: the 19 markets Gomrok currently
-   operates in (`src/Database/Seeds/data/countries.json`) — deliberately curated, not the full
-   ISO 3166 list, per the `countries` table's own migration docblock; unchanged by this fix since
-   it was already complete and correct.
-6. Verified — see "Verification run" above.
-7/8. No database reset, no client/admin-user data touched at any point — verified by row-count
-   snapshots before/after every operation, both on the throwaway schema and the real one.
-9. Tests run and added — see above.
-10. Exact commands given — see above.
-11. Deployment documentation updated so a fresh installation (and every subsequent deploy)
-   populates reference data with one correct, safe command right after migrations —
-   `.claude/knowledge/DeploymentRunbook.md` §6.
-
-## Next recommended step
-
-None required — this closes out the report. `.claude/docs/Phases.md`'s next open phase remains
-Phase 28 (client callbacks / outbound notifications).
+**Backend:** `src/Shared/Domain/Money.php`,
+`src/Modules/Admin/Application/Packaging/PackagesTabHandler.php`,
+`src/Modules/Admin/Application/Packaging/GroupsTabHandler.php`,
+`src/Modules/Admin/Application/Packaging/PackagingByGroupRow.php`,
+`src/Modules/Admin/Application/Packaging/GroupPackageRow.php`.
+**Frontend:** `src/Modules/Admin/Views/packaging.html.twig`.
+**Tests:** `tests/Unit/Shared/Domain/MoneyTest.php`,
+`tests/Unit/Modules/Admin/Application/Packaging/PackagesTabHandlerTest.php`,
+`tests/Unit/Modules/Admin/Application/Packaging/GroupsTabHandlerTest.php`.
+**Docs:** `.claude/docs/Ui.md`, `.claude/Changelog.md`.

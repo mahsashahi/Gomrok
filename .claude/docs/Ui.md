@@ -49,6 +49,44 @@ select); `packaging.html.twig` — Create/Edit pricing group `countries` (2, mul
 (1) (3, multiselect); `vouchers.html.twig` — eligibility `country` (1, multiselect). 8 fields
 across 4 screens, mirroring the currency conversion's file list.
 
+## Package price monthly-equivalent display (added 2026-09-24)
+
+**Rule.** For packages longer than one month, every package-price display in the admin UI must
+show the derived effective monthly price directly below the total price (for example, `€22.00`
+with `€7.33/mo` underneath). The monthly value is calculated as `total price / duration in
+months` from the currently resolved/displayed price (default price, per-group price, or
+per-currency-converted price) and the package's duration — it is **never** stored independently;
+it is recomputed on every render so it always tracks the live price. A 1-month package (or a
+package with no fixed duration) shows no `/mo` line — never a redundant repeat of the same
+number.
+
+This restores behaviour already specified by the approved design
+(`.claude/docs/Design/GomrokAdminPanelV4.dc.html`'s `monthlyEquivalent()` helper, used on its
+"Pricing by country" and pricing-group "Package prices" tables) — it is a frontend/design
+consistency rule, not a new pricing-domain concept; nothing in `.claude/docs/database-design.md`
+or `.claude/Voucher.md` changes.
+
+**Where it applies today** (Packaging & Pricing screen, `packaging.html.twig`):
+
+- Packages tab detail → *Pricing by group* table: `row.price` / `row.priceMonthly` and
+  `row.defaultCurrencyPrice` / `row.defaultCurrencyPriceMonthly`
+  (`PackagingByGroupRow`, built by `PackagesTabHandler::rowForGroup()`).
+- Pricing groups tab detail → *Package prices* table: `row.groupPrice` / `row.groupPriceMonthly`
+  and `row.defaultCurrencyPrice` / `row.defaultCurrencyPriceMonthly`
+  (`GroupPackageRow`, built by `GroupsTabHandler::rowForPackage()`).
+
+Matching the approved design exactly, the monthly line is **not** shown next to the Packages
+tab's master-row/list price or its "Default price" info-card tile, nor next to a group-table
+row's small "default {{ price }}" sub-line — those stay as plain totals in the design too.
+
+**Implementation.** `Money::perMonth(int $months): self` (`src/Shared/Domain/Money.php`) divides
+the amount by the duration using the same `HALF_EVEN` rounding as `multipliedBy()` /
+`percentage()`. Each handler resolves the package's duration via
+`PackagePurchaseCapabilityResolver` and formats `"{$money->perMonth($months)->format($locale)}/mo"`
+only when `$months > 1`; `null` (hidden in the template) otherwise. Any future package-price
+display that adds a "resolved" or "effective" price column should follow the same pattern rather
+than re-deriving the math inline.
+
 ## To document (Phase 27)
 
 - Layout shell (sidebar order, top bar, active-client switcher, Test-mode toggle).

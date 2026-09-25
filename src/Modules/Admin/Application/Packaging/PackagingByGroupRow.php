@@ -11,7 +11,9 @@ final readonly class PackagingByGroupRow
         public string $groupName,
         public string $countryLabel,
         public string $price,
+        public ?string $priceMonthly,
         public ?string $defaultCurrencyPrice,
+        public ?string $defaultCurrencyPriceMonthly,
         public string $status,
         public string $providersLabel,
     ) {

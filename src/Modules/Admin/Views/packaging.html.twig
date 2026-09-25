@@ -141,8 +141,14 @@
                 <div style="display:flex;align-items:center;gap:6px"><span style="font-weight:700">{{ row.groupName }}</span><span class="status-pill status-{{ row.status|lower }}">{{ row.status }}</span></div>
                 <div style="font-size:10.5px;color:var(--text-faint)">{{ row.countryLabel }}</div>
               </div>
-              <div style="font-weight:700">{{ row.price }}</div>
-              <div style="color:oklch(40% 0.01 264)">{{ row.defaultCurrencyPrice ?? '—' }}</div>
+              <div>
+                <div style="font-weight:700">{{ row.price }}</div>
+                {% if row.priceMonthly %}<div style="font-size:10.5px;color:var(--text-faint)">{{ row.priceMonthly }}</div>{% endif %}
+              </div>
+              <div style="color:oklch(40% 0.01 264)">
+                <div>{{ row.defaultCurrencyPrice ?? '—' }}</div>
+                {% if row.defaultCurrencyPriceMonthly %}<div style="font-size:10.5px;color:var(--text-faint)">{{ row.defaultCurrencyPriceMonthly }}</div>{% endif %}
+              </div>
               <div style="font-size:11.5px;color:oklch(45% 0.01 264)">{{ row.providersLabel }}</div>
             </div>
             {% else %}
@@ -243,8 +249,14 @@
                 </div>
                 <div style="font-size:10.5px;color:var(--text-faint)">default {{ row.defaultPrice ?? '—' }}</div>
               </div>
-              <div style="font-weight:700">{{ row.groupPrice }}</div>
-              <div style="color:oklch(40% 0.01 264)">{{ row.defaultCurrencyPrice ?? '—' }}</div>
+              <div>
+                <div style="font-weight:700">{{ row.groupPrice }}</div>
+                {% if row.groupPriceMonthly %}<div style="font-size:10.5px;color:var(--text-faint)">{{ row.groupPriceMonthly }}</div>{% endif %}
+              </div>
+              <div style="color:oklch(40% 0.01 264)">
+                <div>{{ row.defaultCurrencyPrice ?? '—' }}</div>
+                {% if row.defaultCurrencyPriceMonthly %}<div style="font-size:10.5px;color:var(--text-faint)">{{ row.defaultCurrencyPriceMonthly }}</div>{% endif %}
+              </div>
               <div>
                 {% if 'pricing.update' in permissions %}
                   {% if d.activePriceListIsControl %}

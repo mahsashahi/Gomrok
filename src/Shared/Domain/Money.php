@@ -131,6 +131,18 @@ final readonly class Money implements Stringable
     }
 
     /**
+     * This amount divided evenly across `$months` — the effective monthly
+     * equivalent of a multi-month package price (e.g. EUR 22.00 over 3 months
+     * -> EUR 7.33). Rounded the same way as the other derived-amount methods
+     * ({@see multipliedBy()}, {@see percentage()}); never persisted, always
+     * recomputed from the live total.
+     */
+    public function perMonth(int $months): self
+    {
+        return new self($this->money->dividedBy($months, self::ROUNDING));
+    }
+
+    /**
      * Convert to another currency at a caller-supplied rate. `Money` never fetches
      * rates — the Pricing module / caller provides one.
      */
