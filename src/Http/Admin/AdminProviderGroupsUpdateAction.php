@@ -9,6 +9,7 @@ use Gomrok\Modules\Admin\Application\Providers\UpdateProviderGroupForAdmin\Updat
 use Gomrok\Modules\Admin\Application\Providers\UpdateProviderGroupForAdmin\UpdateProviderGroupForAdminHandler;
 use Gomrok\Modules\Providers\Domain\ProviderGroupRepository;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -26,6 +27,7 @@ final readonly class AdminProviderGroupsUpdateAction
         private AdminContext $context,
         private ProviderGroupRepository $groups,
         private UpdateProviderGroupForAdminHandler $handler,
+        private AdminProvidersAction $screen,
     ) {
     }
 
@@ -52,6 +54,16 @@ final readonly class AdminProviderGroupsUpdateAction
         $methods = AdminForm::strArray($body, 'methods');
         $currencyCode = AdminForm::nullableStr($body, 'currency_code');
         $active = AdminForm::checked($body, 'active');
+        $submittedValues = [
+            'id' => $groupId,
+            'slug' => $slug,
+            'name' => $name,
+            'countries' => implode(', ', $countries),
+            'purchase_types' => $purchaseTypes,
+            'methods' => $methods,
+            'currency_code' => $currencyCode ?? '',
+            'active' => $active,
+        ];
 
         $result = $this->handler->handle(new UpdateProviderGroupForAdminCommand(
             groupId: $groupId,
@@ -65,7 +77,7 @@ final readonly class AdminProviderGroupsUpdateAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToProviders($response, ['tab' => 'groups', 'group' => $slug], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'groups', 'group' => $slug], new AdminModalReopen('edit-group', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToProviders($response, ['tab' => 'groups', 'group' => $slug], success: 'Routing group updated.');

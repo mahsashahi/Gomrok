@@ -1,11 +1,12 @@
 {% extends 'layouts/shell.html.twig' %}
 {% import 'partials/currency-select.html.twig' as currency %}
 {% import 'partials/country-select.html.twig' as country %}
+{% import 'partials/modal-error.html.twig' as modal_error %}
 
 {% block title %}Clients — Gomrok Admin{% endblock %}
 
 {% block content %}
-<div x-data="clientsModals()">
+<div x-data="clientsModals()"{% if reopen_modal %} x-init="open({{ reopen_modal.modal|json_encode|e('html_attr') }}, {{ reopen_modal.values|json_encode|e('html_attr') }}, {{ reopen_modal.error|json_encode|e('html_attr') }}, {{ reopen_modal.fieldErrors|json_encode|e('html_attr') }})"{% endif %}>
 {% if error %}<div class="form-error">{{ error }}</div>{% endif %}
 {% if success and not new_api_key %}<div class="form-success">{{ success }}</div>{% endif %}
 
@@ -148,6 +149,7 @@
     <div class="modal-card">
       <div class="modal-title">New client</div>
       <div class="modal-subtitle">A client is an application connecting to Gomrok. It gets its own providers, packages and pricing groups — set those up after the client exists.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/clients">
         <div class="form-grid">
           <div class="form-field"><label>Client name</label><input type="text" name="name" x-model="form.name" required placeholder="Acme Inc"></div>
@@ -175,6 +177,7 @@
   <template x-if="modal === 'edit-client'">
     <div class="modal-card">
       <div class="modal-title">Edit client</div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/clients/' + form.id">
         <div class="form-grid">
           <div class="form-field span-2"><label>Client name</label><input type="text" name="name" x-model="form.name" required></div>
@@ -194,6 +197,7 @@
     <div class="modal-card">
       <div class="modal-title">Issue API key</div>
       <div class="modal-subtitle">You'll get one chance to copy the new key after this.</div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/clients/' + form.client_id + '/api-keys'">
         <div class="form-grid">
           <div class="form-field">

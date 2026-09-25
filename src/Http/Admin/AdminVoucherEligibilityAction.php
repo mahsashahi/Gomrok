@@ -10,6 +10,7 @@ use Gomrok\Modules\Vouchers\Application\SetVoucherEligibility\SetVoucherEligibil
 use Gomrok\Modules\Vouchers\Application\SetVoucherEligibility\SetVoucherEligibilityHandler;
 use Gomrok\Modules\Vouchers\Domain\VoucherEligibilityDimension;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -30,6 +31,7 @@ final readonly class AdminVoucherEligibilityAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private SetVoucherEligibilityHandler $handler,
+        private AdminVouchersAction $screen,
     ) {
     }
 
@@ -52,8 +54,11 @@ final readonly class AdminVoucherEligibilityAction
         $code = AdminForm::nullableStr($body, 'code');
 
         $rules = [];
+        $submittedValues = ['id' => $voucherId, 'code' => $code];
         foreach (VoucherEligibilityDimension::cases() as $dimension) {
-            foreach (self::splitList(AdminForm::str($body, $dimension->value)) as $value) {
+            $raw = AdminForm::str($body, $dimension->value);
+            $submittedValues[$dimension->value] = $raw;
+            foreach (self::splitList($raw) as $value) {
                 $rules[] = ['dimension' => $dimension->value, 'value' => $value];
             }
         }
@@ -66,7 +71,7 @@ final readonly class AdminVoucherEligibilityAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToVouchers($response, ['voucher' => $code], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['voucher' => $code], new AdminModalReopen('eligibility', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToVouchers($response, ['voucher' => $code], success: 'Eligibility rules updated.');

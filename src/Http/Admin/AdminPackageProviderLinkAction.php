@@ -8,6 +8,7 @@ use Gomrok\Modules\Admin\Application\AdminPermission;
 use Gomrok\Modules\Packages\Application\LinkPackageProvider\LinkPackageProviderCommand;
 use Gomrok\Modules\Packages\Application\LinkPackageProvider\LinkPackageProviderHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -28,6 +29,7 @@ final readonly class AdminPackageProviderLinkAction
     public function __construct(
         private AdminContext $context,
         private LinkPackageProviderHandler $handler,
+        private AdminPackagingAction $screen,
     ) {
     }
 
@@ -44,21 +46,24 @@ final readonly class AdminPackageProviderLinkAction
         $body = AdminForm::body($request);
         $code = AdminForm::nullableStr($body, 'code');
         $providerAccountId = AdminForm::nullableInt($body, 'provider_account_id');
+        $providerSideName = AdminForm::nullableStr($body, 'provider_side_name');
+        $remoteId = AdminForm::nullableStr($body, 'remote_id');
+        $submittedValues = ['provider_account_id' => $providerAccountId, 'provider_side_name' => $providerSideName ?? '', 'remote_id' => $remoteId ?? ''];
 
         if ($providerAccountId === null) {
-            return $this->redirectToPackaging($response, ['tab' => 'packages', 'package' => $code], error: 'Choose a provider account.');
+            return $this->screen->reopen($request, $response, ['tab' => 'packages', 'package' => $code], new AdminModalReopen('link-provider', $submittedValues, 'Choose a provider account.'));
         }
 
         $result = $this->handler->handle(new LinkPackageProviderCommand(
             packageId: $packageId,
             providerAccountId: $providerAccountId,
-            providerSideName: AdminForm::nullableStr($body, 'provider_side_name'),
-            remoteId: AdminForm::nullableStr($body, 'remote_id'),
+            providerSideName: $providerSideName,
+            remoteId: $remoteId,
             actorId: $this->context->admin()->id,
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToPackaging($response, ['tab' => 'packages', 'package' => $code], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'packages', 'package' => $code], new AdminModalReopen('link-provider', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToPackaging($response, ['tab' => 'packages', 'package' => $code], success: 'Provider linked.');

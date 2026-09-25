@@ -12,6 +12,7 @@ use Gomrok\Modules\Clients\Application\IssueApiKey\IssueApiKeyResult;
 use Gomrok\Modules\Clients\Domain\ApiKeyPrefix;
 use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Gomrok\Shared\Http\ViewRenderer;
 use Psr\Http\Message\ResponseInterface;
@@ -35,6 +36,7 @@ final readonly class AdminClientApiKeyIssueAction
         private IssueApiKeyHandler $handler,
         private ReferenceCatalog $currencies,
         private ViewRenderer $view,
+        private AdminClientsAction $screenAction,
     ) {
     }
 
@@ -50,15 +52,17 @@ final readonly class AdminClientApiKeyIssueAction
         $clientId = (int) $args['clientId'];
         $body = AdminForm::body($request);
         $environment = AdminForm::str($body, 'environment', 'test');
+        $label = AdminForm::nullableStr($body, 'label');
+        $submittedValues = ['client_id' => $clientId, 'environment' => $environment, 'label' => $label ?? ''];
 
         $result = $this->handler->handle(new IssueApiKeyCommand(
             clientId: $clientId,
             prefix: $environment === 'live' ? ApiKeyPrefix::Live : ApiKeyPrefix::Test,
-            label: AdminForm::nullableStr($body, 'label'),
+            label: $label,
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToClients($response, ['client' => $clientId], error: $result->error()->message);
+            return $this->screenAction->reopen($request, $response, ['client' => $clientId], new AdminModalReopen('issue-key', $submittedValues, $result->error()->message));
         }
 
         $value = $result->value();

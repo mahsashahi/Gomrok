@@ -11,6 +11,26 @@ use DateTimeImmutable;
  * optional `device_type` filter + a `priority`. `isDefault` is the fallback (no
  * countries; forced last by the resolver). Overlapping country membership across
  * groups is allowed — the lowest `priority` wins. `id` is null until persisted.
+ *
+ * `currencyCode` and `isDefault` are `readonly` — intentionally immutable post-
+ * creation, not merely unimplemented (2026-09-24 pricing-group edit-parity
+ * review):
+ *
+ * - `currencyCode`: `pricing_group_packages`/`price_list_packages` override
+ *   rows each persist their own `currency_code` at the time they were set
+ *   (see the migrations) — changing the group's currency afterward would
+ *   silently strand every already-set override in a currency the group no
+ *   longer claims, a real correctness bug, not a workflow inconvenience.
+ *   Reprice by creating a new group in the desired currency instead.
+ * - `isDefault`: enforced client-wide as a singleton at creation
+ *   ({@see \Gomrok\Modules\Pricing\Application\CreatePricingGroup\CreatePricingGroupHandler}),
+ *   and carries structurally different rules for as long as it holds true
+ *   (no countries, {@see disable()} refuses it). Toggling it in place would
+ *   need to atomically demote whichever group currently holds it — a
+ *   distinct operation this aggregate's simple field setters aren't safe to
+ *   also perform. Every other field (`name`, `slug`, `priority`,
+ *   `deviceType`, `countryCodes`, `status`) has a setter and an Admin-facing
+ *   edit path.
  */
 final class PricingGroup
 {
@@ -20,10 +40,10 @@ final class PricingGroup
     private function __construct(
         private ?int $id,
         private readonly int $clientId,
-        private readonly PricingGroupSlug $slug,
+        private PricingGroupSlug $slug,
         private string $name,
         private int $priority,
-        private readonly ?string $deviceType,
+        private ?string $deviceType,
         private readonly string $currencyCode,
         private readonly bool $isDefault,
         private PricingGroupStatus $status,
@@ -106,6 +126,24 @@ final class PricingGroup
     public function reprioritise(int $priority, DateTimeImmutable $now): void
     {
         $this->priority = max(0, $priority);
+        $this->updatedAt = $now;
+    }
+
+    /**
+     * A slug rename. Safe to change post-creation — nothing else persists it
+     * as a foreign reference (every cross-table reference is the integer
+     * `id`); the only cost is that a previously shared `?group=old-slug`
+     * admin URL stops resolving, same trade-off as renaming any slug.
+     */
+    public function changeSlug(PricingGroupSlug $slug, DateTimeImmutable $now): void
+    {
+        $this->slug = $slug;
+        $this->updatedAt = $now;
+    }
+
+    public function setDeviceType(?string $deviceType, DateTimeImmutable $now): void
+    {
+        $this->deviceType = $deviceType;
         $this->updatedAt = $now;
     }
 

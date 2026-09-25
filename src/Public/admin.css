@@ -295,6 +295,19 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 .modal-subtitle { font-size: 12px; color: var(--text-muted); margin: 0 0 16px; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--surface-alt); }
 
+/* ---------- validation-preserving forms (partials/modal-error.html.twig) ---------- */
+.modal-error-banner {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  background: oklch(96% 0.03 25); color: var(--danger); border: 1px solid oklch(90% 0.06 25);
+  border-radius: 8px; padding: 9px 10px 9px 12px; font-size: 12.5px; font-weight: 600; margin-bottom: 14px;
+}
+.modal-error-dismiss {
+  flex: none; border: none; background: transparent; color: inherit; cursor: pointer; line-height: 1;
+  width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; border-radius: 4px; padding: 0;
+}
+.modal-error-dismiss:hover { background: rgba(0, 0, 0, 0.08); }
+.field-error { display: block; font-size: 10.5px; font-weight: 600; color: var(--danger); margin-top: 3px; }
+
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid .span-2 { grid-column: 1 / -1; }
 .form-field { margin-bottom: 0; }
@@ -307,6 +320,17 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 .form-field-hint { font-size: 10.5px; color: var(--text-faint); margin-top: 4px; }
 .checkbox-row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
 .checkbox-row input { margin: 0; }
+
+/* ---------- country chip picker (partials/country-select.html.twig chips()) ---------- */
+.country-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--accent-soft); color: var(--accent-soft-text); padding: 5px 6px 5px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; }
+.country-chip-remove { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; border: none; background: transparent; color: inherit; padding: 0; cursor: pointer; line-height: 1; }
+.country-chip-remove:hover { background: rgba(0, 0, 0, 0.08); }
+.country-picker-toggle { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; cursor: pointer; color: var(--text-muted); background: #fff; }
+.country-picker-menu { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(20, 20, 43, .12); z-index: 30; max-height: 240px; overflow-y: auto; padding: 6px; }
+.country-picker-search { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; margin-bottom: 6px; font-family: inherit; box-sizing: border-box; }
+.country-picker-option { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 7px; cursor: pointer; font-size: 13.5px; }
+.country-picker-option:hover { background: var(--surface-alt); }
+.country-picker-empty { padding: 8px 10px; font-size: 12.5px; color: var(--text-faint); }
 
 .package-row-drag { cursor: grab; }
 .package-row-drag.dragging { opacity: 0.4; }

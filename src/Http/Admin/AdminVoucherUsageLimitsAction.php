@@ -9,6 +9,7 @@ use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Vouchers\Application\SetVoucherUsageLimits\SetVoucherUsageLimitsCommand;
 use Gomrok\Modules\Vouchers\Application\SetVoucherUsageLimits\SetVoucherUsageLimitsHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -26,6 +27,7 @@ final readonly class AdminVoucherUsageLimitsAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private SetVoucherUsageLimitsHandler $handler,
+        private AdminVouchersAction $screen,
     ) {
     }
 
@@ -46,18 +48,22 @@ final readonly class AdminVoucherUsageLimitsAction
         $voucherId = (int) $args['voucherId'];
         $body = AdminForm::body($request);
         $code = AdminForm::nullableStr($body, 'code');
+        $maxTotalRedemptions = AdminForm::nullableInt($body, 'max_total_redemptions');
+        $maxPerUser = AdminForm::nullableInt($body, 'max_per_user');
+        $maxPerClient = AdminForm::nullableInt($body, 'max_per_client');
+        $submittedValues = ['id' => $voucherId, 'code' => $code, 'max_total_redemptions' => $maxTotalRedemptions, 'max_per_user' => $maxPerUser, 'max_per_client' => $maxPerClient];
 
         $result = $this->handler->handle(new SetVoucherUsageLimitsCommand(
             clientId: $activeClient->id,
             voucherId: $voucherId,
-            maxTotalRedemptions: AdminForm::nullableInt($body, 'max_total_redemptions'),
-            maxPerUser: AdminForm::nullableInt($body, 'max_per_user'),
-            maxPerClient: AdminForm::nullableInt($body, 'max_per_client'),
+            maxTotalRedemptions: $maxTotalRedemptions,
+            maxPerUser: $maxPerUser,
+            maxPerClient: $maxPerClient,
             actorId: $this->context->admin()->id,
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToVouchers($response, ['voucher' => $code], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['voucher' => $code], new AdminModalReopen('usage-limits', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToVouchers($response, ['voucher' => $code], success: 'Usage limits updated.');

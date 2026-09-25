@@ -10,6 +10,7 @@ use Gomrok\Modules\Pricing\Application\CreatePriceList\CreatePriceListCommand;
 use Gomrok\Modules\Pricing\Application\CreatePriceList\CreatePriceListHandler;
 use Gomrok\Modules\Pricing\Domain\PricingGroupRepository;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -29,6 +30,7 @@ final readonly class AdminPriceListsCreateAction
         private ClientDirectory $clients,
         private PricingGroupRepository $groups,
         private CreatePriceListHandler $handler,
+        private AdminPackagingAction $screen,
     ) {
     }
 
@@ -47,9 +49,10 @@ final readonly class AdminPriceListsCreateAction
         $groupId = AdminForm::nullableInt($body, 'pricing_group_id');
         $name = AdminForm::str($body, 'name');
         $factor = AdminForm::str($body, 'factor', '1.0000');
+        $submittedValues = ['pricing_group_id' => $groupId, 'name' => $name, 'factor' => $factor];
 
         if ($groupId === null) {
-            return $this->redirectToPackaging($response, ['tab' => 'groups'], error: 'Choose a pricing group.');
+            return $this->screen->reopen($request, $response, ['tab' => 'groups'], new AdminModalReopen('create-price-list', $submittedValues, 'Choose a pricing group.'));
         }
 
         $group = $this->groups->findById($groupId);
@@ -64,7 +67,7 @@ final readonly class AdminPriceListsCreateAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToPackaging($response, ['tab' => 'groups', 'group' => $slug], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'groups', 'group' => $slug], new AdminModalReopen('create-price-list', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToPackaging($response, ['tab' => 'groups', 'group' => $slug], success: 'Price list created.');

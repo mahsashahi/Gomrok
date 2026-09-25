@@ -9,6 +9,7 @@ use Gomrok\Modules\Admin\Application\Vouchers\UpdateVoucherForAdmin\UpdateVouche
 use Gomrok\Modules\Admin\Application\Vouchers\UpdateVoucherForAdmin\UpdateVoucherForAdminHandler;
 use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -26,6 +27,7 @@ final readonly class AdminVouchersUpdateAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private UpdateVoucherForAdminHandler $handler,
+        private AdminVouchersAction $screen,
     ) {
     }
 
@@ -46,34 +48,58 @@ final readonly class AdminVouchersUpdateAction
         $voucherId = (int) $args['voucherId'];
         $body = AdminForm::body($request);
         $code = AdminForm::nullableStr($body, 'code');
+        $name = AdminForm::str($body, 'name');
+        $description = AdminForm::nullableStr($body, 'description');
+        $validFrom = AdminForm::nullableStr($body, 'valid_from');
+        $validUntil = AdminForm::nullableStr($body, 'valid_until');
+        $firstPurchaseOnly = AdminForm::checked($body, 'first_purchase_only');
+        $minPurchaseAmountRaw = AdminForm::str($body, 'min_purchase_amount');
         $minPurchaseCurrency = AdminForm::nullableStr($body, 'min_purchase_currency');
+        $defaultDiscountType = AdminForm::str($body, 'default_discount_type', 'none');
+        $defaultPercentRaw = AdminForm::str($body, 'default_percent');
+        $active = AdminForm::checked($body, 'active');
+
+        $submittedValues = [
+            'id' => $voucherId,
+            'code' => $code,
+            'name' => $name,
+            'description' => $description ?? '',
+            'valid_from' => $validFrom ?? '',
+            'valid_until' => $validUntil ?? '',
+            'first_purchase_only' => $firstPurchaseOnly,
+            'min_purchase_amount' => $minPurchaseAmountRaw,
+            'min_purchase_currency' => $minPurchaseCurrency ?? $activeClient->defaultCurrency,
+            'default_discount_type' => $defaultDiscountType,
+            'default_percent' => $defaultPercentRaw,
+            'active' => $active,
+        ];
 
         [$minPurchaseMinor, $minPurchaseError] = AdminMoneyInput::parse(
-            AdminForm::str($body, 'min_purchase_amount'),
+            $minPurchaseAmountRaw,
             $minPurchaseCurrency ?? $activeClient->defaultCurrency,
         );
         if ($minPurchaseError !== null) {
-            return $this->redirectToVouchers($response, ['voucher' => $code], error: $minPurchaseError);
+            return $this->screen->reopen($request, $response, ['voucher' => $code], new AdminModalReopen('edit-voucher', $submittedValues, $minPurchaseError));
         }
 
         $result = $this->handler->handle(new UpdateVoucherForAdminCommand(
             clientId: $activeClient->id,
             voucherId: $voucherId,
-            name: AdminForm::str($body, 'name'),
-            description: AdminForm::nullableStr($body, 'description'),
-            validFrom: AdminForm::nullableStr($body, 'valid_from'),
-            validUntil: AdminForm::nullableStr($body, 'valid_until'),
-            firstPurchaseOnly: AdminForm::checked($body, 'first_purchase_only'),
+            name: $name,
+            description: $description,
+            validFrom: $validFrom,
+            validUntil: $validUntil,
+            firstPurchaseOnly: $firstPurchaseOnly,
             minPurchaseMinor: $minPurchaseMinor,
             minPurchaseCurrency: $minPurchaseMinor !== null ? ($minPurchaseCurrency ?? $activeClient->defaultCurrency) : null,
-            defaultDiscountType: AdminForm::str($body, 'default_discount_type', 'none'),
-            defaultPercentBp: AdminMoneyInput::percentToBasisPoints(AdminForm::str($body, 'default_percent')),
-            active: AdminForm::checked($body, 'active'),
+            defaultDiscountType: $defaultDiscountType,
+            defaultPercentBp: AdminMoneyInput::percentToBasisPoints($defaultPercentRaw),
+            active: $active,
             actorId: $this->context->admin()->id,
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToVouchers($response, ['voucher' => $code], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['voucher' => $code], new AdminModalReopen('edit-voucher', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToVouchers($response, ['voucher' => $code], success: 'Voucher updated.');

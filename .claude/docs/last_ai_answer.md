@@ -1,113 +1,111 @@
-# Q: Restore the per-month price display on the Packaging & Pricing admin UI
+# Q: Replace Pricing Group's manual country multi-select with a controlled chip picker
 
-Implemented the effective monthly-price display for multi-month packages, matching the approved
-design (`.claude/docs/Design/GomrokAdminPanelV4.dc.html`'s `monthlyEquivalent()` helper).
+Implemented the approved design's country-selection UX for Pricing Groups: a searchable
+combo/dropdown that adds one country at a time, with each selection shown as a removable chip —
+replacing the native `<select multiple size="6">` list box the built screen had instead.
 
-## What the design actually specifies (checked against the `.dc.html` source, not assumed)
+## What changed and why
 
-The design only shows the `/mo` line in two places:
-
-1. Packages tab detail → "Pricing by country" table (Gomrok's equivalent: *Pricing by group*) —
-   under both the main price column and the "In {defaultCurrency}" column.
-2. Pricing groups tab detail → "Package prices" table — same two columns.
-
-It does **not** show a monthly line under the Packages tab's master-row list price, the "Default
-price" info-card tile, or the small "default {{ price }}" sub-line in the group table. I matched
-that exactly rather than adding it everywhere a price appears, to avoid scope creep beyond the
-approved design.
-
-The design's own `monthlyEquivalent()` JS quirk (returning the *same* price string unsuffixed for
-a 1-month package, rather than nothing) looked like an unintentional mock artifact, not a
-deliberate requirement, and conflicted with the request's explicit "no redundant `/mo` line for a
-1-month package" instruction — so I hid the line entirely (`null`) for `durationMonths <= 1`,
-per the explicit instruction, and noted the deviation in `.claude/docs/Ui.md`.
+The design (`.claude/docs/Design/GomrokAdminPanelV4.dc.html`, the "New pricing group" modal
+markup and its `countryPickerOpen`/`addCountry`/`removeCountry` state) specifies: a toggle ("Add a
+country…") opens a dropdown of countries not yet selected; picking one adds a chip; each chip has
+its own remove control. The built `packaging.html.twig` never carried this over — it used the
+`multiselect()` macro (a plain HTML `<select multiple>`), which is exactly the "manual list-style
+input" the request said to replace.
 
 ## Implementation
 
-- **`Money::perMonth(int $months): self`** (`src/Shared/Domain/Money.php`) — divides by the
-  duration using the same `HALF_EVEN` rounding as the existing `multipliedBy()`/`percentage()`.
-  New test `MoneyTest::perMonthDividesEvenlyWithBankersRounding()` covers the request's own worked
-  examples (€22/3 → €7.33, €38/6 → €6.33, €72/12 → €6.00, €89/12 → €7.42).
-- **`PackagesTabHandler`** — extracted `durationMonths()` (reused by the existing
-  `durationLabel()`) and added `monthlyPriceLabel()`; `rowForGroup()` fills two new fields on
-  `PackagingByGroupRow`: `priceMonthly`, `defaultCurrencyPriceMonthly`.
-- **`GroupsTabHandler`** — gained a new constructor dependency on
-  `PackagePurchaseCapabilityResolver` (pure autowiring in `src/Config/container.php`, no DI
-  registration needed) and the same two helper methods (duplicated rather than shared, matching
-  this file pair's existing convention of duplicating `convert()`/`providersServing()`/
-  `defaultPriceLabel()`); `rowForPackage()` fills `GroupPackageRow::groupPriceMonthly` /
-  `defaultCurrencyPriceMonthly`.
-- **`packaging.html.twig`** — renders the new fields under both tables' price cells with
-  `{% if row.xMonthly %}` guards, in the design's subtle/secondary style
-  (`font-size:10.5px;color:var(--text-faint)`).
-- The monthly amount is **never persisted** — always recomputed from the live resolved price and
-  the package's duration, per the request.
+- **New macro** `chips(field_name, model, countries)` in
+  `src/Modules/Admin/Views/partials/country-select.html.twig`, alongside the existing
+  `select()`/`multiselect()` (unchanged). Alpine-driven: `chipCountries` holds the full country
+  list (from the same `ReferenceCatalog::listCountries()` source every screen already uses — no
+  hardcoded list); `selectedCodes()` derives the current chips from the comma-joined model;
+  `availableCountries()` filters out already-selected codes and applies the search query;
+  `addCountry()`/`removeCountry()` mutate the model string directly. The hidden
+  `<input name="{{ field_name }}">` emits the exact same comma-joined-string format the old
+  `multiselect()` did, so **no backend change was needed** — `AdminGroupsCreateAction` /
+  `AdminGroupsUpdateAction`'s `splitCountries()` and `SetPricingGroupCountriesHandler`'s
+  `ReferenceCatalog::countryExists()` validation loop are byte-for-byte unchanged and still the
+  authority on what's a valid country.
+- **Wired into** `packaging.html.twig`'s Create Pricing Group and Edit Pricing Group modals
+  (`country.multiselect(...)` → `country.chips(...)`, one line each). The default/fallback group's
+  Countries field was already hidden behind `x-show="!form.is_default"` on Create and has no Edit
+  entry point at all (no edit button renders for the default group) — both untouched, so "all
+  countries" is still never faked by enumerating every country.
+- **New CSS** in `src/Public/admin.css` for the chip/dropdown component
+  (`.country-chip`, `.country-chip-remove`, `.country-picker-toggle`, `.country-picker-menu`,
+  `.country-picker-search`, `.country-picker-option`, `.country-picker-empty`), built from the
+  existing design-token CSS variables (`--accent-soft`, `--border`, `--surface-alt`, …) rather than
+  new literal colors, matching the file's established convention.
+
+## A bug I introduced and caught before calling it done
+
+First pass embedded `{{ countries|json_encode|raw }}` directly into the `x-data="..."` attribute.
+JSON's own `"` characters (from every `{"code":"DE","name":"Germany"}` entry) terminated the
+double-quoted HTML attribute early, and the rest of the JS source spilled onto the rendered page
+as literal visible text — caught immediately from a live screenshot (not a hypothetical
+description), fixed by switching to `{{ countries|json_encode|e('html_attr') }}` (Twig's built-in
+attribute-escaping strategy — exactly what it exists for). Re-screenshotted to confirm. Recorded
+as a named gotcha in `.claude/docs/Ui.md` so it isn't repeated when the other three
+`multiselect()` fields (providers.html.twig ×2, vouchers.html.twig ×1) eventually migrate to
+`chips()` — a natural follow-up, but left out of scope here since only the Pricing Group fields
+were asked for.
+
+## Verified in the running app (Visual and Output Verification Rule)
+
+Reused the local dev server from the prior session (`php -S 127.0.0.1:8080 -t src/Public`); the
+admin user and packages I'd added earlier had reset between sessions (the local dev DB appears to
+get reseeded independently of anything I did), so recreated the throwaway admin login only —
+DACH/United States/Default pricing groups were already present from seed data, no new sample data
+needed this time. Logged in and drove the actual UI:
+
+- **Edit Pricing Group (DACH, AT/CH/DE)**: chips render correctly for all three; opening the
+  dropdown correctly excludes AT/CH/DE; typing "fra" filters to France only; selecting France
+  appends a fourth chip and closes the dropdown; removing the France chip makes it reappear in the
+  dropdown immediately (re-tested by reopening and searching "franc").
+- **Create Pricing Group**: same picker present and working (added Austria, reopened the dropdown,
+  confirmed Austria excluded — duplicate selection is impossible); checking "This is the default
+  (fallback) group" still correctly hides the entire Countries field, unchanged from before.
+- Neither test flow was submitted — both modals were dismissed without a `Save`/`Create` POST, so
+  the database's actual pricing-group country data is untouched from the run (re-confirmed by
+  reloading the DACH detail page and seeing `AT, CH, DE` unchanged).
 
 ## Tests
 
-Updated `PackagesTabHandlerTest` and `GroupsTabHandlerTest` to wire a real
-`PackagePurchaseCapabilityResolver` (backed by an `InMemoryPackageRepository` holding a `Package`
-domain object with real purchase capabilities) instead of an empty one, since the monthly
-calculation needs an actual duration:
-
-- `PackagesTabHandlerTest`: existing group-row test now also asserts `€9.67/mo` (29/3); new test
-  `aOneMonthPackageShowsNoRedundantMonthlyLine()` builds a separate 1-month handler instance and
-  asserts every row's `priceMonthly` is `null`.
-- `GroupsTabHandlerTest`: added `groupPriceMonthly` assertions to the control-list test (€4.83/mo
-  = 29/6) and the variant-list test (€4.35/mo = 26.10/6 exactly).
-
-Full suite: `vendor/bin/phpunit` → 927 tests, 3514 assertions, OK (3 pre-existing unrelated
-skips). `vendor/bin/phpstan analyse` → no errors. `composer cs` → no new violations (the 7
-pre-existing style findings are all in unrelated files).
+**No test files changed.** Reasoning, not an oversight: this is a pure Twig/Alpine/CSS
+presentation swap over a field contract (`countries` as a backend-validated comma-joined string)
+that is completely unchanged — `tests/Integration/PricingPersistenceTest.php` already exercises
+`SetPricingGroupCountriesHandler` directly, and this codebase has no HTTP-level test for
+`AdminGroupsCreateAction`/`AdminGroupsUpdateAction` to begin with (checked — none exist), nor any
+JS test tooling to unit-test the Alpine macro itself. Full suite re-run after the change: 927
+tests, 3514 assertions, green (identical to before, as expected with zero PHP changes).
 
 ## Documentation
 
-- **`.claude/docs/Ui.md`** — new "Package price monthly-equivalent display" section: the rule
-  text the request asked for, where it applies today (with exact field/class names), where it
-  deliberately does *not* apply, and the implementation pattern for future price displays to
-  follow.
-- **`.claude/Changelog.md`** — new 2026-09-24 entry with full file list, reasoning, and the
-  screenshot verification summary.
-- **`CLAUDE.md`** — reviewed; no change made. Per the project's own Documentation Directory rule,
-  detailed frontend/UI conventions belong in `.claude/docs/Ui.md`, not the root spec file.
-- No change needed to `.claude/docs/database-design.md`, `.claude/Voucher.md`, or any
-  `PhaseResults/` file — no database change, no voucher behaviour, and this isn't a numbered
-  phase (Phase 27, which built this screen, is closed history and per the Phase Completion Rule
-  its result file is never rewritten for a later change; this fix follows the same
-  ad-hoc-frontend-maintenance pattern as the 2026-09-20/21 "change front" commits, which updated
-  `Changelog.md` without touching any Phase result file).
-
-## Real evidence captured (Visual and Output Verification Rule)
-
-Started the app locally (`php -S 127.0.0.1:8080 -t src/Public` against the existing local dev
-MySQL database), created a throwaway local admin user (`qa-verify@example.test`, dev-only,
-discard-safe) since none existed, and added a `quarterly` package to the `local-dev` client
-(3-month duration, €22.00 default price — the request's own example numbers) since every existing
-seeded package was 1-month. Logged in and screenshotted both affected screens with Claude in
-Chrome:
-
-- **Packages tab → Quarterly package detail, *Pricing by group* table**: DACH `€22.00` /
-  `€7.33/mo`, United States `$23.76` / `$7.92/mo` (currency-converted, monthly derived from the
-  converted amount), Default `€22.00` / `€7.33/mo`.
-- **Pricing groups tab → DACH group, *Package prices* table**: `Quarterly` row shows `€22.00` /
-  `€7.33/mo`; the existing 1-month `Pro` and `Starter` rows correctly show no `/mo` line.
-
-Both match the requested example (`€22.00` / `€7.33/mo`) exactly. While exploring the pricing
-groups tab I accidentally clicked "Enable" on price list B (a real state-changing action) —
-noticed immediately and clicked "Disable" to restore it, confirmed back to "Disabled — no new
-visitors assigned" before finishing. Left the `quarterly` test package and the throwaway admin
-user in the local dev database as they don't affect any existing data and mirror the existing
-`Pro`/`Starter` seed pattern; happy to remove either if you'd rather they weren't there.
+- **`.claude/docs/Ui.md`** — new "Multi-country chip picker" subsection under *Country input*:
+  the rule text requested, the component and its field-contract guarantee, exactly where it
+  applies today vs. where `multiselect()` still remains (and why that's fine), and the
+  `html_attr`-escaping gotcha.
+- **`.claude/Changelog.md`** — new 2026-09-24 entry (second one today) with the full file list,
+  the bug-and-fix, and the verification steps.
+- **`CLAUDE.md`**, Packaging & Pricing / Phase docs, `PhaseResults/`: reviewed; no changes. Same
+  reasoning as the monthly-price fix earlier today — detailed UI conventions live in
+  `.claude/docs/Ui.md` per the project's own Documentation Directory rule, and this is ad-hoc
+  frontend maintenance (matching the 2026-09-20/21 "change front" precedent), not a new numbered
+  phase, so no `PhaseResults/PhaseNNResult.md` applies.
 
 ## Files changed
 
-**Backend:** `src/Shared/Domain/Money.php`,
-`src/Modules/Admin/Application/Packaging/PackagesTabHandler.php`,
-`src/Modules/Admin/Application/Packaging/GroupsTabHandler.php`,
-`src/Modules/Admin/Application/Packaging/PackagingByGroupRow.php`,
-`src/Modules/Admin/Application/Packaging/GroupPackageRow.php`.
-**Frontend:** `src/Modules/Admin/Views/packaging.html.twig`.
-**Tests:** `tests/Unit/Shared/Domain/MoneyTest.php`,
-`tests/Unit/Modules/Admin/Application/Packaging/PackagesTabHandlerTest.php`,
-`tests/Unit/Modules/Admin/Application/Packaging/GroupsTabHandlerTest.php`.
+**Frontend:** `src/Modules/Admin/Views/partials/country-select.html.twig` (new `chips()` macro),
+`src/Modules/Admin/Views/packaging.html.twig` (Create + Edit Pricing Group modals switched to
+it), `src/Public/admin.css` (new component styles).
 **Docs:** `.claude/docs/Ui.md`, `.claude/Changelog.md`.
+**Unchanged (verified, not touched):** every PHP handler/command/action in the Pricing/Admin
+modules, every existing test file, the database schema.
+
+## Aside, noticed mid-task
+
+The previous session's Money/monthly-price backend changes (and their doc updates) had already
+landed on `main` as a commit titled "change front" by the time I started this task — I hadn't run
+that commit myself in this conversation. Flagging it since it's a change in repo state I didn't
+make; not something I need to act on, but worth being aware of if it's unexpected.

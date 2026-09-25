@@ -1,16 +1,7 @@
-/* Admin Users screen (Phase 27) — modal state only. */
+/* Admin Users screen (Phase 27) — modal state only. Modal state itself is
+ * the shared adminModalState() (admin-modal-state.js) — see
+ * .claude/docs/Ui.md's validation-preserving forms rule. */
 
 function adminUsersModals() {
-    return {
-        modal: null,
-        form: {},
-        open(name, data) {
-            this.modal = name;
-            this.form = Object.assign({}, data || {});
-        },
-        close() {
-            this.modal = null;
-            this.form = {};
-        },
-    };
+    return adminModalState();
 }

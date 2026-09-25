@@ -15,6 +15,8 @@ final readonly class GroupDetail
         public int $id,
         public string $slug,
         public string $name,
+        public int $priority,
+        public ?string $deviceType,
         public string $countriesDisplay,
         public array $countriesRaw,
         public string $currency,

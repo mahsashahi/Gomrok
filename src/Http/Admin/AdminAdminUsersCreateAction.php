@@ -8,6 +8,7 @@ use Gomrok\Modules\Admin\Application\AdminPermission;
 use Gomrok\Modules\Admin\Application\CreateAdminUser\CreateAdminUserCommand;
 use Gomrok\Modules\Admin\Application\CreateAdminUser\CreateAdminUserHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -24,6 +25,7 @@ final readonly class AdminAdminUsersCreateAction
     public function __construct(
         private AdminContext $context,
         private CreateAdminUserHandler $handler,
+        private AdminAdminUsersAction $screen,
     ) {
     }
 
@@ -34,17 +36,24 @@ final readonly class AdminAdminUsersCreateAction
         }
 
         $body = AdminForm::body($request);
+        $name = AdminForm::str($body, 'name');
+        $email = AdminForm::str($body, 'email');
+        $role = AdminForm::str($body, 'role', 'support_agent');
+        // The typed password never round-trips into the reopened page's
+        // source — it's cleared here, not merely omitted, so a validation
+        // failure can't leak it into rendered HTML.
+        $submittedValues = ['name' => $name, 'email' => $email, 'password' => '', 'role' => $role];
 
         $result = $this->handler->handle(new CreateAdminUserCommand(
-            name: AdminForm::str($body, 'name'),
-            email: AdminForm::str($body, 'email'),
+            name: $name,
+            email: $email,
             password: AdminForm::str($body, 'password'),
-            role: AdminForm::str($body, 'role', 'support_agent'),
+            role: $role,
             actorId: $this->context->admin()->id,
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToAdminUsers($response, error: $result->error()->message);
+            return $this->screen->reopen($request, $response, [], new AdminModalReopen('create-user', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToAdminUsers($response, success: 'Admin user created.');

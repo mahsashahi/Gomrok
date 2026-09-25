@@ -8,6 +8,7 @@ use Gomrok\Modules\Admin\Application\AdminPermission;
 use Gomrok\Modules\Providers\Application\RotateProviderAccountSecret\RotateProviderAccountSecretCommand;
 use Gomrok\Modules\Providers\Application\RotateProviderAccountSecret\RotateProviderAccountSecretHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -26,6 +27,7 @@ final readonly class AdminProviderAccountRotateSecretAction
     public function __construct(
         private AdminContext $context,
         private RotateProviderAccountSecretHandler $handler,
+        private AdminProvidersAction $screen,
     ) {
     }
 
@@ -45,6 +47,17 @@ final readonly class AdminProviderAccountRotateSecretAction
         $newPublicKey = AdminForm::nullableStr($body, 'new_public_key');
         $replacePublicKey = AdminForm::checked($body, 'replace_public_key');
 
+        // Never round-trip the typed secret into the reopened form — it
+        // would land in the rendered HTML page source
+        // (.claude/docs/Ui.md's validation-preserving forms rule).
+        $submittedValues = [
+            'id' => $accountId,
+            'slug' => $slug ?? '',
+            'new_secret_key' => '',
+            'replace_public_key' => $replacePublicKey,
+            'new_public_key' => '',
+        ];
+
         $result = $this->handler->handle(new RotateProviderAccountSecretCommand(
             accountId: $accountId,
             newSecretKey: $newSecretKey,
@@ -54,7 +67,7 @@ final readonly class AdminProviderAccountRotateSecretAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToProviders($response, ['tab' => 'accounts', 'account' => $slug], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'accounts', 'account' => $slug], new AdminModalReopen('rotate-secret', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToProviders($response, ['tab' => 'accounts', 'account' => $slug], success: 'Secret rotated.');

@@ -11,6 +11,7 @@ use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Shared\Domain\Currency;
 use Gomrok\Shared\Domain\Money;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
@@ -28,6 +29,7 @@ final readonly class AdminPackagesUpdateAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private UpdatePackageForAdminHandler $handler,
+        private AdminPackagingAction $screen,
     ) {
     }
 
@@ -57,13 +59,29 @@ final readonly class AdminPackagesUpdateAction
         $trialDays = $hasTrial ? AdminForm::nullableInt($body, 'trial_days') : null;
         $badge = AdminForm::nullableStr($body, 'badge');
         $description = AdminForm::nullableStr($body, 'description');
+        $priceAmountRaw = AdminForm::str($body, 'default_price_amount');
+        $priceCurrencyRaw = AdminForm::str($body, 'default_price_currency', $defaultCurrency);
 
-        [$priceAmountMinor, $priceCurrency, $priceError] = $this->parsePrice(
-            AdminForm::str($body, 'default_price_amount'),
-            AdminForm::str($body, 'default_price_currency', $defaultCurrency),
-        );
+        $submittedValues = [
+            'id' => $packageId,
+            'code' => $code,
+            'name' => $name,
+            'description' => $description ?? '',
+            'badge' => $badge ?? '',
+            'highlighted' => $highlighted,
+            'supports_one_time' => $supportsOneTime,
+            'supports_subscription' => $supportsSubscription,
+            'duration_months' => $durationMonths,
+            'has_trial' => $hasTrial,
+            'trial_days' => $trialDays,
+            'default_price_amount' => $priceAmountRaw,
+            'default_price_currency' => $priceCurrencyRaw,
+            'active' => $active,
+        ];
+
+        [$priceAmountMinor, $priceCurrency, $priceError] = $this->parsePrice($priceAmountRaw, $priceCurrencyRaw);
         if ($priceError !== null) {
-            return $this->redirectToPackaging($response, ['tab' => 'packages', 'package' => $code], error: $priceError);
+            return $this->screen->reopen($request, $response, ['tab' => 'packages', 'package' => $code], new AdminModalReopen('edit-package', $submittedValues, $priceError));
         }
 
         $result = $this->handler->handle(new UpdatePackageForAdminCommand(
@@ -84,7 +102,7 @@ final readonly class AdminPackagesUpdateAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToPackaging($response, ['tab' => 'packages', 'package' => $code], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'packages', 'package' => $code], new AdminModalReopen('edit-package', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToPackaging($response, ['tab' => 'packages', 'package' => $code], success: 'Package updated.');

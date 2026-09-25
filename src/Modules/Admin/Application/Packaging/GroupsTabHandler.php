@@ -152,6 +152,8 @@ final readonly class GroupsTabHandler
             $groupId,
             $group->slug()->value,
             $group->name(),
+            $group->priority(),
+            $group->deviceType(),
             $group->isDefault() ? 'All other countries' : implode(', ', $group->countryCodes()),
             $group->countryCodes(),
             $group->currencyCode(),

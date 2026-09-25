@@ -10,6 +10,7 @@ use Gomrok\Modules\Providers\Application\CreateProviderGroup\CreateProviderGroup
 use Gomrok\Modules\Providers\Application\CreateProviderGroup\CreateProviderGroupHandler;
 use Gomrok\Modules\Providers\Application\CreateProviderGroup\CreateProviderGroupResult;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -28,6 +29,7 @@ final readonly class AdminProviderGroupsCreateAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private CreateProviderGroupHandler $handler,
+        private AdminProvidersAction $screen,
     ) {
     }
 
@@ -48,6 +50,13 @@ final readonly class AdminProviderGroupsCreateAction
         $isDefault = AdminForm::checked($body, 'is_default');
         $deviceType = AdminForm::nullableStr($body, 'device_type');
         $currencyCode = AdminForm::nullableStr($body, 'currency_code');
+        $submittedValues = [
+            'name' => $name,
+            'slug' => $slug ?? '',
+            'is_default' => $isDefault,
+            'device_type' => $deviceType ?? '',
+            'currency_code' => $currencyCode ?? '',
+        ];
 
         $result = $this->handler->handle(new CreateProviderGroupCommand(
             clientId: $activeClient->id,
@@ -60,7 +69,7 @@ final readonly class AdminProviderGroupsCreateAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToProviders($response, ['tab' => 'groups'], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'groups'], new AdminModalReopen('create-group', $submittedValues, $result->error()->message));
         }
 
         $value = $result->value();

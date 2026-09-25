@@ -7,6 +7,7 @@ namespace Gomrok\Http\Admin;
 use Gomrok\Modules\Admin\Application\AdminPermission;
 use Gomrok\Modules\Admin\Application\Providers\ManageProviderGroupAccountsForAdmin\ManageProviderGroupAccountsForAdminHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -22,6 +23,7 @@ final readonly class AdminProviderGroupAccountAddAction
     public function __construct(
         private AdminContext $context,
         private ManageProviderGroupAccountsForAdminHandler $handler,
+        private AdminProvidersAction $screen,
     ) {
     }
 
@@ -38,14 +40,15 @@ final readonly class AdminProviderGroupAccountAddAction
         $body = AdminForm::body($request);
         $slug = AdminForm::nullableStr($body, 'group');
         $providerAccountId = AdminForm::nullableInt($body, 'provider_account_id');
+        $submittedValues = ['provider_account_id' => $providerAccountId];
 
         if ($providerAccountId === null) {
-            return $this->redirectToProviders($response, ['tab' => 'groups', 'group' => $slug], error: 'Choose a provider account.');
+            return $this->screen->reopen($request, $response, ['tab' => 'groups', 'group' => $slug], new AdminModalReopen('add-group-account', $submittedValues, 'Choose a provider account.'));
         }
 
         $result = $this->handler->add($groupId, $providerAccountId, $this->context->admin()->id);
         if ($result->isErr()) {
-            return $this->redirectToProviders($response, ['tab' => 'groups', 'group' => $slug], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'groups', 'group' => $slug], new AdminModalReopen('add-group-account', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToProviders($response, ['tab' => 'groups', 'group' => $slug], success: 'Account added to group.');

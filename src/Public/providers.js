@@ -1,20 +1,11 @@
 /* Providers screen (Phase 27) — modal state + native HTML5 drag-to-reorder
  * for a routing group's account priority chain. Same shape as packaging.js;
- * kept as its own file since the two screens' modals/selectors differ. */
+ * kept as its own file since the two screens' modals/selectors differ.
+ * Modal state itself is the shared adminModalState() (admin-modal-state.js) —
+ * see .claude/docs/Ui.md's validation-preserving forms rule. */
 
 function providersModals() {
-    return {
-        modal: null,
-        form: {},
-        open(name, data) {
-            this.modal = name;
-            this.form = Object.assign({}, data || {});
-        },
-        close() {
-            this.modal = null;
-            this.form = {};
-        },
-    };
+    return adminModalState();
 }
 
 document.addEventListener('DOMContentLoaded', () => {

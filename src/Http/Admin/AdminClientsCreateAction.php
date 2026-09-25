@@ -12,6 +12,7 @@ use Gomrok\Modules\Clients\Application\CreateClient\CreateClientResult;
 use Gomrok\Modules\Clients\Domain\ApiKeyPrefix;
 use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Gomrok\Shared\Http\ViewRenderer;
 use Psr\Http\Message\ResponseInterface;
@@ -42,6 +43,7 @@ final readonly class AdminClientsCreateAction
         private CreateClientHandler $handler,
         private ReferenceCatalog $currencies,
         private ViewRenderer $view,
+        private AdminClientsAction $screenAction,
     ) {
     }
 
@@ -54,18 +56,30 @@ final readonly class AdminClientsCreateAction
         $body = AdminForm::body($request);
         $slug = AdminForm::str($body, 'slug');
         $environment = AdminForm::str($body, 'environment', 'test');
+        $name = AdminForm::str($body, 'name');
+        $defaultCurrency = AdminForm::str($body, 'default_currency', 'USD');
+        $defaultCountry = AdminForm::nullableStr($body, 'default_country');
+        $timezone = AdminForm::str($body, 'timezone', 'UTC');
+        $submittedValues = [
+            'slug' => $slug,
+            'name' => $name,
+            'default_currency' => $defaultCurrency,
+            'default_country' => $defaultCountry ?? '',
+            'timezone' => $timezone,
+            'environment' => $environment,
+        ];
 
         $result = $this->handler->handle(new CreateClientCommand(
             slug: $slug,
-            name: AdminForm::str($body, 'name'),
-            defaultCurrency: AdminForm::str($body, 'default_currency', 'USD'),
-            defaultCountry: AdminForm::nullableStr($body, 'default_country'),
-            timezone: AdminForm::str($body, 'timezone', 'UTC'),
+            name: $name,
+            defaultCurrency: $defaultCurrency,
+            defaultCountry: $defaultCountry,
+            timezone: $timezone,
             firstKeyPrefix: $environment === 'live' ? ApiKeyPrefix::Live : ApiKeyPrefix::Test,
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToClients($response, [], error: $result->error()->message);
+            return $this->screenAction->reopen($request, $response, [], new AdminModalReopen('create-client', $submittedValues, $result->error()->message));
         }
 
         $value = $result->value();

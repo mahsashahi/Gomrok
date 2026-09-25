@@ -1,21 +1,12 @@
 /* Packaging & Pricing screen (Phase 27 Increment B) — modal state + native
  * HTML5 drag-to-reorder. Every modal form is a plain <form method=post>; this
  * only opens/closes the modal and prefills it, it never intercepts the
- * submit — the write always goes through a real POST to an admin action. */
+ * submit — the write always goes through a real POST to an admin action.
+ * Modal state itself is the shared adminModalState() (admin-modal-state.js) —
+ * see .claude/docs/Ui.md's validation-preserving forms rule. */
 
 function packagingModals() {
-    return {
-        modal: null,
-        form: {},
-        open(name, data) {
-            this.modal = name;
-            this.form = Object.assign({}, data || {});
-        },
-        close() {
-            this.modal = null;
-            this.form = {};
-        },
-    };
+    return adminModalState();
 }
 
 document.addEventListener('DOMContentLoaded', () => {

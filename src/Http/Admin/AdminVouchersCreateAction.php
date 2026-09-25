@@ -9,6 +9,7 @@ use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Vouchers\Application\CreateVoucher\CreateVoucherCommand;
 use Gomrok\Modules\Vouchers\Application\CreateVoucher\CreateVoucherHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -27,6 +28,7 @@ final readonly class AdminVouchersCreateAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private CreateVoucherHandler $handler,
+        private AdminVouchersAction $screen,
     ) {
     }
 
@@ -43,33 +45,54 @@ final readonly class AdminVouchersCreateAction
 
         $body = AdminForm::body($request);
         $code = AdminForm::str($body, 'code');
+        $name = AdminForm::str($body, 'name');
+        $description = AdminForm::nullableStr($body, 'description');
+        $validFrom = AdminForm::nullableStr($body, 'valid_from');
+        $validUntil = AdminForm::nullableStr($body, 'valid_until');
+        $firstPurchaseOnly = AdminForm::checked($body, 'first_purchase_only');
+        $minPurchaseAmountRaw = AdminForm::str($body, 'min_purchase_amount');
         $minPurchaseCurrency = AdminForm::nullableStr($body, 'min_purchase_currency');
+        $defaultDiscountType = AdminForm::str($body, 'default_discount_type', 'none');
+        $defaultPercentRaw = AdminForm::str($body, 'default_percent');
+
+        $submittedValues = [
+            'code' => $code,
+            'name' => $name,
+            'description' => $description ?? '',
+            'valid_from' => $validFrom ?? '',
+            'valid_until' => $validUntil ?? '',
+            'first_purchase_only' => $firstPurchaseOnly,
+            'min_purchase_amount' => $minPurchaseAmountRaw,
+            'min_purchase_currency' => $minPurchaseCurrency ?? $activeClient->defaultCurrency,
+            'default_discount_type' => $defaultDiscountType,
+            'default_percent' => $defaultPercentRaw,
+        ];
 
         [$minPurchaseMinor, $minPurchaseError] = AdminMoneyInput::parse(
-            AdminForm::str($body, 'min_purchase_amount'),
+            $minPurchaseAmountRaw,
             $minPurchaseCurrency ?? $activeClient->defaultCurrency,
         );
         if ($minPurchaseError !== null) {
-            return $this->redirectToVouchers($response, [], error: $minPurchaseError);
+            return $this->screen->reopen($request, $response, [], new AdminModalReopen('create-voucher', $submittedValues, $minPurchaseError));
         }
 
         $result = $this->handler->handle(new CreateVoucherCommand(
             clientId: $activeClient->id,
             code: $code,
-            name: AdminForm::str($body, 'name'),
-            description: AdminForm::nullableStr($body, 'description'),
-            validFrom: AdminForm::nullableStr($body, 'valid_from'),
-            validUntil: AdminForm::nullableStr($body, 'valid_until'),
-            firstPurchaseOnly: AdminForm::checked($body, 'first_purchase_only'),
+            name: $name,
+            description: $description,
+            validFrom: $validFrom,
+            validUntil: $validUntil,
+            firstPurchaseOnly: $firstPurchaseOnly,
             minPurchaseMinor: $minPurchaseMinor,
             minPurchaseCurrency: $minPurchaseMinor !== null ? ($minPurchaseCurrency ?? $activeClient->defaultCurrency) : null,
-            defaultDiscountType: AdminForm::str($body, 'default_discount_type', 'none'),
-            defaultPercentBp: AdminMoneyInput::percentToBasisPoints(AdminForm::str($body, 'default_percent')),
+            defaultDiscountType: $defaultDiscountType,
+            defaultPercentBp: AdminMoneyInput::percentToBasisPoints($defaultPercentRaw),
             actorId: $this->context->admin()->id,
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToVouchers($response, [], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, [], new AdminModalReopen('create-voucher', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToVouchers($response, ['voucher' => strtoupper($code)], success: 'Voucher created.');

@@ -12,6 +12,7 @@ use Gomrok\Modules\Pricing\Application\CreatePricingGroup\CreatePricingGroupResu
 use Gomrok\Modules\Pricing\Application\SetPricingGroupCountries\SetPricingGroupCountriesCommand;
 use Gomrok\Modules\Pricing\Application\SetPricingGroupCountries\SetPricingGroupCountriesHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -33,6 +34,7 @@ final readonly class AdminGroupsCreateAction
         private ClientDirectory $clients,
         private CreatePricingGroupHandler $createGroup,
         private SetPricingGroupCountriesHandler $setCountries,
+        private AdminPackagingAction $screen,
     ) {
     }
 
@@ -55,6 +57,15 @@ final readonly class AdminGroupsCreateAction
         $deviceType = AdminForm::nullableStr($body, 'device_type');
         $priority = AdminForm::nullableInt($body, 'priority') ?? 100;
         $countries = $isDefault ? [] : $this->splitCountries(AdminForm::str($body, 'countries'));
+        $submittedValues = [
+            'name' => $name,
+            'slug' => $slug ?? '',
+            'currency' => $currency,
+            'is_default' => $isDefault,
+            'device_type' => $deviceType ?? '',
+            'priority' => $priority,
+            'countries' => implode(',', $countries),
+        ];
 
         $created = $this->createGroup->handle(new CreatePricingGroupCommand(
             clientId: $activeClient->id,
@@ -68,7 +79,7 @@ final readonly class AdminGroupsCreateAction
         ));
 
         if ($created->isErr()) {
-            return $this->redirectToPackaging($response, ['tab' => 'groups'], error: $created->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'groups'], new AdminModalReopen('create-group', $submittedValues, $created->error()->message));
         }
 
         $result = $created->value();
@@ -81,7 +92,15 @@ final readonly class AdminGroupsCreateAction
                 actorId: $this->context->admin()->id,
             ));
             if ($countriesResult->isErr()) {
-                return $this->redirectToPackaging($response, ['tab' => 'groups', 'group' => $result->slug], error: $countriesResult->error()->message);
+                // The group itself was already created — reopening the create
+                // form here would submit CreatePricingGroupCommand a second
+                // time. Reopen Edit for the group that now exists instead, so
+                // the attempted countries are preserved without duplicating it.
+                return $this->screen->reopen($request, $response, ['tab' => 'groups', 'group' => $result->slug], new AdminModalReopen(
+                    'edit-group',
+                    ['id' => $result->groupId, 'slug' => $result->slug, 'countries' => implode(', ', $countries), 'active' => true],
+                    $countriesResult->error()->message,
+                ));
             }
         }
 

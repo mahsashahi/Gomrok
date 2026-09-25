@@ -1,11 +1,12 @@
 {% extends 'layouts/shell.html.twig' %}
 {% import 'partials/currency-select.html.twig' as currency %}
 {% import 'partials/country-select.html.twig' as country %}
+{% import 'partials/modal-error.html.twig' as modal_error %}
 
 {% block title %}Providers — Gomrok Admin{% endblock %}
 
 {% block content %}
-<div x-data="providersModals()">
+<div x-data="providersModals()"{% if reopen_modal %} x-init="open({{ reopen_modal.modal|json_encode|e('html_attr') }}, {{ reopen_modal.values|json_encode|e('html_attr') }}, {{ reopen_modal.error|json_encode|e('html_attr') }}, {{ reopen_modal.fieldErrors|json_encode|e('html_attr') }})"{% endif %}>
 {% if error %}<div class="form-error">{{ error }}</div>{% endif %}
 {% if success %}<div class="form-success">{{ success }}</div>{% endif %}
 
@@ -192,6 +193,8 @@
           {% endif %}
         </div>
         {% if 'provider_configs.update' in permissions %}
+        {% set add_account_reopen = reopen_modal and reopen_modal.modal == 'add-group-account' ? reopen_modal : null %}
+        {% if add_account_reopen %}<div class="modal-error-banner"><span>{{ add_account_reopen.error }}</span></div>{% endif %}
         <form method="post" action="/admin/providers/groups/{{ d.id }}/accounts" style="display:flex;gap:8px;align-items:flex-end;margin-bottom:16px">
           <input type="hidden" name="group" value="{{ d.slug }}">
           <div class="form-field" style="min-width:220px">
@@ -199,7 +202,7 @@
             <select name="provider_account_id" required>
               <option value="">Choose…</option>
               {% for acc in available_accounts %}
-              <option value="{{ acc.id }}">{{ acc.name }} ({{ acc.providerTypeCode }} &middot; {{ acc.mode }})</option>
+              <option value="{{ acc.id }}"{% if add_account_reopen and add_account_reopen.values.provider_account_id == acc.id %} selected{% endif %}>{{ acc.name }} ({{ acc.providerTypeCode }} &middot; {{ acc.mode }})</option>
               {% endfor %}
             </select>
           </div>
@@ -228,6 +231,7 @@
     <div class="modal-card">
       <div class="modal-title">Connect provider account</div>
       <div class="modal-subtitle">The secret key is encrypted at rest and never shown again in full.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/providers/accounts">
         <div class="form-grid">
           <div class="form-field">
@@ -275,6 +279,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit account</div>
       <div class="modal-subtitle" x-text="form.slug"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/providers/accounts/' + form.id">
         <input type="hidden" name="slug" :value="form.slug">
         <div class="form-grid">
@@ -305,6 +310,7 @@
     <div class="modal-card">
       <div class="modal-title">Rotate secret</div>
       <div class="modal-subtitle" x-text="form.slug"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/providers/accounts/' + form.id + '/rotate-secret'">
         <input type="hidden" name="slug" :value="form.slug">
         <div class="form-grid">
@@ -325,6 +331,7 @@
     <div class="modal-card">
       <div class="modal-title">Create routing group</div>
       <div class="modal-subtitle">Countries, purchase types and methods are configured after creation.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/providers/groups">
         <div class="form-grid">
           <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
@@ -353,6 +360,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit routing group</div>
       <div class="modal-subtitle" x-text="form.slug"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/providers/groups/' + form.id">
         <div class="form-grid">
           <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>

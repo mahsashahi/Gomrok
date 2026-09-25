@@ -1,11 +1,12 @@
 {% extends 'layouts/shell.html.twig' %}
 {% import 'partials/currency-select.html.twig' as currency %}
 {% import 'partials/country-select.html.twig' as country %}
+{% import 'partials/modal-error.html.twig' as modal_error %}
 
 {% block title %}Packaging & Pricing — Gomrok Admin{% endblock %}
 
 {% block content %}
-<div x-data="packagingModals()">
+<div x-data="packagingModals()"{% if reopen_modal %} x-init="open({{ reopen_modal.modal|json_encode|e('html_attr') }}, {{ reopen_modal.values|json_encode|e('html_attr') }}, {{ reopen_modal.error|json_encode|e('html_attr') }}, {{ reopen_modal.fieldErrors|json_encode|e('html_attr') }})"{% endif %}>
 {% if error %}<div class="form-error">{{ error }}</div>{% endif %}
 {% if success %}<div class="form-success">{{ success }}</div>{% endif %}
 
@@ -100,11 +101,13 @@
         </div>
 
         {% if 'provider_configs.update' in permissions and provider_accounts is not empty %}
-        <details style="margin-bottom:24px">
+        {% set link_reopen = reopen_modal and reopen_modal.modal == 'link-provider' ? reopen_modal : null %}
+        <details style="margin-bottom:24px"{% if link_reopen %} open{% endif %}>
           <summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--accent)">+ Link a provider account manually</summary>
           <div style="font-size:10.5px;color:var(--text-faint);margin:6px 0 8px">
             Gomrok cannot create the product on the provider's side yet — that capability doesn't exist in this build. Create it there yourself first, then enter its remote id here to register the link.
           </div>
+          {% if link_reopen %}<div class="modal-error-banner"><span>{{ link_reopen.error }}</span></div>{% endif %}
           <form method="post" action="/admin/packaging/packages/{{ d.id }}/provider" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <input type="hidden" name="code" value="{{ d.code }}">
             <div class="form-field" style="min-width:160px">
@@ -112,17 +115,17 @@
               <select name="provider_account_id" required>
                 <option value="">Choose…</option>
                 {% for acc in provider_accounts %}
-                <option value="{{ acc.id }}">{{ acc.name }} ({{ acc.providerTypeCode }})</option>
+                <option value="{{ acc.id }}"{% if link_reopen and link_reopen.values.provider_account_id == acc.id %} selected{% endif %}>{{ acc.name }} ({{ acc.providerTypeCode }})</option>
                 {% endfor %}
               </select>
             </div>
             <div class="form-field" style="min-width:140px">
               <label>Provider-side name</label>
-              <input type="text" name="provider_side_name">
+              <input type="text" name="provider_side_name" value="{{ link_reopen ? link_reopen.values.provider_side_name : '' }}">
             </div>
             <div class="form-field" style="min-width:140px">
               <label>Remote id</label>
-              <input type="text" name="remote_id">
+              <input type="text" name="remote_id" value="{{ link_reopen ? link_reopen.values.remote_id : '' }}">
             </div>
             <button type="submit" class="btn btn-secondary btn-sm">Link</button>
           </form>
@@ -188,8 +191,8 @@
           <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none"></span>
           <div style="font-size:15px;font-weight:700">{{ d.name }} — pricing &amp; countries</div>
           <span class="status-pill status-{{ d.isActive ? 'active' : 'cancelled' }}">{{ d.isActive ? 'Active' : 'Disabled' }}</span>
-          {% if not d.isDefault and 'pricing.update' in permissions %}
-          <button type="button" class="link-btn" style="margin-left:auto" @click="open('edit-group', {id:{{ d.id }},slug:'{{ d.slug }}',countries:'{{ d.countriesRaw|join(', ') }}',active:{{ d.isActive ? 'true' : 'false' }}})">Edit group</button>
+          {% if 'pricing.update' in permissions %}
+          <button type="button" class="link-btn" style="margin-left:auto" @click="open('edit-group', {id:{{ d.id }},name:'{{ d.name|e('js') }}',slug:'{{ d.slug }}',priority:{{ d.priority }},device_type:'{{ d.deviceType ?? '' }}',countries:'{{ d.countriesRaw|join(', ') }}',active:{{ d.isActive ? 'true' : 'false' }},is_default:{{ d.isDefault ? 'true' : 'false' }},currency:'{{ d.currency }}'})">Edit group</button>
           {% endif %}
         </div>
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;max-width:640px">Countries in a pricing group share one currency and one set of enabled providers. Package prices below apply to every country in this group unless a package is disabled for it.</div>
@@ -299,6 +302,7 @@
     <div class="modal-card">
       <div class="modal-title">Create package</div>
       <div class="modal-subtitle">Adds a package to this client's catalogue.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/packaging/packages">
         <div class="form-grid">
           <div class="form-field"><label>Code</label><input type="text" name="code" x-model="form.code" required pattern="[a-z0-9_-]+" placeholder="pro-monthly"></div>
@@ -326,6 +330,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit package</div>
       <div class="modal-subtitle" x-text="form.code"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/packaging/packages/' + form.id">
         <input type="hidden" name="code" :value="form.code">
         <div class="form-grid">
@@ -354,6 +359,7 @@
     <div class="modal-card">
       <div class="modal-title">Create pricing group</div>
       <div class="modal-subtitle">A set of countries sharing one currency and one set of package prices.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/packaging/groups">
         <div class="form-grid">
           <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
@@ -371,7 +377,7 @@
           <div class="form-field"><label class="checkbox-row" style="margin-top:22px"><input type="checkbox" name="is_default" x-model="form.is_default"> This is the default (fallback) group</label></div>
           <div class="form-field span-2" x-show="!form.is_default">
             <label>Countries</label>
-            {{ country.multiselect('countries', 'form.countries', countries) }}
+            {{ country.chips('countries', 'form.countries', countries) }}
           </div>
         </div>
         <div class="modal-footer">
@@ -386,13 +392,34 @@
     <div class="modal-card">
       <div class="modal-title">Edit pricing group</div>
       <div class="modal-subtitle" x-text="form.slug"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/packaging/groups/' + form.id">
         <div class="form-grid">
-          <div class="form-field span-2">
-            <label>Countries</label>
-            {{ country.multiselect('countries', 'form.countries', countries) }}
+          <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
+          <div class="form-field"><label>Slug</label><input type="text" name="slug" x-model="form.slug" required pattern="[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?"></div>
+          <div class="form-field">
+            <label>Currency</label>
+            <input type="text" :value="form.currency" disabled>
+            <div class="form-field-hint">Locked after creation — package prices already set in this group are stored in <span x-text="form.currency"></span> and wouldn't match a new one. Create a new group to price in a different currency.</div>
           </div>
-          <div class="form-field"><label class="checkbox-row"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
+          <div class="form-field" x-show="!form.is_default"><label>Priority</label><input type="number" min="0" name="priority" x-model="form.priority"></div>
+          <div class="form-field"><label>Device type (optional)</label>
+            <select name="device_type" x-model="form.device_type">
+              <option value="">Any</option>
+              <option value="web">Web</option>
+              <option value="ios">iOS</option>
+              <option value="android">Android</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label class="checkbox-row"><input type="checkbox" :checked="form.is_default" disabled> This is the default (fallback) group</label>
+            <div class="form-field-hint" x-show="form.is_default">Locked after creation — a client always needs exactly one fallback group. To hand the role to a different group, make that group the default when creating it instead.</div>
+          </div>
+          <div class="form-field span-2" x-show="!form.is_default">
+            <label>Countries</label>
+            {{ country.chips('countries', 'form.countries', countries) }}
+          </div>
+          <div class="form-field" x-show="!form.is_default"><label class="checkbox-row"><input type="checkbox" name="active" x-model="form.active"> Active</label></div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
@@ -406,6 +433,7 @@
     <div class="modal-card">
       <div class="modal-title">Create A/B price list</div>
       <div class="modal-subtitle">Visitors are split evenly across every enabled list in the group.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/packaging/price-lists">
         <input type="hidden" name="pricing_group_id" :value="form.pricing_group_id">
         <div class="form-grid">
@@ -425,6 +453,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit price</div>
       <div class="modal-subtitle" x-text="form.package_name"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/packaging/groups/' + form.group_id + '/packages/' + form.package_id + '/price'">
         <div class="form-grid">
           <div class="form-field span-2">
@@ -452,6 +481,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit list price</div>
       <div class="modal-subtitle" x-text="form.package_name"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/packaging/price-lists/' + form.list_id + '/packages/' + form.package_id + '/price'">
         <input type="hidden" name="group" :value="form.group_slug">
         <div class="form-grid">

@@ -28,3 +28,62 @@
 </select>
 <input type="hidden" name="{{ field_name }}" :value="{{ model }}">
 {% endmacro %}
+
+{# A controlled one-at-a-time country picker: selected countries render as
+   removable chips, and a searchable dropdown (never free text) adds one more
+   at a time — never the same country twice, since the dropdown only ever
+   lists countries not already selected. Same "plain comma-joined string"
+   field contract as {@see multiselect} above — the hidden input is a
+   drop-in replacement, no backend change needed. `countries` (list of
+   {code, name}) is embedded once as JSON so Alpine can look up a chip's
+   display name and filter the dropdown client-side, with no separate
+   fetch and no hardcoded list. #}
+{% macro chips(field_name, model, countries) %}
+<div
+  x-data="{
+    pickerOpen: false,
+    pickerQuery: '',
+    chipCountries: {{ countries|json_encode|e('html_attr') }},
+    selectedCodes() { return (({{ model }} || '')).split(',').map(s => s.trim()).filter(Boolean); },
+    chipLabel(code) { const c = this.chipCountries.find(x => x.code === code); return c ? c.name + ' (' + c.code + ')' : code; },
+    availableCountries() {
+      const selected = this.selectedCodes();
+      const q = this.pickerQuery.trim().toLowerCase();
+      return this.chipCountries.filter(c => !selected.includes(c.code) && (q === '' || c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)));
+    },
+    addCountry(code) {
+      const selected = this.selectedCodes();
+      if (!selected.includes(code)) { selected.push(code); {{ model }} = selected.join(','); }
+      this.pickerQuery = '';
+      this.pickerOpen = false;
+    },
+    removeCountry(code) { {{ model }} = this.selectedCodes().filter(c => c !== code).join(','); },
+  }"
+  @click.outside="pickerOpen = false"
+  style="position:relative"
+>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px" x-show="selectedCodes().length">
+    <template x-for="code in selectedCodes()" :key="code">
+      <span class="country-chip">
+        <span x-text="chipLabel(code)"></span>
+        <button type="button" class="country-chip-remove" @click="removeCountry(code)" :aria-label="'Remove ' + chipLabel(code)">&times;</button>
+      </span>
+    </template>
+  </div>
+  <div class="country-picker-toggle" @click="pickerOpen = !pickerOpen; pickerQuery = ''">
+    <span>Add a country&hellip;</span>
+    <span style="font-size:10px" x-text="pickerOpen ? '▲' : '▼'"></span>
+  </div>
+  <div class="country-picker-menu" x-show="pickerOpen" x-cloak>
+    <input type="text" class="country-picker-search" x-model="pickerQuery" placeholder="Search countries…" @click.stop>
+    <template x-for="c in availableCountries()" :key="c.code">
+      <div class="country-picker-option" @click="addCountry(c.code)">
+        <span x-text="c.name"></span>
+        <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text-faint)" x-text="c.code"></span>
+      </div>
+    </template>
+    <div class="country-picker-empty" x-show="availableCountries().length === 0">No matching countries.</div>
+  </div>
+</div>
+<input type="hidden" name="{{ field_name }}" :value="{{ model }}">
+{% endmacro %}

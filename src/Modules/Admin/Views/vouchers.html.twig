@@ -1,11 +1,12 @@
 {% extends 'layouts/shell.html.twig' %}
 {% import 'partials/currency-select.html.twig' as currency %}
 {% import 'partials/country-select.html.twig' as country %}
+{% import 'partials/modal-error.html.twig' as modal_error %}
 
 {% block title %}Vouchers — Gomrok Admin{% endblock %}
 
 {% block content %}
-<div x-data="vouchersModals()">
+<div x-data="vouchersModals()"{% if reopen_modal %} x-init="open({{ reopen_modal.modal|json_encode|e('html_attr') }}, {{ reopen_modal.values|json_encode|e('html_attr') }}, {{ reopen_modal.error|json_encode|e('html_attr') }}, {{ reopen_modal.fieldErrors|json_encode|e('html_attr') }})"{% endif %}>
 {% if error %}<div class="form-error">{{ error }}</div>{% endif %}
 {% if success %}<div class="form-success">{{ success }}</div>{% endif %}
 
@@ -177,6 +178,7 @@
     <div class="modal-card">
       <div class="modal-title">Create voucher</div>
       <div class="modal-subtitle">Eligibility rules, usage limits and per-currency overrides are set afterwards.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/vouchers">
         <div class="form-grid">
           <div class="form-field"><label>Code</label><input type="text" name="code" x-model="form.code" required placeholder="WELCOME10" style="text-transform:uppercase"></div>
@@ -210,6 +212,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit voucher</div>
       <div class="modal-subtitle" x-text="form.code"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/vouchers/' + form.id">
         <input type="hidden" name="code" :value="form.code">
         <div class="form-grid">
@@ -243,6 +246,7 @@
     <div class="modal-card">
       <div class="modal-title">Per-currency override</div>
       <div class="modal-subtitle">Takes precedence over the default discount in this currency.</div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/vouchers/' + form.id + '/currency-discounts'">
         <input type="hidden" name="code" :value="form.code">
         <div class="form-grid">
@@ -272,6 +276,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit eligibility</div>
       <div class="modal-subtitle">Blank = unrestricted for that dimension. Values within a dimension are OR'd; dimensions are AND'd.</div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/vouchers/' + form.id + '/eligibility'">
         <input type="hidden" name="code" :value="form.code">
         <div class="form-grid">
@@ -296,6 +301,7 @@
     <div class="modal-card">
       <div class="modal-title">Edit usage limits</div>
       <div class="modal-subtitle">Blank = unlimited for that dimension.</div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/vouchers/' + form.id + '/usage-limits'">
         <input type="hidden" name="code" :value="form.code">
         <div class="form-grid">

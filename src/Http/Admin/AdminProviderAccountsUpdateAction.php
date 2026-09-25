@@ -8,6 +8,7 @@ use Gomrok\Modules\Admin\Application\AdminPermission;
 use Gomrok\Modules\Admin\Application\Providers\UpdateProviderAccountForAdmin\UpdateProviderAccountForAdminCommand;
 use Gomrok\Modules\Admin\Application\Providers\UpdateProviderAccountForAdmin\UpdateProviderAccountForAdminHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -24,6 +25,7 @@ final readonly class AdminProviderAccountsUpdateAction
     public function __construct(
         private AdminContext $context,
         private UpdateProviderAccountForAdminHandler $handler,
+        private AdminProvidersAction $screen,
     ) {
     }
 
@@ -43,6 +45,14 @@ final readonly class AdminProviderAccountsUpdateAction
         $countries = self::splitList(AdminForm::str($body, 'countries'));
         $methods = AdminForm::strArray($body, 'methods');
         $active = AdminForm::checked($body, 'active');
+        $submittedValues = [
+            'id' => $accountId,
+            'slug' => $slug ?? '',
+            'name' => $name,
+            'countries' => implode(', ', $countries),
+            'methods' => $methods,
+            'active' => $active,
+        ];
 
         $result = $this->handler->handle(new UpdateProviderAccountForAdminCommand(
             accountId: $accountId,
@@ -54,7 +64,7 @@ final readonly class AdminProviderAccountsUpdateAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToProviders($response, ['tab' => 'accounts', 'account' => $slug], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'accounts', 'account' => $slug], new AdminModalReopen('edit-account', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToProviders($response, ['tab' => 'accounts', 'account' => $slug], success: 'Account updated.');

@@ -9,6 +9,7 @@ use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Vouchers\Application\SetVoucherCurrencyDiscount\SetVoucherCurrencyDiscountCommand;
 use Gomrok\Modules\Vouchers\Application\SetVoucherCurrencyDiscount\SetVoucherCurrencyDiscountHandler;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -28,6 +29,7 @@ final readonly class AdminVoucherCurrencyDiscountAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private SetVoucherCurrencyDiscountHandler $handler,
+        private AdminVouchersAction $screen,
     ) {
     }
 
@@ -50,21 +52,34 @@ final readonly class AdminVoucherCurrencyDiscountAction
         $code = AdminForm::nullableStr($body, 'code');
         $currency = AdminForm::str($body, 'currency');
         $type = AdminForm::str($body, 'discount_type', 'fixed');
+        $amountRaw = AdminForm::str($body, 'amount');
+        $percentRaw = AdminForm::str($body, 'percent');
+        $maxDiscountRaw = AdminForm::str($body, 'max_discount');
+
+        $submittedValues = [
+            'id' => $voucherId,
+            'code' => $code,
+            'currency' => $currency,
+            'discount_type' => $type,
+            'amount' => $amountRaw,
+            'percent' => $percentRaw,
+            'max_discount' => $maxDiscountRaw,
+        ];
 
         $amountMinor = null;
         $maxDiscountMinor = null;
         $percentBp = null;
 
         if ($type === 'fixed') {
-            [$amountMinor, $error] = AdminMoneyInput::parse(AdminForm::str($body, 'amount'), $currency);
+            [$amountMinor, $error] = AdminMoneyInput::parse($amountRaw, $currency);
             if ($error !== null) {
-                return $this->redirectToVouchers($response, ['voucher' => $code], error: $error);
+                return $this->screen->reopen($request, $response, ['voucher' => $code], new AdminModalReopen('currency-discount', $submittedValues, $error));
             }
         } elseif ($type === 'percentage') {
-            $percentBp = AdminMoneyInput::percentToBasisPoints(AdminForm::str($body, 'percent'));
-            [$maxDiscountMinor, $error] = AdminMoneyInput::parse(AdminForm::str($body, 'max_discount'), $currency);
+            $percentBp = AdminMoneyInput::percentToBasisPoints($percentRaw);
+            [$maxDiscountMinor, $error] = AdminMoneyInput::parse($maxDiscountRaw, $currency);
             if ($error !== null) {
-                return $this->redirectToVouchers($response, ['voucher' => $code], error: $error);
+                return $this->screen->reopen($request, $response, ['voucher' => $code], new AdminModalReopen('currency-discount', $submittedValues, $error));
             }
         }
 
@@ -80,7 +95,7 @@ final readonly class AdminVoucherCurrencyDiscountAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToVouchers($response, ['voucher' => $code], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['voucher' => $code], new AdminModalReopen('currency-discount', $submittedValues, $result->error()->message));
         }
 
         return $this->redirectToVouchers($response, ['voucher' => $code], success: 'Currency override saved.');

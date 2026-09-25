@@ -1,9 +1,10 @@
 {% extends 'layouts/shell.html.twig' %}
+{% import 'partials/modal-error.html.twig' as modal_error %}
 
 {% block title %}Admin Users — Gomrok Admin{% endblock %}
 
 {% block content %}
-<div x-data="adminUsersModals()">
+<div x-data="adminUsersModals()"{% if reopen_modal %} x-init="open({{ reopen_modal.modal|json_encode|e('html_attr') }}, {{ reopen_modal.values|json_encode|e('html_attr') }}, {{ reopen_modal.error|json_encode|e('html_attr') }}, {{ reopen_modal.fieldErrors|json_encode|e('html_attr') }})"{% endif %}>
 {% if error %}<div class="form-error">{{ error }}</div>{% endif %}
 {% if success %}<div class="form-success">{{ success }}</div>{% endif %}
 
@@ -75,6 +76,7 @@
     <div class="modal-card">
       <div class="modal-title">New admin user</div>
       <div class="modal-subtitle">Name, email and role cannot be changed after creation.</div>
+      {{ modal_error.banner() }}
       <form method="post" action="/admin/admin-users">
         <div class="form-grid">
           <div class="form-field"><label>Name</label><input type="text" name="name" x-model="form.name" required></div>
@@ -101,6 +103,7 @@
     <div class="modal-card">
       <div class="modal-title">Reset password</div>
       <div class="modal-subtitle" x-text="form.name"></div>
+      {{ modal_error.banner() }}
       <form method="post" :action="'/admin/admin-users/' + form.id + '/reset-password'">
         <div class="form-grid">
           <div class="form-field span-2"><label>New password</label><input type="password" name="new_password" x-model="form.new_password" required minlength="10" autocomplete="new-password"></div>

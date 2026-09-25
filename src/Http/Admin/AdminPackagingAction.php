@@ -12,6 +12,7 @@ use Gomrok\Modules\Clients\Application\ClientDirectory;
 use Gomrok\Modules\Providers\Application\ProviderAccountDirectory;
 use Gomrok\Shared\Application\ReferenceCatalog;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\ViewRenderer;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -21,6 +22,14 @@ use Psr\Http\Message\ServerRequestInterface;
  * & Pricing screen's two tabs (Packages, Pricing groups), switched via
  * `?tab=`. Each tab's own master-detail selection is a separate query param
  * (`?package=` / `?group=&list=`) so a link to one detail view is shareable.
+ *
+ * {@see render()} is also the reopen target for every Packaging write
+ * action's validation failure (`.claude/docs/Ui.md`'s validation-preserving
+ * forms rule): instead of redirecting and losing the submitted form, a write
+ * action builds a synthetic request carrying the same `?tab=&package=` /
+ * `?group=&list=` the redirect would have used, and calls `render()` with an
+ * {@see AdminModalReopen} so the exact same screen re-renders with the
+ * failed modal reopened and the submitted values still in it.
  */
 final readonly class AdminPackagingAction
 {
@@ -37,12 +46,34 @@ final readonly class AdminPackagingAction
 
     public function __invoke(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface
     {
+        return $this->render($request, $response, null);
+    }
+
+    /**
+     * A write action's validation-failure return: re-renders this screen at
+     * the given `?tab=&package=`/`?group=&list=` selection (the same params
+     * {@see RedirectsToPackaging::redirectToPackaging()} would have put in a
+     * redirect Location) with the failed modal reopened.
+     *
+     * @param array<string, string|int|null> $queryParams
+     */
+    public function reopen(ServerRequestInterface $request, ResponseInterface $response, array $queryParams, AdminModalReopen $reopen): ResponseInterface
+    {
+        $query = array_filter($queryParams, static fn (mixed $v): bool => $v !== null);
+        $uri = $request->getUri()->withQuery(http_build_query($query));
+
+        return $this->render($request->withUri($uri), $response, $reopen);
+    }
+
+    public function render(ServerRequestInterface $request, ResponseInterface $response, ?AdminModalReopen $reopen): ResponseInterface
+    {
         $currentPath = $request->getUri()->getPath() . ($request->getUri()->getQuery() !== '' ? '?' . $request->getUri()->getQuery() : '');
         $activeClient = AdminActiveClientCookie::resolve($request, $this->clients);
         $query = $request->getQueryParams();
         $error = \is_string($query['error'] ?? null) ? $query['error'] : null;
         $success = \is_string($query['success'] ?? null) ? $query['success'] : null;
         $permissions = $this->permissionValues();
+        $status = $reopen !== null ? 422 : 200;
 
         if ($activeClient === null) {
             return $this->view->render($response, 'packaging.html.twig', [
@@ -59,7 +90,8 @@ final readonly class AdminPackagingAction
                 'provider_accounts' => [],
                 'currencies' => $this->currencies->listCurrencies(),
                 'countries' => $this->currencies->listCountries(),
-            ]);
+                'reopen_modal' => $reopen,
+            ], $status);
         }
 
         $tab = \is_string($query['tab'] ?? null) && $query['tab'] === 'groups' ? 'groups' : 'packages';
@@ -86,7 +118,8 @@ final readonly class AdminPackagingAction
             'provider_accounts' => $this->providerAccounts->forClient($activeClient->id),
             'currencies' => $this->currencies->listCurrencies(),
             'countries' => $this->currencies->listCountries(),
-        ]);
+            'reopen_modal' => $reopen,
+        ], $status);
     }
 
     /**

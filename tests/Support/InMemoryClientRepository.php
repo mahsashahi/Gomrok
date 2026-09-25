@@ -49,4 +49,12 @@ final class InMemoryClientRepository implements ClientRepository
     {
         return $this->findBySlug($slug) !== null;
     }
+
+    /**
+     * @return list<Client>
+     */
+    public function all(): array
+    {
+        return array_values($this->byId);
+    }
 }

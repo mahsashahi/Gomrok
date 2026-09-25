@@ -7,6 +7,63 @@ reason, migration notes (if any), breaking changes (if any).
 2026-09-07: `.claude/` (this file is now `.claude/Changelog.md`). Older entries name the paths
 that were correct when written.)
 
+## 2026-09-24 — Pricing Group Countries: replace manual multi-select with a chip picker
+
+**Reported.** The approved design shows Pricing Group countries added one at a time from a
+combo/dropdown, with each selection rendered as a removable chip. The built admin screen instead
+used a native `<select multiple size="6">` list box — the "manual multi-select/list-style input"
+the design never specified.
+
+**Fix — frontend only, no backend/domain change.** Added a new `chips(field_name, model,
+countries)` macro to `src/Modules/Admin/Views/partials/country-select.html.twig`, alongside the
+existing `multiselect()` (left untouched — still used by `providers.html.twig` and
+`vouchers.html.twig`): a toggle opens a searchable dropdown of every country *not already
+selected*, filtered client-side by name or ISO code; picking one adds a chip and closes the
+dropdown; each chip carries its own remove control. The macro still emits the same plain
+comma-joined hidden `<input>` the old `multiselect()` produced, so `AdminGroupsCreateAction`/
+`AdminGroupsUpdateAction`'s existing `splitCountries()` (regex `[,\s]+`) and
+`SetPricingGroupCountriesHandler`'s `ReferenceCatalog::countryExists()` validation loop needed
+**zero changes** — this was purely a presentation swap over an unchanged field contract.
+
+Wired into both `packaging.html.twig` modals that had the old multiselect: Create Pricing Group
+and Edit Pricing Group. The default/fallback pricing group is unaffected — its Countries field was
+already hidden (`x-show="!form.is_default"`) and its Edit modal was already never reachable (no
+edit button renders for the default group), so no "fake all-countries" behaviour was introduced
+anywhere.
+
+**Bug hit and fixed during implementation:** the first version embedded
+`{{ countries|json_encode|raw }}` straight into the `x-data="..."` attribute — JSON's own `"`
+characters terminated the HTML attribute early and the JS source spilled onto the page as visible
+text (caught immediately via a live screenshot, not left in). Fixed by escaping properly:
+`{{ countries|json_encode|e('html_attr') }}`. Documented as a named gotcha in `.claude/docs/Ui.md`
+so it isn't repeated when `multiselect()`'s other three fields eventually migrate to `chips()`.
+
+Added CSS for the new component to `src/Public/admin.css` (`.country-chip`,
+`.country-chip-remove`, `.country-picker-toggle`, `.country-picker-menu`,
+`.country-picker-search`, `.country-picker-option`, `.country-picker-empty`) reusing the existing
+design-token variables (`--accent-soft`, `--border`, `--surface-alt`, etc.) rather than new literal
+colors.
+
+**Files:** `src/Modules/Admin/Views/partials/country-select.html.twig` (new `chips()` macro),
+`src/Modules/Admin/Views/packaging.html.twig` (both modals switched from `country.multiselect()`
+to `country.chips()`), `src/Public/admin.css` (new component styles); docs:
+`.claude/docs/Ui.md` (new "Multi-country chip picker" rule section).
+
+**No database changes, no PHP handler/command changes, no test changes** — the field contract
+(`countries` as a comma-joined string, backend-validated against `ReferenceCatalog`) is exactly
+what it was before; existing coverage (`tests/Integration/PricingPersistenceTest.php`'s
+`SetPricingGroupCountriesHandler` calls, and the fact this codebase has no HTTP-level test for
+`AdminGroupsCreateAction`/`AdminGroupsUpdateAction` to begin with) already exercises that
+contract. Full suite re-run after the change: 927 tests, 3514 assertions, still green.
+
+**Verified in the running app** (local dev, `php -S 127.0.0.1:8080 -t src/Public`, DACH pricing
+group AT/CH/DE): opened Edit Pricing Group — chips render for all three countries; opened the
+dropdown — AT/CH/DE correctly excluded from the list; typed "fra" — filtered to France only;
+selected France — chip appended, dropdown closed; removed the France chip — it reappeared in the
+dropdown immediately; the same flow re-verified on Create Pricing Group, including that checking
+"This is the default (fallback) group" still hides the Countries field entirely (no change to
+that existing behaviour).
+
 ## 2026-09-24 — Restore effective monthly-price display on Packaging & Pricing
 
 **Reported.** The approved admin-panel design (`.claude/docs/Design/GomrokAdminPanelV4.dc.html`)

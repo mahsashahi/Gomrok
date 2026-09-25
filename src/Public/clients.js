@@ -1,18 +1,9 @@
-/* Clients screen (Phase 27) — modal state only. No drag interactions. */
+/* Clients screen (Phase 27) — modal state only. No drag interactions.
+ * Modal state itself is the shared adminModalState() (admin-modal-state.js) —
+ * see .claude/docs/Ui.md's validation-preserving forms rule. */
 
 function clientsModals() {
-    return {
-        modal: null,
-        form: {},
-        open(name, data) {
-            this.modal = name;
-            this.form = Object.assign({}, data || {});
-        },
-        close() {
-            this.modal = null;
-            this.form = {};
-        },
-    };
+    return adminModalState();
 }
 
 function copyToClipboard(text, btn) {

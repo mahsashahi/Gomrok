@@ -10,6 +10,7 @@ use Gomrok\Modules\Providers\Application\CreateProviderAccount\CreateProviderAcc
 use Gomrok\Modules\Providers\Application\CreateProviderAccount\CreateProviderAccountHandler;
 use Gomrok\Modules\Providers\Application\CreateProviderAccount\CreateProviderAccountResult;
 use Gomrok\Shared\Http\AdminContext;
+use Gomrok\Shared\Http\AdminModalReopen;
 use Gomrok\Shared\Http\AdminPermissionGuard;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -29,6 +30,7 @@ final readonly class AdminProviderAccountsCreateAction
         private AdminContext $context,
         private ClientDirectory $clients,
         private CreateProviderAccountHandler $handler,
+        private AdminProvidersAction $screen,
     ) {
     }
 
@@ -53,6 +55,20 @@ final readonly class AdminProviderAccountsCreateAction
         $countries = self::splitList(AdminForm::str($body, 'countries'));
         $methods = AdminForm::strArray($body, 'methods');
 
+        // Never round-trip secrets into the reopened form — they'd land in
+        // the rendered HTML page source (.claude/docs/Ui.md's
+        // validation-preserving forms rule). Everything else is preserved.
+        $submittedValues = [
+            'provider_type_code' => $providerTypeCode,
+            'mode' => $mode,
+            'name' => $name,
+            'secret_key' => '',
+            'public_key' => '',
+            'slug' => $slug ?? '',
+            'countries' => implode(', ', $countries),
+            'methods' => $methods,
+        ];
+
         $result = $this->handler->handle(new CreateProviderAccountCommand(
             clientId: $activeClient->id,
             providerTypeCode: $providerTypeCode,
@@ -66,7 +82,7 @@ final readonly class AdminProviderAccountsCreateAction
         ));
 
         if ($result->isErr()) {
-            return $this->redirectToProviders($response, ['tab' => 'accounts'], error: $result->error()->message);
+            return $this->screen->reopen($request, $response, ['tab' => 'accounts'], new AdminModalReopen('create-account', $submittedValues, $result->error()->message));
         }
 
         $value = $result->value();
